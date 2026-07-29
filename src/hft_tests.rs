@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use crate::hft::{
-    plan_subscription_shards, BookContinuity, BookHealth, StandardRateBudget,
+    parse_bbo_update, plan_subscription_shards, BookContinuity, BookHealth, StandardRateBudget,
 };
 
 #[test]
@@ -64,4 +64,47 @@ fn book_continuity_halts_on_nonce_gap_until_new_snapshot() {
     assert_eq!(continuity.apply_delta(15, 16), BookHealth::Halted);
     assert_eq!(continuity.apply_snapshot(20), BookHealth::Live);
     assert_eq!(continuity.last_nonce(), Some(20));
+}
+
+#[test]
+fn parses_official_ticker_bbo_shape() {
+    let message = serde_json::json!({
+        "channel": "ticker:17",
+        "nonce": 6442420597_u64,
+        "ticker": {
+            "s": "SOL",
+            "a": {"price": "215.10", "size": "4.65"},
+            "b": {"price": "214.99", "size": "17.45"}
+        },
+        "timestamp": 1773158679717_u64,
+        "type": "update/ticker"
+    });
+
+    let bbo = parse_bbo_update(&message).expect("valid ticker");
+
+    assert_eq!(bbo.market_id, 17);
+    assert_eq!(bbo.symbol, "SOL");
+    assert_eq!(bbo.nonce, 6_442_420_597);
+    assert_eq!(bbo.exchange_timestamp_ms, 1_773_158_679_717);
+    assert_eq!(bbo.bid_price, 214.99);
+    assert_eq!(bbo.bid_size, 17.45);
+    assert_eq!(bbo.ask_price, 215.10);
+    assert_eq!(bbo.ask_size, 4.65);
+}
+
+#[test]
+fn rejects_ticker_without_two_sided_positive_prices() {
+    let missing_ask = serde_json::json!({
+        "channel": "ticker:1",
+        "nonce": 2,
+        "ticker": {
+            "s": "BTC",
+            "a": {"price": "0", "size": "1"},
+            "b": {"price": "100", "size": "1"}
+        },
+        "timestamp": 3,
+        "type": "update/ticker"
+    });
+
+    assert!(parse_bbo_update(&missing_ask).is_err());
 }
