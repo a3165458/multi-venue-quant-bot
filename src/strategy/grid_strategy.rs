@@ -374,7 +374,8 @@ impl Strategy for GridStrategy {
                         expected_edge_bps: Some(
                             (sell_grids[i] - grid_price) / grid_price * 10_000.0,
                         ),
-                        risk_reducing: net_position < 0.0,
+                        risk_reducing: net_position < 0.0
+                            && quantity <= net_position.abs() + f64::EPSILON,
                     });
                     state.filled_buy[i] = true;
                     if i < state.filled_sell.len() {
@@ -427,7 +428,8 @@ impl Strategy for GridStrategy {
                             expected_edge_bps: Some(
                                 (grid_price - buy_grids[i]) / grid_price * 10_000.0,
                             ),
-                            risk_reducing: net_position > 0.0,
+                            risk_reducing: net_position > 0.0
+                                && quantity <= net_position + f64::EPSILON,
                         });
                         state.filled_sell[i] = true;
                         if i < state.filled_buy.len() {
@@ -653,5 +655,28 @@ pub(crate) mod tests {
         let sig = sig.unwrap();
         assert_eq!(sig[0].side, Side::Sell);
         assert!(sig[0].risk_reducing);
+    }
+
+    #[tokio::test]
+    async fn test_order_larger_than_opposite_position_is_not_pure_risk_reduction() {
+        let strategy = GridStrategy::new(6, 100.0, 0.03);
+        strategy
+            .evaluate(&snapshot("BTC", 1_700_000_000, 100.0))
+            .await
+            .unwrap();
+
+        let mut snap = snapshot("BTC", 1_700_000_100, 98.5);
+        snap.positions.insert("BTC".to_string(), -0.1);
+        let signals = strategy
+            .evaluate(&snap)
+            .await
+            .unwrap()
+            .expect("buy signal");
+
+        assert!(signals[0].quantity > 0.1);
+        assert!(
+            !signals[0].risk_reducing,
+            "an order that crosses through flat must pass the profitability gate"
+        );
     }
 }

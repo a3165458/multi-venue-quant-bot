@@ -136,10 +136,12 @@ impl RiskManager {
         }
 
         // 检查1：净收益门槛。明确减仓信号绕过收益要求，但仍接受其余风控检查。
-        let profitability = self.profitability_guard.evaluate(SignalEconomics {
-            expected_edge_bps: signal.expected_edge_bps,
-            risk_reducing: signal.risk_reducing,
-        });
+        let economics = if signal.risk_reducing {
+            SignalEconomics::exit()
+        } else {
+            SignalEconomics::entry(signal.expected_edge_bps)
+        };
+        let profitability = self.profitability_guard.evaluate(economics);
         if !profitability.allowed {
             warn!(
                 "❌ 收益门槛拒绝: {} {:?}, reason={}, gross={:?}bps, cost={:.2}bps, net={:?}bps, required>{:.2}bps",
