@@ -49,6 +49,8 @@ impl Strategy for HoldAfterOpen {
             order_type: OrderType::Market,
             reason: "test open".into(),
             timestamp: ts,
+            expected_edge_bps: None,
+            risk_reducing: false,
         }]))
     }
 
@@ -81,6 +83,8 @@ impl Strategy for OpenThenReverse {
                 order_type: OrderType::Market,
                 reason: "open long".into(),
                 timestamp: ts,
+                expected_edge_bps: None,
+                risk_reducing: false,
             }])),
             1 => Ok(Some(vec![TradeSignal {
                 symbol,
@@ -91,6 +95,8 @@ impl Strategy for OpenThenReverse {
                 order_type: OrderType::Market,
                 reason: "reverse short".into(),
                 timestamp: ts,
+                expected_edge_bps: None,
+                risk_reducing: false,
             }])),
             _ => Ok(None),
         }

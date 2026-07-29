@@ -105,6 +105,9 @@ impl Strategy for DcaStrategy {
                     order_type: OrderType::Limit,
                     reason,
                     timestamp: now,
+                    // DCA has no defined exit target, so it cannot claim a round-trip edge.
+                    expected_edge_bps: None,
+                    risk_reducing: false,
                 });
 
                 state.last_buy_time = Some(now);
@@ -174,6 +177,8 @@ mod tests {
         let signals = result.unwrap();
         assert_eq!(signals.len(), 1);
         assert_eq!(signals[0].side, Side::Buy);
+        assert_eq!(signals[0].expected_edge_bps, None);
+        assert!(!signals[0].risk_reducing);
     }
 
     #[tokio::test]

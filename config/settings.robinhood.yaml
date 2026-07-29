@@ -59,6 +59,18 @@ trading:
     max_total_position_percent: 200
     risk_per_trade_percent: 1.5
 
+# Conservative round-trip profitability gate for live entries (1 bp = 0.01%).
+# Recalibrate these values from fills before increasing order frequency.
+profitability:
+  enabled: true
+  entry_fee_bps: 0.0
+  exit_fee_bps: 0.0
+  entry_slippage_bps: 2.0
+  exit_slippage_bps: 2.0
+  funding_bps: 0.5
+  adverse_selection_bps: 3.0
+  min_net_edge_bps: 2.0
+
 # Risk management
 risk:
   stop_loss:

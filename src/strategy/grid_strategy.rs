@@ -371,6 +371,10 @@ impl Strategy for GridStrategy {
                         order_type: OrderType::Limit,
                         reason: format!("Grid Buy L{}: {:.2}", i + 1, grid_price),
                         timestamp: ob.timestamp,
+                        expected_edge_bps: Some(
+                            (sell_grids[i] - grid_price) / grid_price * 10_000.0,
+                        ),
+                        risk_reducing: net_position < 0.0,
                     });
                     state.filled_buy[i] = true;
                     if i < state.filled_sell.len() {
@@ -420,6 +424,10 @@ impl Strategy for GridStrategy {
                             order_type: OrderType::Limit,
                             reason: format!("Grid Sell L{}: {:.2}", i + 1, grid_price),
                             timestamp: ob.timestamp,
+                            expected_edge_bps: Some(
+                                (grid_price - buy_grids[i]) / grid_price * 10_000.0,
+                            ),
+                            risk_reducing: net_position > 0.0,
                         });
                         state.filled_sell[i] = true;
                         if i < state.filled_buy.len() {
@@ -537,7 +545,10 @@ pub(crate) mod tests {
             .await
             .unwrap();
         assert!(first.is_some(), "Should trigger buy signal");
-        assert_eq!(first.unwrap().len(), 1);
+        let first = first.unwrap();
+        assert_eq!(first.len(), 1);
+        assert!(first[0].expected_edge_bps.expect("grid edge") > 0.0);
+        assert!(!first[0].risk_reducing);
 
         // Only 5 seconds later → blocked by 15s cooldown
         let blocked = strategy
@@ -639,6 +650,8 @@ pub(crate) mod tests {
             sig.is_some(),
             "Reducing sells must still fire even when net long is capped"
         );
-        assert_eq!(sig.unwrap()[0].side, Side::Sell);
+        let sig = sig.unwrap();
+        assert_eq!(sig[0].side, Side::Sell);
+        assert!(sig[0].risk_reducing);
     }
 }

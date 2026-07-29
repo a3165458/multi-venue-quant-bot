@@ -28,6 +28,8 @@ impl Strategy for AddEveryBar {
             order_type: OrderType::Market,
             reason: "add".into(),
             timestamp: ts,
+            expected_edge_bps: None,
+            risk_reducing: false,
         }]))
     }
 

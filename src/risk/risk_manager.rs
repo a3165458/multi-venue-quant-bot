@@ -4,6 +4,7 @@ use config::Config;
 use tracing::{info, warn};
 
 use crate::lighter::types::{TradeSignal, Position, Side};
+use crate::risk::profitability::{ProfitabilityGuard, SignalEconomics};
 
 /// 风险管理器
 pub struct RiskManager {
@@ -26,6 +27,7 @@ pub struct RiskManager {
     emergency_triggered: bool,
     /// Track which UTC day the emergency was triggered
     emergency_day: Option<u32>,
+    profitability_guard: ProfitabilityGuard,
 }
 
 impl RiskManager {
@@ -62,6 +64,7 @@ impl RiskManager {
         let position_take_profit_pct = settings
             .get_float("risk.stop_loss.position_take_profit_percent")
             .unwrap_or(8.0) / 100.0;
+        let profitability_guard = ProfitabilityGuard::from_config(settings)?;
 
         info!("风控初始化: 最大回撤 {:.1}%, 日亏损限制 {:.1}%, 最大杠杆 {:.0}x, 止损 {:.1}%, 止盈 {:.1}%",
             max_drawdown_pct * 100.0,
@@ -85,6 +88,7 @@ impl RiskManager {
             position_take_profit_pct,
             emergency_triggered: false,
             emergency_day: None,
+            profitability_guard,
         })
     }
 
@@ -131,21 +135,40 @@ impl RiskManager {
             return Ok(false);
         }
 
-        // 检查1：每日亏损限制
+        // 检查1：净收益门槛。明确减仓信号绕过收益要求，但仍接受其余风控检查。
+        let profitability = self.profitability_guard.evaluate(SignalEconomics {
+            expected_edge_bps: signal.expected_edge_bps,
+            risk_reducing: signal.risk_reducing,
+        });
+        if !profitability.allowed {
+            warn!(
+                "❌ 收益门槛拒绝: {} {:?}, reason={}, gross={:?}bps, cost={:.2}bps, net={:?}bps, required>{:.2}bps",
+                signal.symbol,
+                signal.side,
+                profitability.reason,
+                profitability.expected_edge_bps,
+                profitability.total_cost_bps,
+                profitability.net_edge_bps,
+                profitability.required_net_edge_bps,
+            );
+            return Ok(false);
+        }
+
+        // 检查2：每日亏损限制
         let daily_loss = -self.current_daily_pnl / self.initial_equity;
         if daily_loss >= self.daily_loss_limit_pct {
             warn!("❌ 风控拒绝: 已达到每日亏损限制 ({:.2}%)", daily_loss * 100.0);
             return Ok(false);
         }
 
-        // 检查2：最大回撤
+        // 检查3：最大回撤
         let drawdown = (self.initial_equity - self.current_equity) / self.initial_equity;
         if drawdown >= self.max_drawdown_pct {
             warn!("❌ 风控拒绝: 已超过最大回撤限制 ({:.2}%)", drawdown * 100.0);
             return Ok(false);
         }
 
-        // 检查3：单笔交易大小（杠杆感知：考虑最大杠杆倍数）
+        // 检查4：单笔交易大小（杠杆感知：考虑最大杠杆倍数）
         let trade_value = signal.price * signal.quantity;
         let leverage_factor = if self.max_leverage > 1.0 { self.max_leverage } else { 1.0 };
         let max_trade_value = self.current_equity * self.max_single_trade_pct * leverage_factor;
@@ -155,7 +178,7 @@ impl RiskManager {
             return Ok(false);
         }
 
-        // 检查4：持仓大小
+        // 检查5：持仓大小
         if trade_value > self.max_position_size {
             warn!("❌ 风控拒绝: 交易金额 ${:.2} 超过最大持仓限制 ${:.2}",
                 trade_value, self.max_position_size);

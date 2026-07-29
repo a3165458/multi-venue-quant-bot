@@ -95,6 +95,8 @@ async fn test_golden_cross_generates_buy_and_exit_tracks_position() {
     let sig = buy_signal.expect("金叉应产生买入信号");
     assert_eq!(sig.side, Side::Buy);
     assert!(sig.quantity > 0.0);
+    assert_eq!(sig.expected_edge_bps, Some(1000.0));
+    assert!(!sig.risk_reducing);
 
     // 价格暴跌超过止损线 → 应产生平仓卖出信号
     let last = *closes.last().unwrap();
@@ -104,7 +106,9 @@ async fn test_golden_cross_generates_buy_and_exit_tracks_position() {
     let snap2 = snapshot_with_candles("BTC", 1_700_010_000, &closes2);
     let signals2 = strategy.evaluate(&snap2).await.unwrap();
     assert!(signals2.is_some(), "跌破止损应产生平仓信号");
-    assert_eq!(signals2.unwrap()[0].side, Side::Sell);
+    let signals2 = signals2.unwrap();
+    assert_eq!(signals2[0].side, Side::Sell);
+    assert!(signals2[0].risk_reducing);
 }
 
 /// Deterministic weak-then-confirm bull fixture (fast=3, slow=6, min_sep=0.05%).

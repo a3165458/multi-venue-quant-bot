@@ -109,6 +109,17 @@ trading:
       investment_per_grid: 8  # 每格投资 ($)
       price_deviation: 0.012  # 价格偏差 (1.2%)
 
+# 实盘开仓的保守往返成本模型，单位 bps（1 bp = 0.01%）
+profitability:
+  enabled: true
+  entry_fee_bps: 0
+  exit_fee_bps: 0
+  entry_slippage_bps: 2
+  exit_slippage_bps: 2
+  funding_bps: 0.5
+  adverse_selection_bps: 3
+  min_net_edge_bps: 2
+
 risk:
   stop_loss:
     max_drawdown_percent: 10

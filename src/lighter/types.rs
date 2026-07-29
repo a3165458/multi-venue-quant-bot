@@ -218,6 +218,14 @@ pub struct TradeSignal {
     pub order_type: OrderType,
     pub reason: String,
     pub timestamp: DateTime<Utc>,
+    /// Conservative gross round-trip edge expected by the strategy, in basis points.
+    /// Entries without an estimate are rejected when the profitability gate is enabled.
+    #[serde(default)]
+    pub expected_edge_bps: Option<f64>,
+    /// True only when this signal is intended to reduce existing risk.
+    /// Profitability must never prevent an explicit exit.
+    #[serde(default)]
+    pub risk_reducing: bool,
 }
 
 // ===== 市场快照 =====
