@@ -1,7 +1,8 @@
 use std::time::Duration;
 
 use crate::hft::{
-    parse_bbo_update, plan_subscription_shards, BookContinuity, BookHealth, StandardRateBudget,
+    parse_bbo_update, plan_subscription_shards, BboUpdate, BookContinuity, BookHealth, ScanStats,
+    StandardRateBudget,
 };
 use crate::lighter::{types::WsMessage, websocket::LighterWebSocket};
 
@@ -136,4 +137,61 @@ fn websocket_emits_typed_bbo_updates() {
         }
         other => panic!("expected BBO update, received {other:?}"),
     }
+}
+
+#[test]
+fn ticker_subscription_uses_one_channel_per_market() {
+    let message = LighterWebSocket::ticker_subscription_message(7);
+
+    assert_eq!(
+        message,
+        serde_json::json!({
+            "type": "subscribe",
+            "channel": "ticker/7"
+        })
+    );
+}
+
+#[test]
+fn scan_stats_report_event_rate_and_rank_current_spreads() {
+    let mut stats = ScanStats::new();
+    stats.record(BboUpdate {
+        market_id: 1,
+        symbol: "BTC".to_string(),
+        nonce: 1,
+        exchange_timestamp_ms: 1,
+        bid_price: 100.0,
+        bid_size: 2.0,
+        ask_price: 100.1,
+        ask_size: 2.0,
+    });
+    stats.record(BboUpdate {
+        market_id: 2,
+        symbol: "ETH".to_string(),
+        nonce: 1,
+        exchange_timestamp_ms: 1,
+        bid_price: 50.0,
+        bid_size: 2.0,
+        ask_price: 50.2,
+        ask_size: 2.0,
+    });
+    stats.record(BboUpdate {
+        market_id: 1,
+        symbol: "BTC".to_string(),
+        nonce: 2,
+        exchange_timestamp_ms: 2,
+        bid_price: 100.0,
+        bid_size: 2.0,
+        ask_price: 100.2,
+        ask_size: 2.0,
+    });
+
+    let summary = stats.summary(Duration::from_millis(100), 2);
+
+    assert_eq!(summary.events, 3);
+    assert_eq!(summary.live_markets, 2);
+    assert_eq!(summary.events_per_second, 30.0);
+    assert_eq!(summary.top_spreads.len(), 2);
+    assert_eq!(summary.top_spreads[0].symbol, "ETH");
+    assert!(summary.top_spreads[0].spread_bps > summary.top_spreads[1].spread_bps);
 }
