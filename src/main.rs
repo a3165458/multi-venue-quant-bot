@@ -1,19 +1,19 @@
 // src/main.rs
-mod lighter;
-mod strategy;
 mod backtest;
-mod risk;
 mod dashboard;
 mod data;
+mod lighter;
+mod risk;
+mod strategy;
 mod utils;
 
 use anyhow::{Context, Result};
-use clap::{Parser, Subcommand};
 use chrono::Utc;
+use clap::{Parser, Subcommand};
 use config::Config;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tracing::{info, warn, error, debug};
+use tracing::{debug, error, info, warn};
 
 #[derive(Parser)]
 #[command(author, version, about = "Lighter Trading Bot", long_about = None)]
@@ -109,16 +109,43 @@ async fn main() -> Result<()> {
 
     match cli.command {
         Commands::Live { config } => run_live_trading(&config).await,
-        Commands::Backtest { strategy, data, start, end, capital, output, params } => {
-            run_backtest(&strategy, &data, &start, &end, capital, output.as_deref(), params.as_deref()).await
+        Commands::Backtest {
+            strategy,
+            data,
+            start,
+            end,
+            capital,
+            output,
+            params,
+        } => {
+            run_backtest(
+                &strategy,
+                &data,
+                &start,
+                &end,
+                capital,
+                output.as_deref(),
+                params.as_deref(),
+            )
+            .await
         }
-        Commands::Optimize { strategy, data, start, end, capital, output } => {
-            run_optimize(&strategy, &data, &start, &end, capital, output.as_deref()).await
-        }
+        Commands::Optimize {
+            strategy,
+            data,
+            start,
+            end,
+            capital,
+            output,
+        } => run_optimize(&strategy, &data, &start, &end, capital, output.as_deref()).await,
         Commands::Dashboard { host, port } => run_dashboard(&host, port).await,
-        Commands::Download { symbol, interval, start, end, url, tag } => {
-            download_data(&symbol, &interval, &start, &end, &url, tag.as_deref()).await
-        }
+        Commands::Download {
+            symbol,
+            interval,
+            start,
+            end,
+            url,
+            tag,
+        } => download_data(&symbol, &interval, &start, &end, &url, tag.as_deref()).await,
         Commands::GenerateData { symbol, days } => generate_test_data(&symbol, days).await,
     }
 }
@@ -134,8 +161,8 @@ async fn run_live_trading(config_path: &str) -> Result<()> {
         .context("Failed to load config")?;
 
     // Load credentials from env
-    let secret_key = std::env::var("LIGHTER_SECRET_KEY")
-        .context("LIGHTER_SECRET_KEY not set in .env")?;
+    let secret_key =
+        std::env::var("LIGHTER_SECRET_KEY").context("LIGHTER_SECRET_KEY not set in .env")?;
     let account_index: i64 = std::env::var("LIGHTER_ACCOUNT_INDEX")
         .context("LIGHTER_ACCOUNT_INDEX not set in .env")?
         .parse()
@@ -145,9 +172,11 @@ async fn run_live_trading(config_path: &str) -> Result<()> {
         .parse()
         .context("Invalid LIGHTER_API_KEY_INDEX")?;
 
-    let rest_url = settings.get_string("lighter.rest_url")
+    let rest_url = settings
+        .get_string("lighter.rest_url")
         .unwrap_or_else(|_| "https://mainnet.zklighter.elliot.ai".to_string());
-    let ws_url = settings.get_string("lighter.ws_url")
+    let ws_url = settings
+        .get_string("lighter.ws_url")
         .unwrap_or_else(|_| "wss://mainnet.zklighter.elliot.ai/stream".to_string());
     let chain_id = settings.get_int("lighter.chain_id").unwrap_or(304) as i32;
 
@@ -156,28 +185,47 @@ async fn run_live_trading(config_path: &str) -> Result<()> {
 
     // Initialize FFI signer (uses API secret key, not L1 private key)
     info!("🔑 Initializing signer...");
-    lighter::ffi::init(&rest_url, &secret_key, chain_id, api_key_index, account_index)
-        .context("Failed to initialize FFI signer")?;
-    info!("✅ Signer initialized (account={}, api_key_index={})", account_index, api_key_index);
+    lighter::ffi::init(
+        &rest_url,
+        &secret_key,
+        chain_id,
+        api_key_index,
+        account_index,
+    )
+    .context("Failed to initialize FFI signer")?;
+    info!(
+        "✅ Signer initialized (account={}, api_key_index={})",
+        account_index, api_key_index
+    );
 
     // Create REST client (shared between main loop and refresh task)
     let lighter_client = Arc::new(lighter::client::LighterClient::new_with_account(
-        &rest_url, account_index, api_key_index,
+        &rest_url,
+        account_index,
+        api_key_index,
     ));
 
     // Fetch initial nonce
-    let nonce = lighter_client.refresh_nonce().await
+    let nonce = lighter_client
+        .refresh_nonce()
+        .await
         .context("Failed to fetch nonce")?;
     info!("📋 Initial nonce: {}", nonce);
 
     // Fetch account info
     info!("📡 Fetching account info...");
-    let account = lighter_client.get_account_info().await
+    let account = lighter_client
+        .get_account_info()
+        .await
         .context("Failed to fetch account info")?;
     let equity = account.total_equity;
     let free_balance = account.balances.first().map(|b| b.free).unwrap_or(0.0);
-    info!("✅ Account connected — Equity: ${:.2}, Free: ${:.2}, Positions: {}",
-        equity, free_balance, account.positions.len());
+    info!(
+        "✅ Account connected — Equity: ${:.2}, Free: ${:.2}, Positions: {}",
+        equity,
+        free_balance,
+        account.positions.len()
+    );
 
     // Cancel all existing orders for a clean start
     info!("🧹 Cancelling all existing orders...");
@@ -189,36 +237,49 @@ async fn run_live_trading(config_path: &str) -> Result<()> {
     let _ = lighter_client.refresh_nonce().await;
 
     // Get market configuration
-    let markets: Vec<i64> = settings.get("trading.markets")
+    let markets: Vec<i64> = settings
+        .get("trading.markets")
         .unwrap_or_else(|_| vec![0, 1]);
     let market_ids: Vec<u32> = markets.iter().map(|m| *m as u32).collect();
 
     // Fetch full market list and register symbol map (supports Robinhood Chain instance
     // with stock perps/spot markets — no hardcoded ETH/BTC assumptions)
-    let all_markets: Vec<lighter::types::MarketInfo> = match lighter_client.get_all_markets().await {
+    let all_markets: Vec<lighter::types::MarketInfo> = match lighter_client.get_all_markets().await
+    {
         Ok(ms) => {
             lighter::symbols::register_all(ms.iter().map(|m| (m.market_id, m.symbol.clone())));
-            info!("📚 Market registry: {} markets ({} perp)",
-                ms.len(), ms.iter().filter(|m| m.market_type == "perp").count());
+            info!(
+                "📚 Market registry: {} markets ({} perp)",
+                ms.len(),
+                ms.iter().filter(|m| m.market_type == "perp").count()
+            );
             ms
         }
         Err(e) => {
-            warn!("⚠️ Failed to fetch full market list: {} — falling back to ETH/BTC defaults", e);
+            warn!(
+                "⚠️ Failed to fetch full market list: {} — falling back to ETH/BTC defaults",
+                e
+            );
             Vec::new()
         }
     };
     lighter_client.set_active_markets(market_ids.clone());
     // symbol -> MarketInfo for dynamic decimals / min-amount lookups
     let market_registry: std::collections::HashMap<String, lighter::types::MarketInfo> =
-        all_markets.iter().map(|m| (m.symbol.clone(), m.clone())).collect();
+        all_markets
+            .iter()
+            .map(|m| (m.symbol.clone(), m.clone()))
+            .collect();
 
     // Fetch market info
     let mut market_infos = std::collections::HashMap::new();
     for &mid in &market_ids {
         match lighter_client.get_market_info(mid).await {
             Ok(mi) => {
-                info!("📊 Market {}: {} (price_dec={}, size_dec={}, last=${:.2})",
-                    mid, mi.symbol, mi.price_decimals, mi.size_decimals, mi.last_trade_price);
+                info!(
+                    "📊 Market {}: {} (price_dec={}, size_dec={}, last=${:.2})",
+                    mid, mi.symbol, mi.price_decimals, mi.size_decimals, mi.last_trade_price
+                );
                 market_infos.insert(mid, mi);
             }
             Err(e) => {
@@ -239,22 +300,28 @@ async fn run_live_trading(config_path: &str) -> Result<()> {
         total_trades: 0,
         open_orders: 0,
         open_orders_list: Vec::new(),
-        positions: account.positions.iter().map(|p| {
-            let mark = if p.size.abs() > 1e-12 {
-                match p.side {
-                    lighter::types::Side::Buy => p.entry_price + p.unrealized_pnl / p.size,
-                    lighter::types::Side::Sell => p.entry_price - p.unrealized_pnl / p.size,
-                }
-            } else { p.entry_price };
-            serde_json::json!({
-                "symbol": p.symbol,
-                "side": format!("{:?}", p.side),
-                "size": p.size,
-                "entry_price": p.entry_price,
-                "mark_price": mark,
-                "unrealized_pnl": p.unrealized_pnl,
+        positions: account
+            .positions
+            .iter()
+            .map(|p| {
+                let mark = if p.size.abs() > 1e-12 {
+                    match p.side {
+                        lighter::types::Side::Buy => p.entry_price + p.unrealized_pnl / p.size,
+                        lighter::types::Side::Sell => p.entry_price - p.unrealized_pnl / p.size,
+                    }
+                } else {
+                    p.entry_price
+                };
+                serde_json::json!({
+                    "symbol": p.symbol,
+                    "side": format!("{:?}", p.side),
+                    "size": p.size,
+                    "entry_price": p.entry_price,
+                    "mark_price": mark,
+                    "unrealized_pnl": p.unrealized_pnl,
+                })
             })
-        }).collect(),
+            .collect(),
         trade_history: Vec::new(),
         risk_status: None,
         daily_realized_pnl: 0.0,
@@ -265,12 +332,27 @@ async fn run_live_trading(config_path: &str) -> Result<()> {
         pnl_history: vec![(Utc::now().timestamp(), 0.0)],
         strategy_params: {
             let mut m = std::collections::HashMap::new();
-            m.insert("grid_count".to_string(),
-                settings.get_int("trading.strategies.grid_trading.grid_count").unwrap_or(10).to_string());
-            m.insert("investment_per_grid".to_string(),
-                settings.get_float("trading.strategies.grid_trading.investment_per_grid").unwrap_or(8.0).to_string());
-            m.insert("price_deviation".to_string(),
-                settings.get_float("trading.strategies.grid_trading.price_deviation").unwrap_or(0.012).to_string());
+            m.insert(
+                "grid_count".to_string(),
+                settings
+                    .get_int("trading.strategies.grid_trading.grid_count")
+                    .unwrap_or(10)
+                    .to_string(),
+            );
+            m.insert(
+                "investment_per_grid".to_string(),
+                settings
+                    .get_float("trading.strategies.grid_trading.investment_per_grid")
+                    .unwrap_or(8.0)
+                    .to_string(),
+            );
+            m.insert(
+                "price_deviation".to_string(),
+                settings
+                    .get_float("trading.strategies.grid_trading.price_deviation")
+                    .unwrap_or(0.012)
+                    .to_string(),
+            );
             m
         },
         strategy_config_changed: false,
@@ -279,7 +361,8 @@ async fn run_live_trading(config_path: &str) -> Result<()> {
         trading_paused: false,
         cancel_all_requested: false,
         available_markets: {
-            let perps: Vec<(u32, String)> = all_markets.iter()
+            let perps: Vec<(u32, String)> = all_markets
+                .iter()
                 .filter(|m| m.market_type == "perp")
                 .map(|m| (m.market_id, m.symbol.clone()))
                 .collect();
@@ -310,7 +393,10 @@ async fn run_live_trading(config_path: &str) -> Result<()> {
     // Restore persistent strategy config from disk
     if let Some(saved) = dashboard::server::PersistentStrategyConfig::load() {
         let mut ds = dash_state.write().await;
-        info!("📂 Loaded strategy config: {} params={:?}", saved.strategy_name, saved.strategy_params);
+        info!(
+            "📂 Loaded strategy config: {} params={:?}",
+            saved.strategy_name, saved.strategy_params
+        );
         ds.strategy_name = saved.strategy_name;
         ds.strategy_params = saved.strategy_params;
     }
@@ -318,7 +404,10 @@ async fn run_live_trading(config_path: &str) -> Result<()> {
     // Restore persistent risk config from disk
     if let Some(saved) = dashboard::server::PersistentRiskConfig::load() {
         let mut ds = dash_state.write().await;
-        info!("📂 Loaded risk config: leverage_limit={}", saved.leverage_limit);
+        info!(
+            "📂 Loaded risk config: leverage_limit={}",
+            saved.leverage_limit
+        );
         ds.risk_config = saved.risk_config;
         ds.leverage_limit = saved.leverage_limit;
     }
@@ -327,7 +416,9 @@ async fn run_live_trading(config_path: &str) -> Result<()> {
     let dash_port = settings.get_int("dashboard.port").unwrap_or(2028) as u16;
     let dash_state_clone = dash_state.clone();
     tokio::spawn(async move {
-        if let Err(e) = dashboard::server::start_with_state("0.0.0.0", dash_port, dash_state_clone).await {
+        if let Err(e) =
+            dashboard::server::start_with_state("0.0.0.0", dash_port, dash_state_clone).await
+        {
             error!("Dashboard error: {}", e);
         }
     });
@@ -336,7 +427,7 @@ async fn run_live_trading(config_path: &str) -> Result<()> {
     // Initialize risk manager (shared for periodic equity updates)
     let risk_manager = Arc::new(tokio::sync::Mutex::new(
         risk::risk_manager::RiskManager::new(&settings)
-            .context("Failed to initialize risk manager")?
+            .context("Failed to initialize risk manager")?,
     ));
     {
         let mut rm = risk_manager.lock().await;
@@ -373,20 +464,29 @@ async fn run_live_trading(config_path: &str) -> Result<()> {
         let ds = dash_state.read().await;
         let has_saved_params = !ds.strategy_params.is_empty();
         if has_saved_params {
-            let params_str = ds.strategy_params.iter()
+            let params_str = ds
+                .strategy_params
+                .iter()
                 .map(|(k, v)| format!("{}={}", k, v))
                 .collect::<Vec<_>>()
                 .join(",");
-            info!("📂 Creating strategy from saved config: {} params={}", ds.strategy_name, params_str);
+            info!(
+                "📂 Creating strategy from saved config: {} params={}",
+                ds.strategy_name, params_str
+            );
             let strat = strategy::create_strategy_with_params(&ds.strategy_name, Some(&params_str))
                 .unwrap_or_else(|e| {
-                    warn!("Failed to create strategy from saved params: {}, falling back to defaults", e);
+                    warn!(
+                        "Failed to create strategy from saved params: {}, falling back to defaults",
+                        e
+                    );
                     strategy::create_strategy(&settings).expect("Failed to create default strategy")
                 });
             Arc::new(tokio::sync::RwLock::new(strat))
         } else {
-            Arc::new(tokio::sync::RwLock::new(strategy::create_strategy(&settings)
-                .context("Failed to initialize strategy")?))
+            Arc::new(tokio::sync::RwLock::new(
+                strategy::create_strategy(&settings).context("Failed to initialize strategy")?,
+            ))
         }
     };
     let strategy_name = strategy.read().await.name().to_string();
@@ -403,7 +503,10 @@ async fn run_live_trading(config_path: &str) -> Result<()> {
 
     // Fetch initial candle data for strategies that need history
     for &mid in &market_ids {
-        let symbol = market_infos.get(&mid).map(|m| m.symbol.as_str()).unwrap_or("UNKNOWN");
+        let symbol = market_infos
+            .get(&mid)
+            .map(|m| m.symbol.as_str())
+            .unwrap_or("UNKNOWN");
         match lighter_client.get_candlesticks(mid, "1h", 100).await {
             Ok(candles) => {
                 info!("📊 Loaded {} candles for {}", candles.len(), symbol);
@@ -429,7 +532,10 @@ async fn run_live_trading(config_path: &str) -> Result<()> {
     // Subscribe to market data for actively traded markets only
     let mut subscribed = std::collections::HashSet::new();
     for &mid in &market_ids {
-        let symbol = market_infos.get(&mid).map(|m| m.symbol.as_str()).unwrap_or("?");
+        let symbol = market_infos
+            .get(&mid)
+            .map(|m| m.symbol.as_str())
+            .unwrap_or("?");
         ws_client.subscribe_market_data(&mid.to_string()).await?;
         subscribed.insert(mid);
         info!("📡 Subscribed to {} (market {})", symbol, mid);
@@ -456,15 +562,21 @@ async fn run_live_trading(config_path: &str) -> Result<()> {
     tokio::spawn(async move {
         // 动态市场元数据查询（回退到主网 ETH/BTC 默认值）
         let market_id_of = |sym: &str| -> Option<u32> {
-            registry_refresh.get(sym).map(|m| m.market_id)
+            registry_refresh
+                .get(sym)
+                .map(|m| m.market_id)
                 .or_else(|| lighter::symbols::market_id_of(sym))
         };
         let size_decimals_of = |sym: &str| -> i32 {
-            registry_refresh.get(sym).map(|m| m.size_decimals as i32)
+            registry_refresh
+                .get(sym)
+                .map(|m| m.size_decimals as i32)
                 .unwrap_or(if sym == "BTC" { 5 } else { 4 })
         };
         let min_change_of = |sym: &str| -> f64 {
-            registry_refresh.get(sym).map(|m| m.min_base_amount * 0.95)
+            registry_refresh
+                .get(sym)
+                .map(|m| m.min_base_amount * 0.95)
                 .unwrap_or(if sym == "BTC" { 0.00019 } else { 0.0049 })
         };
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(10));
@@ -473,8 +585,12 @@ async fn run_live_trading(config_path: &str) -> Result<()> {
         let mut prev_equity: f64 = 0.0;
         let mut prev_unrealized: f64 = 0.0;
         // Position snapshot for logging close events (side, size, entry_price)
-        let mut prev_positions: std::collections::HashMap<String, (lighter::types::Side, f64, f64)> = std::collections::HashMap::new();
-        let mut position_opened_at: std::collections::HashMap<String, chrono::DateTime<Utc>> = std::collections::HashMap::new();
+        let mut prev_positions: std::collections::HashMap<
+            String,
+            (lighter::types::Side, f64, f64),
+        > = std::collections::HashMap::new();
+        let mut position_opened_at: std::collections::HashMap<String, chrono::DateTime<Utc>> =
+            std::collections::HashMap::new();
         // Track daily PnL reset
         let mut last_daily_reset_day: u32 = (Utc::now().timestamp() / 86400) as u32;
         let mut first_cycle = true;
@@ -485,22 +601,28 @@ async fn run_live_trading(config_path: &str) -> Result<()> {
             match client_for_refresh.get_open_orders("all").await {
                 Ok(orders) => {
                     let count = orders.len() as u32;
-                    let prev = open_orders_refresh.swap(count, std::sync::atomic::Ordering::Relaxed);
+                    let prev =
+                        open_orders_refresh.swap(count, std::sync::atomic::Ordering::Relaxed);
                     if prev != count {
                         info!("📋 Open orders synced: {} → {} (real)", prev, count);
                     }
                     let mut ds = dash_state_refresh.write().await;
                     ds.open_orders = count;
                     // Also store the actual orders for dashboard display
-                    ds.open_orders_list = orders.iter().map(|o| serde_json::json!({
-                        "id": o.id,
-                        "symbol": o.symbol,
-                        "side": format!("{:?}", o.side),
-                        "price": o.price,
-                        "quantity": o.quantity,
-                        "filled_quantity": o.filled_quantity,
-                        "status": format!("{:?}", o.status),
-                    })).collect();
+                    ds.open_orders_list = orders
+                        .iter()
+                        .map(|o| {
+                            serde_json::json!({
+                                "id": o.id,
+                                "symbol": o.symbol,
+                                "side": format!("{:?}", o.side),
+                                "price": o.price,
+                                "quantity": o.quantity,
+                                "filled_quantity": o.filled_quantity,
+                                "status": format!("{:?}", o.status),
+                            })
+                        })
+                        .collect();
                     drop(ds);
 
                     // ===== Stale order management =====
@@ -511,7 +633,8 @@ async fn run_live_trading(config_path: &str) -> Result<()> {
                     };
                     if count > 0 && !is_emergency {
                         // Get fresh market prices
-                        let mut mid_prices: std::collections::HashMap<u32, f64> = std::collections::HashMap::new();
+                        let mut mid_prices: std::collections::HashMap<u32, f64> =
+                            std::collections::HashMap::new();
                         for &mid in &configured_market_ids {
                             if let Ok(mi) = client_for_refresh.get_market_info(mid).await {
                                 if mi.last_trade_price > 0.0 {
@@ -520,6 +643,90 @@ async fn run_live_trading(config_path: &str) -> Result<()> {
                             }
                         }
 
+                        // Signed net position per market (long = +, short = -) from last
+                        // account refresh. Used to spare position-reducing orders from the
+                        // stale-cancel sweeps below — otherwise the very orders that would
+                        // flatten an accumulated bag get wiped before they can fill.
+                        let net_pos_by_market: std::collections::HashMap<u32, f64> = {
+                            let ds = dash_state_refresh.read().await;
+                            let mut m = std::collections::HashMap::new();
+                            for p in &ds.positions {
+                                if let (Some(sym), Some(size), Some(side)) =
+                                    (p["symbol"].as_str(), p["size"].as_f64(), p["side"].as_str())
+                                {
+                                    if let Some(mid) = market_id_of(sym) {
+                                        let signed = if side == "Sell" {
+                                            -size.abs()
+                                        } else {
+                                            size.abs()
+                                        };
+                                        *m.entry(mid).or_insert(0.0) += signed;
+                                    }
+                                }
+                            }
+                            m
+                        };
+                        // An order reduces the position if it trades against the net side.
+                        let reduces_position =
+                            |market_id: u32, side: &lighter::types::Side| -> bool {
+                                match net_pos_by_market.get(&market_id).copied().unwrap_or(0.0) {
+                                    n if n > 1e-9 => matches!(side, lighter::types::Side::Sell),
+                                    n if n < -1e-9 => matches!(side, lighter::types::Side::Buy),
+                                    _ => false,
+                                }
+                            };
+
+                        // 诊断：打印每个挂单相对市价的距离（R = 减仓单）。
+                        // 2026-07-24 的 15.5h 停摆就是靠这类信息才能判定挂单是"太远不成交"还是"够近但被占位"。
+                        {
+                            let summary: Vec<String> = orders
+                                .iter()
+                                .filter_map(|o| {
+                                    let mid = *mid_prices.get(&market_id_of(&o.symbol)?)?;
+                                    let tag = if reduces_position(market_id_of(&o.symbol)?, &o.side)
+                                    {
+                                        "R"
+                                    } else {
+                                        ""
+                                    };
+                                    Some(format!(
+                                        "{:?}{}@{:.1}({:+.2}%)",
+                                        o.side,
+                                        tag,
+                                        o.price,
+                                        (o.price - mid) / mid * 100.0
+                                    ))
+                                })
+                                .collect();
+                            if !summary.is_empty() {
+                                info!("📋 Orders vs mid: {}", summary.join(" "));
+                            }
+                        }
+
+                        // 逃生阀（修复 2026-07-24 死锁）：减仓单可以豁免撤单，但**绝不允许占满所有槽位**。
+                        // 否则「持仓封顶 → 只出单一方向信号 → 全部挂单都是减仓单 → 全部豁免 → 槽位占死
+                        // → 新信号被 max_open_orders 拒绝」构成无出口的闭环，机器人完全停摆。
+                        // 只保护最接近市价（最可能成交）的 N 个减仓单，至少留 2 个槽位给新信号。
+                        let reducing_keep_limit = max_open_orders.saturating_sub(2) as usize;
+                        let protected_reducing: std::collections::HashSet<String> = {
+                            let mut cand: Vec<(&str, f64)> = orders
+                                .iter()
+                                .filter_map(|o| {
+                                    let mid_id = market_id_of(&o.symbol)?;
+                                    if !reduces_position(mid_id, &o.side) {
+                                        return None;
+                                    }
+                                    let mid = *mid_prices.get(&mid_id)?;
+                                    Some((o.id.as_str(), (o.price - mid).abs() / mid))
+                                })
+                                .collect();
+                            cand.sort_by(|a, b| {
+                                a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal)
+                            });
+                            cand.truncate(reducing_keep_limit);
+                            cand.into_iter().map(|(id, _)| id.to_string()).collect()
+                        };
+
                         // Strategy 1: Cancel individual orders that are too far from mid price
                         let mut cancelled = 0u32;
                         for order in &orders {
@@ -527,15 +734,30 @@ async fn run_live_trading(config_path: &str) -> Result<()> {
                                 Some(id) => id,
                                 None => continue,
                             };
+                            // 减仓单原则上保留（让它成交去平仓），但仅限受逃生阀保护的那几个。
+                            // 未受保护的（离市价最远的）即使是减仓单也照常按 >1.2% 撤掉：
+                            // 它短期内不会成交，占着槽位纯属死重；撤掉后策略会在更贴近市价的
+                            // 网格层重新挂减仓单，反而**加快**平仓。
+                            if reduces_position(market_id, &order.side)
+                                && protected_reducing.contains(&order.id)
+                            {
+                                continue;
+                            }
                             if let Some(&mid) = mid_prices.get(&market_id) {
                                 let diff = (order.price - mid).abs() / mid;
                                 if diff > stale_price_pct {
                                     if let Ok(idx) = order.id.parse::<i64>() {
                                         info!("🗑️ Cancelling stale order: {} {:?} @ {:.2} (mid={:.2}, diff={:.1}%)",
                                             order.symbol, order.side, order.price, mid, diff * 100.0);
-                                        match client_for_refresh.cancel_order_by_index(market_id, idx).await {
+                                        match client_for_refresh
+                                            .cancel_order_by_index(market_id, idx)
+                                            .await
+                                        {
                                             Ok(()) => cancelled += 1,
-                                            Err(e) => warn!("Failed to cancel stale order {}: {}", order.id, e),
+                                            Err(e) => warn!(
+                                                "Failed to cancel stale order {}: {}",
+                                                order.id, e
+                                            ),
                                         }
                                     }
                                 }
@@ -543,38 +765,75 @@ async fn run_live_trading(config_path: &str) -> Result<()> {
                         }
 
                         if cancelled > 0 {
-                            info!("🗑️ Cancelled {} stale orders, resetting grid state", cancelled);
+                            info!(
+                                "🗑️ Cancelled {} stale orders, resetting grid state",
+                                cancelled
+                            );
                             strategy_refresh.read().await.clear_filled_state();
                             let _ = client_for_refresh.refresh_nonce().await;
                             let new_count = count.saturating_sub(cancelled);
-                            open_orders_refresh.store(new_count, std::sync::atomic::Ordering::Relaxed);
+                            open_orders_refresh
+                                .store(new_count, std::sync::atomic::Ordering::Relaxed);
                             at_max_since = None; // Reset timer
                         }
 
                         // Strategy 2: Time-based cancel-all if orders sit unfilled too long
                         // This prevents the bot from being stuck when orders are within
                         // the grid range but none are filling
-                        if count >= 3 { // Any meaningful number of open orders
+                        if count >= 3 {
+                            // Any meaningful number of open orders
                             if at_max_since.is_none() {
                                 at_max_since = Some(std::time::Instant::now());
                             }
                             if let Some(since) = at_max_since {
                                 let elapsed = since.elapsed().as_secs();
                                 if elapsed >= max_order_age_secs {
-                                    info!("🔄 Auto-reset: cancelling all {} orders (stale for {}s)", count, elapsed);
-                                    grid_resetting_refresh.store(true, std::sync::atomic::Ordering::Relaxed);
-                                    match client_for_refresh.cancel_all_orders("all").await {
-                                        Ok(()) => {
-                                            info!("✅ Auto-reset: all orders cancelled, re-gridding");
-                                            strategy_refresh.read().await.clear_filled_state();
-                                            let _ = client_for_refresh.refresh_nonce().await;
-                                            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-                                            open_orders_refresh.store(0, std::sync::atomic::Ordering::Relaxed);
-                                            at_max_since = None;
+                                    // Cancel only the position-INCREASING orders; keep any
+                                    // reducing orders alive so the accumulated position can
+                                    // still be closed when price returns to those levels.
+                                    grid_resetting_refresh
+                                        .store(true, std::sync::atomic::Ordering::Relaxed);
+                                    let mut auto_cancelled = 0u32;
+                                    let mut kept_reducing = 0u32;
+                                    for order in &orders {
+                                        let market_id = match market_id_of(&order.symbol) {
+                                            Some(id) => id,
+                                            None => continue,
+                                        };
+                                        // 同逃生阀：只保护最接近市价的若干减仓单，其余照撤，
+                                        // 保证永远有空槽位接纳新信号。
+                                        if reduces_position(market_id, &order.side)
+                                            && protected_reducing.contains(&order.id)
+                                        {
+                                            kept_reducing += 1;
+                                            continue;
                                         }
-                                        Err(e) => warn!("❌ Auto-reset cancel failed: {}", e),
+                                        if let Ok(idx) = order.id.parse::<i64>() {
+                                            match client_for_refresh
+                                                .cancel_order_by_index(market_id, idx)
+                                                .await
+                                            {
+                                                Ok(()) => auto_cancelled += 1,
+                                                Err(e) => warn!(
+                                                    "❌ Auto-reset cancel failed for {}: {}",
+                                                    order.id, e
+                                                ),
+                                            }
+                                        }
                                     }
-                                    grid_resetting_refresh.store(false, std::sync::atomic::Ordering::Relaxed);
+                                    info!("🔄 Auto-reset: cancelled {} stale orders, kept {} reducing (stale for {}s)",
+                                        auto_cancelled, kept_reducing, elapsed);
+                                    if auto_cancelled > 0 {
+                                        strategy_refresh.read().await.clear_filled_state();
+                                        let _ = client_for_refresh.refresh_nonce().await;
+                                        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                                    }
+                                    let remaining = count.saturating_sub(auto_cancelled);
+                                    open_orders_refresh
+                                        .store(remaining, std::sync::atomic::Ordering::Relaxed);
+                                    at_max_since = None;
+                                    grid_resetting_refresh
+                                        .store(false, std::sync::atomic::Ordering::Relaxed);
                                 }
                             }
                         } else {
@@ -593,11 +852,14 @@ async fn run_live_trading(config_path: &str) -> Result<()> {
             match client_for_refresh.get_account_info().await {
                 Ok(acct) => {
                     let curr_equity = acct.total_equity;
-                    let curr_unrealized: f64 = acct.positions.iter().map(|p| p.unrealized_pnl).sum();
+                    let curr_unrealized: f64 =
+                        acct.positions.iter().map(|p| p.unrealized_pnl).sum();
 
                     // ===== Auto-close positions on non-configured markets =====
                     for pos in &acct.positions {
-                        if pos.size.abs() < 1e-10 { continue; }
+                        if pos.size.abs() < 1e-10 {
+                            continue;
+                        }
                         let pos_market_id = match market_id_of(&pos.symbol) {
                             Some(id) => id,
                             None => {
@@ -616,21 +878,34 @@ async fn run_live_trading(config_path: &str) -> Result<()> {
                                 pos.symbol.contains(&m.symbol) || m.symbol.contains(&pos.symbol)
                             });
                             // Get fresh price for this market
-                            let fresh_price = match client_for_refresh.get_market_info(pos_market_id).await {
-                                Ok(fmi) if fmi.last_trade_price > 0.0 => fmi.last_trade_price,
-                                _ => pos.entry_price,
-                            };
+                            let fresh_price =
+                                match client_for_refresh.get_market_info(pos_market_id).await {
+                                    Ok(fmi) if fmi.last_trade_price > 0.0 => fmi.last_trade_price,
+                                    _ => pos.entry_price,
+                                };
                             let slippage = 0.005;
                             let close_price = match close_side {
                                 lighter::types::Side::Buy => fresh_price * (1.0 + slippage),
                                 lighter::types::Side::Sell => fresh_price * (1.0 - slippage),
                             };
-                            warn!("🔄 Auto-closing {} {:?} {:.6} @ {:.2} (non-configured market)",
-                                pos.symbol, close_side, pos.size, close_price);
-                            match client_for_refresh.place_order_with_market(
-                                pos_market_id, close_side, close_price, pos.size.abs(), mi,
-                            ).await {
-                                Ok(resp) => info!("✅ Auto-close order placed: {} id={}", pos.symbol, resp.order_id),
+                            warn!(
+                                "🔄 Auto-closing {} {:?} {:.6} @ {:.2} (non-configured market)",
+                                pos.symbol, close_side, pos.size, close_price
+                            );
+                            match client_for_refresh
+                                .place_order_with_market(
+                                    pos_market_id,
+                                    close_side,
+                                    close_price,
+                                    pos.size.abs(),
+                                    mi,
+                                )
+                                .await
+                            {
+                                Ok(resp) => info!(
+                                    "✅ Auto-close order placed: {} id={}",
+                                    pos.symbol, resp.order_id
+                                ),
                                 Err(e) => error!("❌ Auto-close failed for {}: {}", pos.symbol, e),
                             }
                         }
@@ -642,18 +917,28 @@ async fn run_live_trading(config_path: &str) -> Result<()> {
                     let mut realized_pnl_this_cycle = 0.0_f64;
                     let mut close_events: Vec<serde_json::Value> = Vec::new();
                     let close_timestamp = Utc::now();
-                    let mut curr_pos_map: std::collections::HashMap<String, (lighter::types::Side, f64, f64)> = std::collections::HashMap::new();
+                    let mut curr_pos_map: std::collections::HashMap<
+                        String,
+                        (lighter::types::Side, f64, f64),
+                    > = std::collections::HashMap::new();
                     for p in &acct.positions {
                         if p.size.abs() > 1e-10 {
                             let factor = 10_f64.powi(size_decimals_of(&p.symbol));
                             let rounded_size = (p.size * factor).round() / factor;
-                            curr_pos_map.insert(p.symbol.clone(), (p.side, rounded_size, p.entry_price));
+                            curr_pos_map
+                                .insert(p.symbol.clone(), (p.side, rounded_size, p.entry_price));
                         }
                     }
 
                     if !first_cycle && prev_equity > 0.0 {
                         // Check for meaningful position changes (size decreased or position closed)
-                        let mut position_reductions: Vec<(String, lighter::types::Side, f64, f64, &str)> = Vec::new();
+                        let mut position_reductions: Vec<(
+                            String,
+                            lighter::types::Side,
+                            f64,
+                            f64,
+                            &str,
+                        )> = Vec::new();
                         for (symbol, (prev_side, prev_size, prev_entry)) in &prev_positions {
                             // Min change threshold per market
                             let min_change = min_change_of(symbol);
@@ -661,18 +946,40 @@ async fn run_live_trading(config_path: &str) -> Result<()> {
                                 Some((curr_side, curr_size, _)) => {
                                     if *curr_side != *prev_side {
                                         // Side flipped — full close of old position
-                                        position_reductions.push((symbol.clone(), *prev_side, *prev_size, *prev_entry, "Full Close"));
+                                        position_reductions.push((
+                                            symbol.clone(),
+                                            *prev_side,
+                                            *prev_size,
+                                            *prev_entry,
+                                            "Full Close",
+                                        ));
                                     } else if *prev_size - *curr_size >= min_change {
                                         // Position reduced
                                         let closed = prev_size - curr_size;
-                                        let close_type = if *curr_size < min_change { "Full Close" } else { "Partial Close" };
-                                        position_reductions.push((symbol.clone(), *prev_side, closed, *prev_entry, close_type));
+                                        let close_type = if *curr_size < min_change {
+                                            "Full Close"
+                                        } else {
+                                            "Partial Close"
+                                        };
+                                        position_reductions.push((
+                                            symbol.clone(),
+                                            *prev_side,
+                                            closed,
+                                            *prev_entry,
+                                            close_type,
+                                        ));
                                     }
                                 }
                                 None => {
                                     // Position gone entirely
                                     if *prev_size >= 1e-10 {
-                                        position_reductions.push((symbol.clone(), *prev_side, *prev_size, *prev_entry, "Full Close"));
+                                        position_reductions.push((
+                                            symbol.clone(),
+                                            *prev_side,
+                                            *prev_size,
+                                            *prev_entry,
+                                            "Full Close",
+                                        ));
                                     }
                                 }
                             }
@@ -685,24 +992,42 @@ async fn run_live_trading(config_path: &str) -> Result<()> {
                             realized_pnl_this_cycle = equity_change - unrealized_change;
 
                             // Distribute PnL across changed positions proportionally
-                            let total_notional: f64 = position_reductions.iter()
+                            let total_notional: f64 = position_reductions
+                                .iter()
                                 .map(|(_, _, size, entry, _)| size * entry)
                                 .sum();
 
-                            for (symbol, prev_side, closed_size, prev_entry, close_type) in &position_reductions {
-                                let pnl_share = if total_notional > 0.0 && position_reductions.len() > 1 {
-                                    realized_pnl_this_cycle * (closed_size * prev_entry) / total_notional
-                                } else {
-                                    realized_pnl_this_cycle
-                                };
+                            for (symbol, prev_side, closed_size, prev_entry, close_type) in
+                                &position_reductions
+                            {
+                                let pnl_share =
+                                    if total_notional > 0.0 && position_reductions.len() > 1 {
+                                        realized_pnl_this_cycle * (closed_size * prev_entry)
+                                            / total_notional
+                                    } else {
+                                        realized_pnl_this_cycle
+                                    };
                                 let market_id = market_id_of(symbol).unwrap_or(0);
 
-                                info!("💰 {} {}: {:?} {:.6} @ entry={:.2} | PnL: {}{:.4}",
-                                    close_type, symbol, prev_side, closed_size, prev_entry,
-                                    if pnl_share >= 0.0 { "+" } else { "" }, pnl_share);
+                                info!(
+                                    "💰 {} {}: {:?} {:.6} @ entry={:.2} | PnL: {}{:.4}",
+                                    close_type,
+                                    symbol,
+                                    prev_side,
+                                    closed_size,
+                                    prev_entry,
+                                    if pnl_share >= 0.0 { "+" } else { "" },
+                                    pnl_share
+                                );
 
-                                let duration_secs = position_opened_at.get(symbol)
-                                    .map(|opened| close_timestamp.signed_duration_since(*opened).num_seconds().max(0))
+                                let duration_secs = position_opened_at
+                                    .get(symbol)
+                                    .map(|opened| {
+                                        close_timestamp
+                                            .signed_duration_since(*opened)
+                                            .num_seconds()
+                                            .max(0)
+                                    })
                                     .unwrap_or(0);
 
                                 close_events.push(serde_json::json!({
@@ -731,7 +1056,9 @@ async fn run_live_trading(config_path: &str) -> Result<()> {
                     for (symbol, (curr_side, curr_size, _)) in &curr_pos_map {
                         let min_change = min_change_of(symbol);
                         let should_reset = match prev_positions.get(symbol) {
-                            Some((prev_side, prev_size, _)) => *prev_side != *curr_side || *prev_size < min_change,
+                            Some((prev_side, prev_size, _)) => {
+                                *prev_side != *curr_side || *prev_size < min_change
+                            }
                             None => *curr_size >= min_change,
                         };
                         if should_reset || !next_opened_at.contains_key(symbol) {
@@ -746,7 +1073,8 @@ async fn run_live_trading(config_path: &str) -> Result<()> {
                         if p.size.abs() > 1e-10 {
                             let factor = 10_f64.powi(size_decimals_of(&p.symbol));
                             let rounded_size = (p.size * factor).round() / factor;
-                            prev_positions.insert(p.symbol.clone(), (p.side, rounded_size, p.entry_price));
+                            prev_positions
+                                .insert(p.symbol.clone(), (p.side, rounded_size, p.entry_price));
                         }
                     }
 
@@ -789,14 +1117,21 @@ async fn run_live_trading(config_path: &str) -> Result<()> {
                                     let yesterday_pnl = ds.daily_realized_pnl;
                                     ds.daily_pnl_map.insert(yesterday, yesterday_pnl);
                                 }
-                                info!("📅 New day — resetting daily realized PnL ({:.4} → 0.0)", ds.daily_realized_pnl);
+                                info!(
+                                    "📅 New day — resetting daily realized PnL ({:.4} → 0.0)",
+                                    ds.daily_realized_pnl
+                                );
                                 ds.daily_realized_pnl = 0.0;
                                 last_daily_reset_day = today;
                             }
                             ds.daily_realized_pnl += realized_pnl_this_cycle;
                             ds.total_realized_pnl += realized_pnl_this_cycle;
-                            info!("📊 Realized PnL update: cycle={:+.4}, daily={:+.4}, total={:+.4}",
-                                realized_pnl_this_cycle, ds.daily_realized_pnl, ds.total_realized_pnl);
+                            info!(
+                                "📊 Realized PnL update: cycle={:+.4}, daily={:+.4}, total={:+.4}",
+                                realized_pnl_this_cycle,
+                                ds.daily_realized_pnl,
+                                ds.total_realized_pnl
+                            );
                         }
 
                         // Record close events in trade history
@@ -823,7 +1158,9 @@ async fn run_live_trading(config_path: &str) -> Result<()> {
                         }
                         // Record equity history (max 1440 points = 24h at 1/min)
                         let now_ts = Utc::now().timestamp();
-                        let should_record = ds.equity_history.last()
+                        let should_record = ds
+                            .equity_history
+                            .last()
                             .map(|(ts, _)| now_ts - ts >= 60)
                             .unwrap_or(true);
                         if should_record {
@@ -867,12 +1204,15 @@ async fn run_live_trading(config_path: &str) -> Result<()> {
                             let _ = client_for_refresh.refresh_nonce().await;
 
                             // Get fresh market prices for aggressive close
-                            let mut fresh_prices: std::collections::HashMap<u32, f64> = std::collections::HashMap::new();
+                            let mut fresh_prices: std::collections::HashMap<u32, f64> =
+                                std::collections::HashMap::new();
                             // Fetch prices for configured markets plus any market with an open position
                             let mut close_mids: std::collections::HashSet<u32> =
                                 configured_market_ids.iter().copied().collect();
                             for pos in &acct.positions {
-                                if pos.size.abs() < 1e-10 { continue; }
+                                if pos.size.abs() < 1e-10 {
+                                    continue;
+                                }
                                 if let Some(id) = market_id_of(&pos.symbol) {
                                     close_mids.insert(id);
                                 }
@@ -887,31 +1227,52 @@ async fn run_live_trading(config_path: &str) -> Result<()> {
 
                             // Close all positions at CURRENT market price with slippage
                             for pos in &acct.positions {
-                                if pos.size.abs() < 1e-10 { continue; }
+                                if pos.size.abs() < 1e-10 {
+                                    continue;
+                                }
                                 let close_side = match pos.side {
                                     lighter::types::Side::Buy => lighter::types::Side::Sell,
                                     lighter::types::Side::Sell => lighter::types::Side::Buy,
                                 };
                                 let mi = market_infos_refresh.values().find(|m| {
-                                    pos.symbol.contains(&m.symbol) || m.symbol.contains(&pos.symbol.replace("market_", ""))
+                                    pos.symbol.contains(&m.symbol)
+                                        || m.symbol.contains(&pos.symbol.replace("market_", ""))
                                 });
-                                let market_id = mi.map(|m| m.market_id)
+                                let market_id = mi
+                                    .map(|m| m.market_id)
                                     .or_else(|| market_id_of(&pos.symbol))
                                     .unwrap_or(0);
 
                                 // Use CURRENT market price + slippage (not entry price!)
-                                let current_mid = fresh_prices.get(&market_id).copied().unwrap_or(pos.entry_price);
+                                let current_mid = fresh_prices
+                                    .get(&market_id)
+                                    .copied()
+                                    .unwrap_or(pos.entry_price);
                                 let slippage = 0.005; // 0.5% slippage for aggressive fill
                                 let close_price = match close_side {
                                     lighter::types::Side::Buy => current_mid * (1.0 + slippage),
                                     lighter::types::Side::Sell => current_mid * (1.0 - slippage),
                                 };
 
-                                warn!("🚨 紧急平仓: {} {:?} {:.6} @ {:.2} (mid={:.2}, entry={:.2})",
-                                    pos.symbol, close_side, pos.size, close_price, current_mid, pos.entry_price);
-                                match client_for_refresh.place_order_with_market(
-                                    market_id, close_side, close_price, pos.size.abs(), mi,
-                                ).await {
+                                warn!(
+                                    "🚨 紧急平仓: {} {:?} {:.6} @ {:.2} (mid={:.2}, entry={:.2})",
+                                    pos.symbol,
+                                    close_side,
+                                    pos.size,
+                                    close_price,
+                                    current_mid,
+                                    pos.entry_price
+                                );
+                                match client_for_refresh
+                                    .place_order_with_market(
+                                        market_id,
+                                        close_side,
+                                        close_price,
+                                        pos.size.abs(),
+                                        mi,
+                                    )
+                                    .await
+                                {
                                     Ok(resp) => info!("✅ 紧急平仓订单: id={}", resp.order_id),
                                     Err(e) => error!("❌ 紧急平仓订单失败: {}", e),
                                 }
@@ -929,17 +1290,23 @@ async fn run_live_trading(config_path: &str) -> Result<()> {
                         for mi in market_infos_refresh.values() {
                             if mi.last_trade_price > 0.0 {
                                 current_prices.insert(mi.symbol.clone(), mi.last_trade_price);
-                                current_prices.insert(format!("market_{}", mi.market_id), mi.last_trade_price);
+                                current_prices.insert(
+                                    format!("market_{}", mi.market_id),
+                                    mi.last_trade_price,
+                                );
                             }
                         }
 
                         for (&mid, mi) in &market_infos_refresh {
                             if let Ok(fresh_mi) = client_for_refresh.get_market_info(mid).await {
-                                current_prices.insert(fresh_mi.symbol.clone(), fresh_mi.last_trade_price);
-                                current_prices.insert(format!("market_{}", mid), fresh_mi.last_trade_price);
+                                current_prices
+                                    .insert(fresh_mi.symbol.clone(), fresh_mi.last_trade_price);
+                                current_prices
+                                    .insert(format!("market_{}", mid), fresh_mi.last_trade_price);
                             } else {
                                 current_prices.insert(mi.symbol.clone(), mi.last_trade_price);
-                                current_prices.insert(format!("market_{}", mid), mi.last_trade_price);
+                                current_prices
+                                    .insert(format!("market_{}", mid), mi.last_trade_price);
                             }
                         }
 
@@ -953,23 +1320,41 @@ async fn run_live_trading(config_path: &str) -> Result<()> {
 
                         for sig in close_signals {
                             let mi = market_infos_refresh.values().find(|m| {
-                                sig.symbol.contains(&m.symbol) || m.symbol.contains(&sig.symbol.replace("market_", ""))
+                                sig.symbol.contains(&m.symbol)
+                                    || m.symbol.contains(&sig.symbol.replace("market_", ""))
                             });
-                            let market_id = mi.map(|m| m.market_id)
+                            let market_id = mi
+                                .map(|m| m.market_id)
                                 .or_else(|| market_id_of(&sig.symbol))
                                 .unwrap_or(0);
 
-                            info!("📌 {} — {} {:?} {:.6} @ {:.2} (entry={:.2})",
-                                sig.reason, sig.symbol, sig.side_to_close, sig.size, sig.current_price, sig.entry_price);
+                            info!(
+                                "📌 {} — {} {:?} {:.6} @ {:.2} (entry={:.2})",
+                                sig.reason,
+                                sig.symbol,
+                                sig.side_to_close,
+                                sig.size,
+                                sig.current_price,
+                                sig.entry_price
+                            );
 
                             // Cancel all orders first to free up margin
                             let _ = client_for_refresh.cancel_all_orders("all").await;
                             let _ = client_for_refresh.refresh_nonce().await;
 
-                            match client_for_refresh.place_order_with_market(
-                                market_id, sig.side_to_close, sig.current_price, sig.size, mi,
-                            ).await {
-                                Ok(resp) => info!("✅ 止损止盈订单: id={} — {}", resp.order_id, sig.reason),
+                            match client_for_refresh
+                                .place_order_with_market(
+                                    market_id,
+                                    sig.side_to_close,
+                                    sig.current_price,
+                                    sig.size,
+                                    mi,
+                                )
+                                .await
+                            {
+                                Ok(resp) => {
+                                    info!("✅ 止损止盈订单: id={} — {}", resp.order_id, sig.reason)
+                                }
                                 Err(e) => error!("❌ 止损止盈订单失败: {} — {}", e, sig.reason),
                             }
                         }
@@ -1003,7 +1388,27 @@ async fn run_live_trading(config_path: &str) -> Result<()> {
         }
 
         // Run strategy
-        let snapshot = data_store_clone.read().await.get_snapshot();
+        let mut snapshot = data_store_clone.read().await.get_snapshot();
+
+        // Inject real exchange positions (signed: long = +, short = -) so the strategy
+        // can cap one-sided accumulation against the actual position, not just its own
+        // reset-prone internal state.
+        {
+            let ds = dash_state.read().await;
+            for p in &ds.positions {
+                let (Some(symbol), Some(size), Some(side)) =
+                    (p["symbol"].as_str(), p["size"].as_f64(), p["side"].as_str())
+                else {
+                    continue;
+                };
+                let signed = if side == "Sell" {
+                    -size.abs()
+                } else {
+                    size.abs()
+                };
+                snapshot.positions.insert(symbol.to_string(), signed);
+            }
+        }
 
         // Block all trading when emergency is active
         {
@@ -1022,7 +1427,11 @@ async fn run_live_trading(config_path: &str) -> Result<()> {
         // Check dashboard trading controls
         let (is_paused, active_markets, should_cancel_all) = {
             let ds = dash_state.read().await;
-            (ds.trading_paused, ds.active_markets.clone(), ds.cancel_all_requested)
+            (
+                ds.trading_paused,
+                ds.active_markets.clone(),
+                ds.cancel_all_requested,
+            )
         };
 
         // Handle cancel-all request from dashboard
@@ -1045,8 +1454,12 @@ async fn run_live_trading(config_path: &str) -> Result<()> {
                     update.get("max_drawdown_pct").and_then(|v| v.as_f64()),
                     update.get("daily_loss_limit_pct").and_then(|v| v.as_f64()),
                     update.get("max_leverage").and_then(|v| v.as_f64()),
-                    update.get("position_stop_loss_pct").and_then(|v| v.as_f64()),
-                    update.get("position_take_profit_pct").and_then(|v| v.as_f64()),
+                    update
+                        .get("position_stop_loss_pct")
+                        .and_then(|v| v.as_f64()),
+                    update
+                        .get("position_take_profit_pct")
+                        .and_then(|v| v.as_f64()),
                 );
             }
         }
@@ -1059,17 +1472,24 @@ async fn run_live_trading(config_path: &str) -> Result<()> {
         // Check total position exposure — block same-direction signals if overleveraged
         let position_exposure: f64 = {
             let ds = dash_state.read().await;
-            ds.positions.iter().map(|p| {
-                let size = p["size"].as_f64().unwrap_or(0.0).abs();
-                let entry = p["entry_price"].as_f64().unwrap_or(0.0);
-                size * entry
-            }).sum()
+            ds.positions
+                .iter()
+                .map(|p| {
+                    let size = p["size"].as_f64().unwrap_or(0.0).abs();
+                    let entry = p["entry_price"].as_f64().unwrap_or(0.0);
+                    size * entry
+                })
+                .sum()
         };
         let equity = {
             let ds = dash_state.read().await;
             ds.equity
         };
-        let current_leverage = if equity > 0.0 { position_exposure / equity } else { 0.0 };
+        let current_leverage = if equity > 0.0 {
+            position_exposure / equity
+        } else {
+            0.0
+        };
 
         match strategy.read().await.evaluate(&snapshot).await {
             Ok(Some(signals)) => {
@@ -1082,14 +1502,19 @@ async fn run_live_trading(config_path: &str) -> Result<()> {
                     // Check max open orders limit
                     let current_open = open_orders_count.load(std::sync::atomic::Ordering::Relaxed);
                     if current_open >= max_open_orders {
-                        info!("⏸️ Max open orders ({}/{}) reached, skipping signal: {} {:?}",
-                            current_open, max_open_orders, signal.symbol, signal.side);
+                        info!(
+                            "⏸️ Max open orders ({}/{}) reached, skipping signal: {} {:?}",
+                            current_open, max_open_orders, signal.symbol, signal.side
+                        );
                         continue;
                     }
 
                     // Wait if grid is being reset (prevents nonce race)
                     if grid_resetting.load(std::sync::atomic::Ordering::Relaxed) {
-                        debug!("⏳ Grid resetting, skipping signal: {} {:?}", signal.symbol, signal.side);
+                        debug!(
+                            "⏳ Grid resetting, skipping signal: {} {:?}",
+                            signal.symbol, signal.side
+                        );
                         continue;
                     }
 
@@ -1101,8 +1526,14 @@ async fn run_live_trading(config_path: &str) -> Result<()> {
                     if current_leverage > leverage_limit {
                         let existing_side: Option<String> = {
                             let ds = dash_state.read().await;
-                            ds.positions.iter()
-                                .find(|p| p["symbol"].as_str().map(|s| signal.symbol.contains(s)).unwrap_or(false))
+                            ds.positions
+                                .iter()
+                                .find(|p| {
+                                    p["symbol"]
+                                        .as_str()
+                                        .map(|s| signal.symbol.contains(s))
+                                        .unwrap_or(false)
+                                })
                                 .and_then(|p| p["side"].as_str().map(|s| s.to_string()))
                         };
                         let would_increase = match (existing_side.as_deref(), &signal.side) {
@@ -1122,16 +1553,20 @@ async fn run_live_trading(config_path: &str) -> Result<()> {
                         let ds = dash_state.read().await;
                         let has_dup = ds.open_orders_list.iter().any(|o| {
                             let same_symbol = o["symbol"].as_str() == Some(&signal.symbol);
-                            let same_side = o["side"].as_str() == Some(match signal.side {
-                                lighter::types::Side::Buy => "Buy",
-                                lighter::types::Side::Sell => "Sell",
-                            });
+                            let same_side = o["side"].as_str()
+                                == Some(match signal.side {
+                                    lighter::types::Side::Buy => "Buy",
+                                    lighter::types::Side::Sell => "Sell",
+                                });
                             let order_price = o["price"].as_f64().unwrap_or(0.0);
                             let price_diff = (order_price - signal.price).abs() / signal.price;
                             same_symbol && same_side && price_diff < 0.0008
                         });
                         if has_dup {
-                            debug!("🔄 Skipping duplicate signal: {} {:?} @ {:.2}", signal.symbol, signal.side, signal.price);
+                            debug!(
+                                "🔄 Skipping duplicate signal: {} {:?} @ {:.2}",
+                                signal.symbol, signal.side, signal.price
+                            );
                             continue;
                         }
                     }
@@ -1145,33 +1580,50 @@ async fn run_live_trading(config_path: &str) -> Result<()> {
                     }
 
                     let market_info = market_infos.get(&signal.market_id);
-                    info!("📊 Signal: {} {:?} {} @ ${:.2} qty={:.6} — {}",
-                        signal.symbol, signal.side, signal.market_id,
-                        signal.price, signal.quantity, signal.reason);
-
-                    match lighter_client.place_order_with_market(
-                        signal.market_id,
+                    info!(
+                        "📊 Signal: {} {:?} {} @ ${:.2} qty={:.6} — {}",
+                        signal.symbol,
                         signal.side,
+                        signal.market_id,
                         signal.price,
                         signal.quantity,
-                        market_info,
-                    ).await {
+                        signal.reason
+                    );
+
+                    match lighter_client
+                        .place_order_with_market(
+                            signal.market_id,
+                            signal.side,
+                            signal.price,
+                            signal.quantity,
+                            market_info,
+                        )
+                        .await
+                    {
                         Ok(resp) => {
                             trade_count += 1;
                             // Optimistically increment open orders counter
                             open_orders_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                            info!("✅ Order placed: id={}, status={}", resp.order_id, resp.status);
+                            info!(
+                                "✅ Order placed: id={}, status={}",
+                                resp.order_id, resp.status
+                            );
 
                             // Update dashboard
                             let mut ds = dash_state.write().await;
                             ds.total_trades = trade_count;
-                            ds.open_orders = open_orders_count.load(std::sync::atomic::Ordering::Relaxed);
+                            ds.open_orders =
+                                open_orders_count.load(std::sync::atomic::Ordering::Relaxed);
                             // Determine action: Open (new position) or Add (increase existing)
                             let action = {
                                 let has_position = ds.positions.iter().any(|p| {
                                     p.get("symbol").and_then(|s| s.as_str()) == Some(&signal.symbol)
                                 });
-                                if has_position { "Add" } else { "Open" }
+                                if has_position {
+                                    "Add"
+                                } else {
+                                    "Open"
+                                }
                             };
                             ds.trade_history.push(serde_json::json!({
                                 "timestamp": signal.timestamp.to_rfc3339(),
@@ -1253,7 +1705,8 @@ async fn run_live_trading(config_path: &str) -> Result<()> {
                 drop(ds);
 
                 // Build params string from HashMap
-                let params_str: String = params.iter()
+                let params_str: String = params
+                    .iter()
                     .map(|(k, v)| format!("{}={}", k, v))
                     .collect::<Vec<_>>()
                     .join(",");
@@ -1261,17 +1714,27 @@ async fn run_live_trading(config_path: &str) -> Result<()> {
                 // Check if strategy type changed
                 let current_name = strategy.read().await.name().to_string();
                 if new_strategy_name != current_name && !new_strategy_name.is_empty() {
-                    info!("🔄 Strategy switch: {} → {}", current_name, new_strategy_name);
+                    info!(
+                        "🔄 Strategy switch: {} → {}",
+                        current_name, new_strategy_name
+                    );
                     match crate::strategy::create_strategy_with_params(
                         &new_strategy_name,
-                        if params_str.is_empty() { None } else { Some(&params_str) }
+                        if params_str.is_empty() {
+                            None
+                        } else {
+                            Some(&params_str)
+                        },
                     ) {
                         Ok(new_strat) => {
                             *strategy.write().await = new_strat;
                             info!("✅ Strategy switched to: {}", new_strategy_name);
                         }
                         Err(e) => {
-                            warn!("❌ Strategy switch failed: {} — keeping {}", e, current_name);
+                            warn!(
+                                "❌ Strategy switch failed: {} — keeping {}",
+                                e, current_name
+                            );
                             let mut ds = dash_state.write().await;
                             ds.strategy_name = current_name;
                         }
@@ -1281,14 +1744,17 @@ async fn run_live_trading(config_path: &str) -> Result<()> {
                     // Recreate with new params
                     match crate::strategy::create_strategy_with_params(
                         &current_name,
-                        Some(&params_str)
+                        Some(&params_str),
                     ) {
                         Ok(new_strat) => {
                             *strategy.write().await = new_strat;
                             info!("✅ Strategy recreated with new params");
                         }
                         Err(e) => {
-                            warn!("⚠ Failed to recreate strategy: {} — clearing state instead", e);
+                            warn!(
+                                "⚠ Failed to recreate strategy: {} — clearing state instead",
+                                e
+                            );
                             strategy.read().await.clear_filled_state();
                         }
                     }
@@ -1320,10 +1786,8 @@ async fn run_backtest(
     let historical_data = data::loader::load_csv_data_in_range(data_path, start_date, end_date)
         .context("Failed to load historical data")?;
 
-    let mut backtest_engine = backtest::engine::BacktestEngine::new(
-        initial_capital,
-        historical_data,
-    );
+    let mut backtest_engine =
+        backtest::engine::BacktestEngine::new(initial_capital, historical_data);
 
     let bt_strategy = strategy::create_strategy_with_params(strategy_name, params)?;
     let results = backtest_engine.run(bt_strategy).await?;
@@ -1366,7 +1830,10 @@ async fn run_optimize(
             for &gc in &grid_counts {
                 for &inv in &investments {
                     for &dev in &deviations {
-                        sets.push(format!("grid_count={},investment={},deviation={}", gc, inv, dev));
+                        sets.push(format!(
+                            "grid_count={},investment={},deviation={}",
+                            gc, inv, dev
+                        ));
                     }
                 }
             }
@@ -1381,10 +1848,14 @@ async fn run_optimize(
             let mut sets = Vec::new();
             for &f in &fast_periods {
                 for &s in &slow_periods {
-                    if f >= s { continue; }
+                    if f >= s {
+                        continue;
+                    }
                     for &sl in &stop_losses {
                         for &tp in &take_profits {
-                            if tp <= sl { continue; }
+                            if tp <= sl {
+                                continue;
+                            }
                             for &tr in &trailing_stops {
                                 sets.push(format!(
                                     "fast_ma={},slow_ma={},stop_loss={},take_profit={},trailing_stop={}",
@@ -1416,10 +1887,8 @@ async fn run_optimize(
 
     for (i, params) in param_sets.iter().enumerate() {
         let bt_strategy = strategy::create_strategy_with_params(strategy_name, Some(params))?;
-        let mut engine = backtest::engine::BacktestEngine::new(
-            initial_capital,
-            historical_data.clone(),
-        );
+        let mut engine =
+            backtest::engine::BacktestEngine::new(initial_capital, historical_data.clone());
         let result = engine.run(bt_strategy).await?;
 
         results_vec.push(OptResult {
@@ -1439,9 +1908,19 @@ async fn run_optimize(
 
     // Sort by Sharpe ratio descending (highest = best risk-adjusted performance)
     results_vec.sort_by(|a, b| {
-        let score_a = if a.trades > 0 { a.sharpe } else { f64::NEG_INFINITY };
-        let score_b = if b.trades > 0 { b.sharpe } else { f64::NEG_INFINITY };
-        score_b.partial_cmp(&score_a).unwrap_or(std::cmp::Ordering::Equal)
+        let score_a = if a.trades > 0 {
+            a.sharpe
+        } else {
+            f64::NEG_INFINITY
+        };
+        let score_b = if b.trades > 0 {
+            b.sharpe
+        } else {
+            f64::NEG_INFINITY
+        };
+        score_b
+            .partial_cmp(&score_a)
+            .unwrap_or(std::cmp::Ordering::Equal)
     });
 
     // Print top 10 results
@@ -1462,12 +1941,20 @@ async fn run_optimize(
     let opt_dir = format!("{}/optimization", output_path);
     std::fs::create_dir_all(&opt_dir)?;
     let csv_path = format!("{}/sweep_results.csv", opt_dir);
-    let mut csv = String::from("rank,params,return_pct,sharpe,max_dd_pct,trades,win_rate_pct,profit_factor\n");
+    let mut csv = String::from(
+        "rank,params,return_pct,sharpe,max_dd_pct,trades,win_rate_pct,profit_factor\n",
+    );
     for (i, r) in results_vec.iter().enumerate() {
         csv.push_str(&format!(
             "{},\"{}\",{:.4},{:.4},{:.4},{},{:.2},{:.4}\n",
-            i + 1, r.params, r.total_return * 100.0, r.sharpe, r.max_dd * 100.0,
-            r.trades, r.win_rate * 100.0, r.profit_factor
+            i + 1,
+            r.params,
+            r.total_return * 100.0,
+            r.sharpe,
+            r.max_dd * 100.0,
+            r.trades,
+            r.win_rate * 100.0,
+            r.profit_factor
         ));
     }
     std::fs::write(&csv_path, csv)?;
@@ -1475,12 +1962,12 @@ async fn run_optimize(
 
     // Run the best params and generate detailed report
     if let Some(best) = results_vec.first() {
-        info!("\n🥇 Running detailed backtest with best params: {}", best.params);
-        let bt_strategy = strategy::create_strategy_with_params(strategy_name, Some(&best.params))?;
-        let mut engine = backtest::engine::BacktestEngine::new(
-            initial_capital,
-            historical_data,
+        info!(
+            "\n🥇 Running detailed backtest with best params: {}",
+            best.params
         );
+        let bt_strategy = strategy::create_strategy_with_params(strategy_name, Some(&best.params))?;
+        let mut engine = backtest::engine::BacktestEngine::new(initial_capital, historical_data);
         let result = engine.run(bt_strategy).await?;
         let best_dir = format!("{}/best", opt_dir);
         backtest::metrics::generate_report(&result, &best_dir).await?;
@@ -1492,7 +1979,8 @@ async fn run_optimize(
 
 async fn run_dashboard(host: &str, port: u16) -> Result<()> {
     info!("🌐 Starting dashboard at {}:{}", host, port);
-    dashboard::server::start(host, port).await
+    dashboard::server::start(host, port)
+        .await
         .context("Dashboard failed")
 }
 
@@ -1504,10 +1992,12 @@ async fn download_data(
     base_url: &str,
     tag: Option<&str>,
 ) -> Result<()> {
-    info!("📥 Download data: {} {} {} {} ({})", symbol, interval, start_date, end_date, base_url);
+    info!(
+        "📥 Download data: {} {} {} {} ({})",
+        symbol, interval, start_date, end_date, base_url
+    );
 
-    let start = data::loader::parse_range_start(start_date)
-        .context("Invalid start date")?;
+    let start = data::loader::parse_range_start(start_date).context("Invalid start date")?;
     let end = match data::loader::parse_range_end(end_date).context("Invalid end date")? {
         data::loader::RangeEnd::Inclusive(dt) => dt,
         data::loader::RangeEnd::Exclusive(dt) => dt - chrono::Duration::seconds(1),
@@ -1530,9 +2020,7 @@ async fn download_data(
         .get_all_markets()
         .await
         .context("Failed to fetch market list")?;
-    lighter::symbols::register_all(
-        all_markets.iter().map(|m| (m.market_id, m.symbol.clone())),
-    );
+    lighter::symbols::register_all(all_markets.iter().map(|m| (m.market_id, m.symbol.clone())));
     let upper = symbol.to_ascii_uppercase();
     let market_id = all_markets
         .iter()
@@ -1542,7 +2030,11 @@ async fn download_data(
         .ok_or_else(|| {
             let mut available: Vec<&str> = all_markets.iter().map(|m| m.symbol.as_str()).collect();
             available.sort();
-            anyhow::anyhow!("Symbol {} not found. Available: {}", symbol, available.join(", "))
+            anyhow::anyhow!(
+                "Symbol {} not found. Available: {}",
+                symbol,
+                available.join(", ")
+            )
         })?;
     info!("   Resolved {} -> market_id {}", symbol, market_id);
 
@@ -1564,10 +2056,12 @@ async fn download_data(
             )
             .await
             .context("Failed to download candlestick data")?;
-        info!("   Chunk {} -> {}: {} candles",
+        info!(
+            "   Chunk {} -> {}: {} candles",
             chrono::DateTime::from_timestamp(chunk_start, 0).unwrap(),
             chrono::DateTime::from_timestamp(chunk_end, 0).unwrap(),
-            batch.len());
+            batch.len()
+        );
         candles.extend(batch);
         chunk_start = chunk_end + secs_per_candle as i64;
         tokio::time::sleep(std::time::Duration::from_millis(250)).await;
@@ -1577,14 +2071,22 @@ async fn download_data(
     candles.sort_by_key(|c| c.timestamp);
     candles.dedup_by_key(|c| c.timestamp);
     if candles.is_empty() {
-        anyhow::bail!("No candles returned for {} {} {} {}", symbol, interval, start_date, end_date);
+        anyhow::bail!(
+            "No candles returned for {} {} {} {}",
+            symbol,
+            interval,
+            start_date,
+            end_date
+        );
     }
 
-    let network_tag = tag
-        .map(|t| t.to_string())
-        .unwrap_or_else(|| {
-            if base_url.contains("rh.lighter") { "rh".to_string() } else { "mainnet".to_string() }
-        });
+    let network_tag = tag.map(|t| t.to_string()).unwrap_or_else(|| {
+        if base_url.contains("rh.lighter") {
+            "rh".to_string()
+        } else {
+            "mainnet".to_string()
+        }
+    });
     let output_path = format!(
         "backtests/data/{}-{}-{}-{}-{}.csv",
         symbol.to_ascii_uppercase(),
@@ -1596,14 +2098,17 @@ async fn download_data(
     data::loader::write_csv_data(&output_path, &candles)
         .context("Failed to write downloaded data")?;
 
-    info!("✅ Data download complete: {} ({} candles)", output_path, candles.len());
+    info!(
+        "✅ Data download complete: {} ({} candles)",
+        output_path,
+        candles.len()
+    );
     Ok(())
 }
 
 async fn generate_test_data(symbol: &str, days: u32) -> Result<()> {
     info!("🎲 Generating test data: {} {}d", symbol, days);
-    data::loader::generate_synthetic_data(symbol, days)
-        .context("Failed to generate test data")?;
+    data::loader::generate_synthetic_data(symbol, days).context("Failed to generate test data")?;
     info!("✅ Test data generated");
     Ok(())
 }

@@ -26,7 +26,6 @@ pub async fn generate_report(results: &BacktestResults, output_dir: &str) -> Res
     Ok(())
 }
 
-/// 格式化回测摘要
 fn format_summary(results: &BacktestResults) -> String {
     format!(
         r#"========================================
@@ -37,6 +36,9 @@ fn format_summary(results: &BacktestResults) -> String {
   初始资金:     ${:.2}
   最终资金:     ${:.2}
   总收益率:     {:.2}%
+  基准收益:     {:.2}%
+  超额收益:     {:.2}%
+  总手续费:     ${:.4}
 
 绩效指标:
   夏普比率:     {:.3}
@@ -51,11 +53,21 @@ fn format_summary(results: &BacktestResults) -> String {
   平均盈利:     ${:.2}
   平均亏损:     ${:.2}
 
+风险指标 (线性保证金 v1, 收盘价口径):
+  峰值名义敞口: ${:.2}
+  峰值杠杆:     {:.2}x
+  峰值持仓格数: {:.2}
+  强平次数:     {}
+  超软上限K线:  {}
+
 ========================================
 "#,
         results.initial_capital,
         results.final_capital,
         results.total_return * 100.0,
+        results.benchmark_return * 100.0,
+        results.excess_return * 100.0,
+        results.total_commission,
         results.sharpe_ratio,
         results.max_drawdown * 100.0,
         results.profit_factor,
@@ -65,7 +77,17 @@ fn format_summary(results: &BacktestResults) -> String {
         results.win_rate * 100.0,
         results.avg_profit,
         results.avg_loss,
+        results.peak_notional,
+        results.peak_leverage,
+        results.peak_position_grids,
+        results.liq_count,
+        results.bars_over_soft_cap,
     )
+}
+
+#[cfg(test)]
+pub(crate) fn format_summary_for_test(results: &BacktestResults) -> String {
+    format_summary(results)
 }
 
 /// 写入交易记录CSV
@@ -94,11 +116,7 @@ fn write_equity_csv(results: &BacktestResults, path: &Path) -> Result<()> {
     let mut csv = String::from("timestamp,equity\n");
 
     for (timestamp, equity) in &results.equity_curve {
-        csv.push_str(&format!(
-            "{},{:.2}\n",
-            timestamp.to_rfc3339(),
-            equity,
-        ));
+        csv.push_str(&format!("{},{:.2}\n", timestamp.to_rfc3339(), equity,));
     }
 
     fs::write(path, csv)?;

@@ -25,7 +25,8 @@ impl MarketDataStore {
 
     /// 更新订单簿
     pub fn update_order_book(&mut self, order_book: OrderBook) {
-        self.order_books.insert(order_book.symbol.clone(), order_book);
+        self.order_books
+            .insert(order_book.symbol.clone(), order_book);
     }
 
     /// 添加成交记录
@@ -42,7 +43,10 @@ impl MarketDataStore {
     /// 添加K线数据
     #[allow(dead_code)]
     pub fn add_candle(&mut self, candle: Candlestick) {
-        let candles = self.candles.entry(candle.symbol.clone()).or_insert_with(|| Vec::with_capacity(256));
+        let candles = self
+            .candles
+            .entry(candle.symbol.clone())
+            .or_insert_with(|| Vec::with_capacity(256));
         candles.push(candle);
 
         if candles.len() > self.max_candles {
@@ -53,7 +57,9 @@ impl MarketDataStore {
 
     /// 获取市场快照（仅克隆最近数据以减少开销）
     pub fn get_snapshot(&self) -> MarketSnapshot {
-        let recent_candles: HashMap<String, Vec<Candlestick>> = self.candles.iter()
+        let recent_candles: HashMap<String, Vec<Candlestick>> = self
+            .candles
+            .iter()
             .map(|(k, v)| {
                 let start = v.len().saturating_sub(100);
                 (k.clone(), v[start..].to_vec())
@@ -66,6 +72,7 @@ impl MarketDataStore {
             order_books: self.order_books.clone(),
             recent_trades: self.recent_trades[recent_trades_start..].to_vec(),
             candles: recent_candles,
+            positions: std::collections::HashMap::new(),
         }
     }
 

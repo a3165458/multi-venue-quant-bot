@@ -1,5 +1,5 @@
-use serde::{Deserialize, Serialize};
 use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 #[allow(dead_code)]
@@ -226,6 +226,9 @@ pub struct MarketSnapshot {
     pub order_books: HashMap<String, OrderBook>,
     pub recent_trades: Vec<Trade>,
     pub candles: HashMap<String, Vec<Candlestick>>,
+    /// Signed net position per symbol from the exchange (positive = long, negative = short).
+    /// Injected by the live loop so position-aware strategies can cap one-sided accumulation.
+    pub positions: HashMap<String, f64>,
 }
 
 // ===== 下单请求 =====

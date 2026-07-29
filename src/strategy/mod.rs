@@ -45,9 +45,24 @@ pub fn create_strategy(settings: &Config) -> Result<Box<dyn Strategy>> {
         let deviation = settings.get_float("trading.strategies.grid_trading.price_deviation")
             .unwrap_or(0.02);
 
-        Ok(Box::new(grid_strategy::GridStrategy::new(
-            grid_count, investment, deviation,
-        )))
+        // 实盘路径：yaml 可选覆盖库存政策，但 research_nocap 一律拒绝
+        let mode_raw = settings
+            .get_string("trading.strategies.grid_trading.inventory_mode")
+            .unwrap_or_else(|_| "hard".to_string());
+        if mode_raw.trim().eq_ignore_ascii_case("research_nocap") {
+            anyhow::bail!("实盘配置不允许 inventory_mode=research_nocap（研究专用）");
+        }
+        let mode = grid_strategy::InventoryMode::parse(&mode_raw)?;
+        let soft_cap = settings
+            .get_float("trading.strategies.grid_trading.soft_cap_grids")
+            .ok();
+        let hard_cap = settings
+            .get_float("trading.strategies.grid_trading.hard_cap_grids")
+            .ok();
+
+        Ok(Box::new(grid_strategy::GridStrategy::with_inventory(
+            grid_count, investment, deviation, mode, soft_cap, hard_cap,
+        )?))
     } else if trend_enabled {
         let fast_ma = settings.get_int("trading.strategies.trend_following.fast_ma")
             .unwrap_or(10) as usize;
@@ -90,7 +105,33 @@ pub fn create_strategy_with_params(name: &str, params: Option<&str>) -> Result<B
             let deviation = kv.get("price_deviation")
                 .or_else(|| kv.get("deviation"))
                 .and_then(|v| v.parse().ok()).unwrap_or(0.008);
-            Ok(Box::new(grid_strategy::GridStrategy::new(grid_count, investment, deviation)))
+
+            // 库存政策（回测/研究）。未指定时保持原行为 = 实盘硬上限。
+            let mode_raw = kv.get("inventory_mode").map(|s| s.as_str());
+            let soft_cap = kv
+                .get("soft_cap")
+                .or_else(|| kv.get("soft_cap_grids"))
+                .map(|v| v.parse::<f64>())
+                .transpose()
+                .map_err(|e| anyhow::anyhow!("soft_cap 解析失败: {e}"))?;
+            let hard_cap = kv
+                .get("hard_cap")
+                .or_else(|| kv.get("hard_cap_grids"))
+                .map(|v| v.parse::<f64>())
+                .transpose()
+                .map_err(|e| anyhow::anyhow!("hard_cap 解析失败: {e}"))?;
+
+            match mode_raw {
+                None if soft_cap.is_none() && hard_cap.is_none() => Ok(Box::new(
+                    grid_strategy::GridStrategy::new(grid_count, investment, deviation),
+                )),
+                _ => {
+                    let mode = grid_strategy::InventoryMode::parse(mode_raw.unwrap_or("hard"))?;
+                    Ok(Box::new(grid_strategy::GridStrategy::with_inventory(
+                        grid_count, investment, deviation, mode, soft_cap, hard_cap,
+                    )?))
+                }
+            }
         }
         "trend_following" | "trend" => {
             let fast_ma = kv.get("fast_ma").and_then(|v| v.parse().ok()).unwrap_or(7);
@@ -112,6 +153,10 @@ pub fn create_strategy_with_params(name: &str, params: Option<&str>) -> Result<B
         _ => anyhow::bail!("未知策略: {}", name),
     }
 }
+
+#[cfg(test)]
+#[path = "params_tests.rs"]
+mod params_tests;
 
 fn parse_params(s: &str) -> std::collections::HashMap<String, String> {
     s.split(',')

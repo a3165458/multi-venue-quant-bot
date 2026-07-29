@@ -5,36 +5,11 @@ use tracing::{debug, info};
 use crate::lighter::types::*;
 use crate::strategy::Strategy;
 
-/// 回测交易记录
-#[derive(Debug, Clone)]
-pub struct BacktestTrade {
-    pub timestamp: DateTime<Utc>,
-    pub symbol: String,
-    pub side: Side,
-    pub price: f64,
-    pub quantity: f64,
-    pub pnl: f64,
-    pub commission: f64,
-}
+use super::margin::MarginTracker;
+use super::results::{calculate_results, ResultsCalcInput};
 
-/// 回测结果
-#[derive(Debug, Clone)]
-pub struct BacktestResults {
-    pub total_return: f64,
-    pub sharpe_ratio: f64,
-    pub max_drawdown: f64,
-    pub win_rate: f64,
-    pub trades: Vec<BacktestTrade>,
-    pub equity_curve: Vec<(DateTime<Utc>, f64)>,
-    pub initial_capital: f64,
-    pub final_capital: f64,
-    pub total_trades: usize,
-    pub winning_trades: usize,
-    pub losing_trades: usize,
-    pub avg_profit: f64,
-    pub avg_loss: f64,
-    pub profit_factor: f64,
-}
+// Re-export public result types for `backtest::engine::{BacktestResults, BacktestTrade}`.
+pub use super::results::{BacktestResults, BacktestTrade};
 
 /// 回测引擎
 pub struct BacktestEngine {
@@ -45,6 +20,8 @@ pub struct BacktestEngine {
     slippage_rate: f64,
     trades: Vec<BacktestTrade>,
     equity_curve: Vec<(DateTime<Utc>, f64)>,
+    total_commission: f64,
+    margin: MarginTracker,
 }
 
 impl BacktestEngine {
@@ -57,6 +34,8 @@ impl BacktestEngine {
             slippage_rate: 0.0005,  // 0.05%
             trades: Vec::new(),
             equity_curve: Vec::new(),
+            total_commission: 0.0,
+            margin: MarginTracker::default(),
         }
     }
 
@@ -71,6 +50,27 @@ impl BacktestEngine {
     #[allow(dead_code)]
     pub fn with_slippage(mut self, rate: f64) -> Self {
         self.slippage_rate = rate;
+        self
+    }
+
+    /// 模拟杠杆上限（决定初始保证金与强平线，默认 3.0）
+    #[allow(dead_code)]
+    pub fn with_max_leverage(mut self, max_leverage: f64) -> Self {
+        self.margin.set_max_leverage(max_leverage);
+        self
+    }
+
+    /// 单格名义金额（= investment_per_grid），用于统计 peak_position_grids
+    #[allow(dead_code)]
+    pub fn with_grid_unit_notional(mut self, unit: f64) -> Self {
+        self.margin.set_grid_unit_notional(unit);
+        self
+    }
+
+    /// 软上限网格数，用于统计 bars_over_soft_cap
+    #[allow(dead_code)]
+    pub fn with_soft_cap_grids(mut self, soft_cap: f64) -> Self {
+        self.margin.set_soft_cap_grids(soft_cap);
         self
     }
 
@@ -89,7 +89,20 @@ impl BacktestEngine {
             // 只传递最近的窗口数据构建快照，避免 O(n²) 克隆
             // 需要至少2根K线让策略比较前后价格
             let window_start = if i >= 1 { i.saturating_sub(100) } else { 0 };
-            let snapshot = self.build_snapshot(&data[window_start..=i]);
+            let mut snapshot = self.build_snapshot(&data[window_start..=i]);
+
+            // 注入模拟净持仓，使回测能触发持仓感知封顶（与实盘 main.rs 注入行为一致）。
+            // 缺此步则 snapshot.positions 恒空 → 封顶永不生效 → 回测反映的是旧的未封顶策略。
+            // 环境变量 BACKTEST_NO_CAP=1 可跳过注入，用于封顶 vs 未封顶的 A/B 对照。
+            if std::env::var("BACKTEST_NO_CAP").is_err() {
+                if let Some((side, _entry, qty)) = position {
+                    let signed = match side {
+                        Side::Buy => qty,
+                        Side::Sell => -qty,
+                    };
+                    snapshot.positions.insert(candle.symbol.clone(), signed);
+                }
+            }
 
             // 评估策略
             if let Some(signals) = strategy.evaluate(&snapshot).await? {
@@ -106,17 +119,14 @@ impl BacktestEngine {
 
                             if cost + add_commission <= self.capital {
                                 let new_qty = pos_qty + add_qty;
-                                let weighted_entry =
-                                    ((entry_price * pos_qty) + (execution_price * add_qty)) / new_qty;
-                                self.capital -= add_commission;
+                                let weighted_entry = ((entry_price * pos_qty)
+                                    + (execution_price * add_qty))
+                                    / new_qty;
+                                self.charge_commission(add_commission);
                                 position = Some((pos_side, weighted_entry, new_qty));
                                 debug!(
                                     "加仓: {:?} {} @ {:.2}, qty {:.6} -> {:.6}",
-                                    signal.side,
-                                    signal.symbol,
-                                    execution_price,
-                                    pos_qty,
-                                    new_qty
+                                    signal.side, signal.symbol, execution_price, pos_qty, new_qty
                                 );
                             }
                         }
@@ -128,7 +138,8 @@ impl BacktestEngine {
                                 Side::Sell => (entry_price - execution_price) * close_qty,
                             };
 
-                            self.capital += pnl - close_commission;
+                            self.capital += pnl;
+                            self.charge_commission(close_commission);
                             self.trades.push(BacktestTrade {
                                 timestamp: candle.timestamp,
                                 symbol: signal.symbol.clone(),
@@ -139,7 +150,10 @@ impl BacktestEngine {
                                 commission: close_commission,
                             });
 
-                            debug!("平仓: {} @ {:.2}, PnL: {:.2}", signal.symbol, execution_price, pnl);
+                            debug!(
+                                "平仓: {} @ {:.2}, PnL: {:.2}",
+                                signal.symbol, execution_price, pnl
+                            );
 
                             let remaining_pos_qty = pos_qty - close_qty;
                             let remaining_signal_qty = signal.quantity - close_qty;
@@ -154,8 +168,9 @@ impl BacktestEngine {
                                 let open_commission = commission_per_qty * remaining_signal_qty;
                                 let cost = execution_price * remaining_signal_qty;
                                 if cost + open_commission <= self.capital {
-                                    self.capital -= open_commission;
-                                    position = Some((signal.side, execution_price, remaining_signal_qty));
+                                    self.charge_commission(open_commission);
+                                    position =
+                                        Some((signal.side, execution_price, remaining_signal_qty));
                                     debug!(
                                         "反手开仓: {:?} {} @ {:.2}, qty {:.6}",
                                         signal.side,
@@ -170,49 +185,111 @@ impl BacktestEngine {
                             let commission = commission_per_qty * signal.quantity;
                             let cost = execution_price * signal.quantity;
                             if cost + commission <= self.capital {
-                                self.capital -= commission;
+                                self.charge_commission(commission);
                                 position = Some((signal.side, execution_price, signal.quantity));
-                                debug!("开仓: {:?} {} @ {:.2}", signal.side, signal.symbol, execution_price);
+                                debug!(
+                                    "开仓: {:?} {} @ {:.2}",
+                                    signal.side, signal.symbol, execution_price
+                                );
                             }
                         }
                     }
                 }
             }
 
-            // 记录权益曲线
-            let unrealized_pnl = if let Some((side, entry, qty)) = position {
-                match side {
-                    Side::Buy => (candle.close - entry) * qty,
-                    Side::Sell => (entry - candle.close) * qty,
+            // ===== 线性保证金 v1：峰值风险 + 强平（口径见 backtest::margin） =====
+            // 顺序是有意义的：先按本根K线成交后的持仓算 equity/notional，强平在
+            // 写入权益曲线**之前**执行，否则被强平的那根K线会记下强平前的权益，
+            // MaxDD 与 liq_count 会互相矛盾。
+            let mut unrealized_pnl = unrealized_of(position, candle.close);
+            if let Some((side, entry, qty)) = position {
+                let notional = qty.abs() * candle.close;
+                let equity = self.capital + unrealized_pnl;
+                if self.margin.observe_bar(notional, equity) {
+                    self.force_close(
+                        side,
+                        entry,
+                        qty,
+                        candle.close,
+                        &candle.symbol,
+                        candle.timestamp,
+                    );
+                    self.margin.record_liquidation();
+                    position = None;
+                    unrealized_pnl = 0.0;
+                    debug!(
+                        "强平: {} qty={:.6} @ {:.2} (notional={:.2}, equity={:.2})",
+                        candle.symbol, qty, candle.close, notional, equity
+                    );
                 }
-            } else {
-                0.0
-            };
+            }
 
-            self.equity_curve.push((candle.timestamp, self.capital + unrealized_pnl));
+            self.equity_curve
+                .push((candle.timestamp, self.capital + unrealized_pnl));
         }
 
         // 强制平仓
         if let Some((side, entry_price, qty)) = position {
             if let Some(last_candle) = data.last() {
-                let pnl = match side {
-                    Side::Buy => (last_candle.close - entry_price) * qty,
-                    Side::Sell => (entry_price - last_candle.close) * qty,
-                };
-                self.capital += pnl;
-                self.trades.push(BacktestTrade {
-                    timestamp: last_candle.timestamp,
-                    symbol: last_candle.symbol.clone(),
-                    side: if side == Side::Buy { Side::Sell } else { Side::Buy },
-                    price: last_candle.close,
-                    quantity: qty,
-                    pnl,
-                    commission: 0.0,
-                });
+                self.force_close(
+                    side,
+                    entry_price,
+                    qty,
+                    last_candle.close,
+                    &last_candle.symbol,
+                    last_candle.timestamp,
+                );
+                if let Some(last) = self.equity_curve.last_mut() {
+                    *last = (last_candle.timestamp, self.capital);
+                } else {
+                    self.equity_curve
+                        .push((last_candle.timestamp, self.capital));
+                }
             }
         }
 
-        Ok(self.calculate_results())
+        Ok(self.build_results())
+    }
+
+    fn charge_commission(&mut self, amount: f64) {
+        self.capital -= amount;
+        self.total_commission += amount;
+    }
+
+    /// 以 `mark` 价平掉全部持仓（含滑点与手续费）并记一笔成交。
+    /// 强平与收盘强制平仓共用此路径，因此**强平也计入 trades.len()**，
+    /// 手续费同样计入 total_commission，避免与现金账目脱节。
+    fn force_close(
+        &mut self,
+        side: Side,
+        entry_price: f64,
+        qty: f64,
+        mark: f64,
+        symbol: &str,
+        timestamp: DateTime<Utc>,
+    ) {
+        let close_side = if side == Side::Buy {
+            Side::Sell
+        } else {
+            Side::Buy
+        };
+        let execution_price = self.apply_slippage(mark, close_side);
+        let commission = execution_price * self.commission_rate * qty;
+        let pnl = match side {
+            Side::Buy => (execution_price - entry_price) * qty,
+            Side::Sell => (entry_price - execution_price) * qty,
+        };
+        self.capital += pnl;
+        self.charge_commission(commission);
+        self.trades.push(BacktestTrade {
+            timestamp,
+            symbol: symbol.to_string(),
+            side: close_side,
+            price: execution_price,
+            quantity: qty,
+            pnl,
+            commission,
+        });
     }
 
     /// 构建市场快照
@@ -223,8 +300,14 @@ impl BacktestEngine {
             let ob = OrderBook {
                 symbol: last.symbol.clone(),
                 market_id: 0,
-                bids: vec![PriceLevel { price: last.close * 0.999, quantity: 1.0 }],
-                asks: vec![PriceLevel { price: last.close * 1.001, quantity: 1.0 }],
+                bids: vec![PriceLevel {
+                    price: last.close * 0.999,
+                    quantity: 1.0,
+                }],
+                asks: vec![PriceLevel {
+                    price: last.close * 1.001,
+                    quantity: 1.0,
+                }],
                 timestamp: last.timestamp,
             };
             snapshot.order_books.insert(last.symbol.clone(), ob);
@@ -244,105 +327,50 @@ impl BacktestEngine {
         }
     }
 
-    /// 计算回测结果
-    fn calculate_results(&self) -> BacktestResults {
-        let total_return = (self.capital - self.initial_capital) / self.initial_capital;
-
-        let winning_trades: Vec<&BacktestTrade> = self.trades.iter().filter(|t| t.pnl > 0.0).collect();
-        let losing_trades: Vec<&BacktestTrade> = self.trades.iter().filter(|t| t.pnl <= 0.0).collect();
-
-        let win_rate = if self.trades.is_empty() {
-            0.0
-        } else {
-            winning_trades.len() as f64 / self.trades.len() as f64
-        };
-
-        let avg_profit = if winning_trades.is_empty() {
-            0.0
-        } else {
-            winning_trades.iter().map(|t| t.pnl).sum::<f64>() / winning_trades.len() as f64
-        };
-
-        let avg_loss = if losing_trades.is_empty() {
-            0.0
-        } else {
-            losing_trades.iter().map(|t| t.pnl).sum::<f64>() / losing_trades.len() as f64
-        };
-
-        let total_profit: f64 = winning_trades.iter().map(|t| t.pnl).sum();
-        let total_loss: f64 = losing_trades.iter().map(|t| t.pnl.abs()).sum();
-        let profit_factor = if total_loss > 0.0 { total_profit / total_loss } else { f64::INFINITY };
-
-        // 计算最大回撤
-        let max_drawdown = self.calculate_max_drawdown();
-
-        // 计算夏普比率
-        let sharpe_ratio = self.calculate_sharpe_ratio();
-
-        BacktestResults {
-            total_return,
-            sharpe_ratio,
-            max_drawdown,
-            win_rate,
-            trades: self.trades.clone(),
-            equity_curve: self.equity_curve.clone(),
+    fn build_results(&self) -> BacktestResults {
+        calculate_results(&ResultsCalcInput {
             initial_capital: self.initial_capital,
-            final_capital: self.capital,
-            total_trades: self.trades.len(),
-            winning_trades: winning_trades.len(),
-            losing_trades: losing_trades.len(),
-            avg_profit,
-            avg_loss,
-            profit_factor,
-        }
-    }
-
-    /// 计算最大回撤
-    fn calculate_max_drawdown(&self) -> f64 {
-        let mut max_equity = 0.0_f64;
-        let mut max_drawdown = 0.0_f64;
-
-        for (_, equity) in &self.equity_curve {
-            max_equity = max_equity.max(*equity);
-            let drawdown = (max_equity - equity) / max_equity;
-            max_drawdown = max_drawdown.max(drawdown);
-        }
-
-        max_drawdown
-    }
-
-    /// 计算夏普比率（年化）
-    fn calculate_sharpe_ratio(&self) -> f64 {
-        if self.equity_curve.len() < 2 {
-            return 0.0;
-        }
-
-        let returns: Vec<f64> = self.equity_curve
-            .windows(2)
-            .map(|w| (w[1].1 - w[0].1) / w[0].1)
-            .collect();
-
-        if returns.is_empty() {
-            return 0.0;
-        }
-
-        let mean_return: f64 = returns.iter().sum::<f64>() / returns.len() as f64;
-        let variance: f64 = returns.iter()
-            .map(|r| (r - mean_return).powi(2))
-            .sum::<f64>() / returns.len() as f64;
-        let std_dev = variance.sqrt();
-
-        if std_dev == 0.0 {
-            return 0.0;
-        }
-
-        // 按数据实际间隔推断年化因子（每年周期数 = 一年秒数 / 平均K线间隔秒数）
-        let first_ts = self.equity_curve.first().unwrap().0;
-        let last_ts = self.equity_curve.last().unwrap().0;
-        let span_secs = (last_ts - first_ts).num_seconds().max(1) as f64;
-        let avg_interval_secs = span_secs / (self.equity_curve.len() - 1) as f64;
-        let periods_per_year = (365.25 * 86400.0) / avg_interval_secs.max(1.0);
-        let annualized_factor = periods_per_year.sqrt();
-        (mean_return / std_dev) * annualized_factor
+            capital: self.capital,
+            trades: &self.trades,
+            equity_curve: &self.equity_curve,
+            total_commission: self.total_commission,
+            historical_data: &self.historical_data,
+            commission_rate: self.commission_rate,
+            slippage_rate: self.slippage_rate,
+            peak_notional: self.margin.peak_notional(),
+            peak_leverage: self.margin.peak_leverage(),
+            peak_position_grids: self.margin.peak_position_grids(),
+            liq_count: self.margin.liq_count(),
+            bars_over_soft_cap: self.margin.bars_over_soft_cap(),
+        })
     }
 }
+
+/// 以 `mark` 价计算持仓浮动盈亏（空仓为 0）。
+fn unrealized_of(position: Option<(Side, f64, f64)>, mark: f64) -> f64 {
+    match position {
+        Some((Side::Buy, entry, qty)) => (mark - entry) * qty,
+        Some((Side::Sell, entry, qty)) => (entry - mark) * qty,
+        None => 0.0,
+    }
+}
+
+#[cfg(test)]
+#[path = "engine_test_support.rs"]
+mod engine_test_support;
+
+#[cfg(test)]
+#[path = "engine_accounting_tests.rs"]
+mod engine_accounting_tests;
+
+#[cfg(test)]
+#[path = "engine_commission_tests.rs"]
+mod engine_commission_tests;
+
+#[cfg(test)]
+#[path = "engine_report_tests.rs"]
+mod engine_report_tests;
+
+#[cfg(test)]
+#[path = "engine_margin_tests.rs"]
+mod engine_margin_tests;
