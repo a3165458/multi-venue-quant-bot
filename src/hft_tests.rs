@@ -200,6 +200,28 @@ fn scan_stats_report_event_rate_and_rank_current_spreads() {
 }
 
 #[test]
+fn scan_stats_can_reset_after_subscription_warmup() {
+    let mut stats = ScanStats::new();
+    stats.record(BboUpdate {
+        market_id: 1,
+        symbol: "BTC".to_string(),
+        nonce: 1,
+        exchange_timestamp_ms: 1,
+        bid_price: 100.0,
+        bid_size: 1.0,
+        ask_price: 100.1,
+        ask_size: 1.0,
+    });
+
+    stats.reset();
+    let summary = stats.summary(Duration::from_secs(1), 10);
+
+    assert_eq!(summary.events, 0);
+    assert_eq!(summary.live_markets, 0);
+    assert!(summary.top_spreads.is_empty());
+}
+
+#[test]
 fn scan_cli_defaults_to_all_mainnet_markets_in_observation_mode() {
     let cli = Cli::try_parse_from(["lighter-bot", "scan"]).expect("valid scan command");
 

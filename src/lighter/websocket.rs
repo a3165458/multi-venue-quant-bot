@@ -265,6 +265,10 @@ impl LighterWebSocket {
         self.broadcast_tx.subscribe()
     }
 
+    pub fn shutdown(&self) {
+        self.cancel_token.cancel();
+    }
+
     /// Resolve symbol string to market_id
     fn resolve_market_id(symbol: &str) -> u32 {
         // 优先按数字市场 ID 解析，其次查全局符号注册表

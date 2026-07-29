@@ -103,6 +103,20 @@ enum Commands {
         #[arg(short, long, default_value = "30")]
         days: u32,
     },
+
+    /// Observe BBO updates across every discovered market (never places orders)
+    Scan {
+        #[arg(long, default_value = "https://mainnet.zklighter.elliot.ai")]
+        url: String,
+        #[arg(long, default_value = "wss://mainnet.zklighter.elliot.ai/stream")]
+        ws_url: String,
+        #[arg(long, default_value = "30")]
+        duration: u64,
+        #[arg(long, default_value = "10")]
+        top: usize,
+        #[arg(long, default_value = "all")]
+        market_type: String,
+    },
 }
 
 #[tokio::main]
@@ -152,6 +166,13 @@ async fn main() -> Result<()> {
             tag,
         } => download_data(&symbol, &interval, &start, &end, &url, tag.as_deref()).await,
         Commands::GenerateData { symbol, days } => generate_test_data(&symbol, days).await,
+        Commands::Scan {
+            url,
+            ws_url,
+            duration,
+            top,
+            market_type,
+        } => hft::run_market_scan(&url, &ws_url, duration, top, &market_type).await,
     }
 }
 

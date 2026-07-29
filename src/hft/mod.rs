@@ -3,6 +3,10 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::time::Duration;
 
+mod scanner;
+
+pub use scanner::run_market_scan;
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct BboUpdate {
     pub market_id: u32,
@@ -99,6 +103,11 @@ impl ScanStats {
     pub fn record(&mut self, update: BboUpdate) {
         self.events += 1;
         self.latest.insert(update.market_id, update);
+    }
+
+    pub fn reset(&mut self) {
+        self.events = 0;
+        self.latest.clear();
     }
 
     pub fn summary(&self, elapsed: Duration, top: usize) -> ScanSummary {
