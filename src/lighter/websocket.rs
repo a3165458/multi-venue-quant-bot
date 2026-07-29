@@ -22,14 +22,20 @@ type WsStream = futures_util::stream::SplitStream<
     >
 >;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MarketSubscription {
+    Full(u32),
+    Ticker(u32),
+}
+
 /// Lighter WebSocket client for real-time market data
 pub struct LighterWebSocket {
     ws_url: String,
     sender: Arc<RwLock<Option<WsSink>>>,
     broadcast_tx: broadcast::Sender<WsMessage>,
     cancel_token: CancellationToken,
-    /// Track subscribed market IDs for re-subscription after reconnect
-    subscribed_markets: Arc<Mutex<Vec<u32>>>,
+    /// Track subscriptions for re-subscription after reconnect.
+    subscriptions: Arc<Mutex<Vec<MarketSubscription>>>,
 }
 
 impl LighterWebSocket {
@@ -40,7 +46,7 @@ impl LighterWebSocket {
             sender: Arc::new(RwLock::new(None)),
             broadcast_tx,
             cancel_token: CancellationToken::new(),
-            subscribed_markets: Arc::new(Mutex::new(Vec::new())),
+            subscriptions: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -63,7 +69,7 @@ impl LighterWebSocket {
         let ws_url = self.ws_url.clone();
         let sender_clone = self.sender.clone();
         let cancel = self.cancel_token.clone();
-        let subs = self.subscribed_markets.clone();
+        let subs = self.subscriptions.clone();
 
         tokio::spawn(async move {
             let mut read = read;
@@ -163,13 +169,44 @@ impl LighterWebSocket {
 
         // Track subscription for reconnect re-subscription
         {
-            let mut subs = self.subscribed_markets.lock().await;
-            if !subs.contains(&market_id) {
-                subs.push(market_id);
+            let mut subs = self.subscriptions.lock().await;
+            let subscription = MarketSubscription::Full(market_id);
+            if !subs.contains(&subscription) {
+                subs.push(subscription);
             }
         }
 
         info!("Subscribed to market data: {} (market_id={})", symbol, market_id);
+        Ok(())
+    }
+
+    pub fn ticker_subscription_message(market_id: u32) -> serde_json::Value {
+        serde_json::json!({
+            "type": "subscribe",
+            "channel": format!("ticker/{}", market_id),
+        })
+    }
+
+    /// Subscribe only to BBO ticker data. This consumes one subscription slot
+    /// per market and is the preferred mode for all-market scanning.
+    pub async fn subscribe_ticker(&self, market_id: u32) -> Result<()> {
+        let mut sender = self.sender.write().await;
+        if let Some(ref mut ws) = *sender {
+            ws.send(Message::Text(
+                Self::ticker_subscription_message(market_id).to_string(),
+            ))
+            .await
+            .map_err(|e| anyhow::anyhow!("Ticker subscription failed: {}", e))?;
+        } else {
+            return Err(anyhow::anyhow!("WebSocket not connected"));
+        }
+        drop(sender);
+
+        let mut subs = self.subscriptions.lock().await;
+        let subscription = MarketSubscription::Ticker(market_id);
+        if !subs.contains(&subscription) {
+            subs.push(subscription);
+        }
         Ok(())
     }
 
@@ -255,7 +292,7 @@ impl LighterWebSocket {
     async fn reconnect_and_resubscribe(
         ws_url: &str,
         sender: &Arc<RwLock<Option<WsSink>>>,
-        subscribed_markets: &Arc<Mutex<Vec<u32>>>,
+        subscriptions: &Arc<Mutex<Vec<MarketSubscription>>>,
     ) -> Result<WsStream> {
         let mut delay = 5u64;
         let mut attempt = 0u32;
@@ -273,14 +310,32 @@ impl LighterWebSocket {
                     }
 
                     // Re-subscribe to all previously subscribed markets
-                    let markets = subscribed_markets.lock().await.clone();
-                    for market_id in &markets {
-                        if let Err(e) = Self::send_subscriptions(sender, *market_id).await {
-                            warn!("Re-subscription for market {} failed: {}", market_id, e);
+                    let subscriptions = subscriptions.lock().await.clone();
+                    for subscription in &subscriptions {
+                        let result = match subscription {
+                            MarketSubscription::Full(market_id) => {
+                                Self::send_subscriptions(sender, *market_id).await
+                            }
+                            MarketSubscription::Ticker(market_id) => {
+                                let mut sink = sender.write().await;
+                                match sink.as_mut() {
+                                    Some(ws) => ws
+                                        .send(Message::Text(
+                                            Self::ticker_subscription_message(*market_id)
+                                                .to_string(),
+                                        ))
+                                        .await
+                                        .map_err(anyhow::Error::from),
+                                    None => Err(anyhow::anyhow!("WebSocket not connected")),
+                                }
+                            }
+                        };
+                        if let Err(e) = result {
+                            warn!("Re-subscription {:?} failed: {}", subscription, e);
                         }
                     }
 
-                    info!("✅ WebSocket reconnected on attempt {} (re-subscribed {} markets)", attempt, markets.len());
+                    info!("✅ WebSocket reconnected on attempt {} (re-subscribed {} channels)", attempt, subscriptions.len());
                     return Ok(new_read);
                 }
                 Err(e) => {

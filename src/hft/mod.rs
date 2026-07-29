@@ -1,5 +1,6 @@
 use anyhow::{bail, Context, Result};
 use serde_json::Value;
+use std::collections::HashMap;
 use std::time::Duration;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -65,6 +66,81 @@ pub fn parse_bbo_update(message: &Value) -> Result<BboUpdate> {
         ask_price,
         ask_size,
     })
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SpreadQuote {
+    pub market_id: u32,
+    pub symbol: String,
+    pub bid_price: f64,
+    pub ask_price: f64,
+    pub spread_bps: f64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ScanSummary {
+    pub events: u64,
+    pub live_markets: usize,
+    pub events_per_second: f64,
+    pub top_spreads: Vec<SpreadQuote>,
+}
+
+#[derive(Debug, Default)]
+pub struct ScanStats {
+    events: u64,
+    latest: HashMap<u32, BboUpdate>,
+}
+
+impl ScanStats {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn record(&mut self, update: BboUpdate) {
+        self.events += 1;
+        self.latest.insert(update.market_id, update);
+    }
+
+    pub fn summary(&self, elapsed: Duration, top: usize) -> ScanSummary {
+        let elapsed_secs = elapsed.as_secs_f64();
+        let events_per_second = if elapsed_secs > 0.0 {
+            self.events as f64 / elapsed_secs
+        } else {
+            0.0
+        };
+        let mut top_spreads = self
+            .latest
+            .values()
+            .map(|bbo| {
+                let mid = (bbo.bid_price + bbo.ask_price) / 2.0;
+                SpreadQuote {
+                    market_id: bbo.market_id,
+                    symbol: bbo.symbol.clone(),
+                    bid_price: bbo.bid_price,
+                    ask_price: bbo.ask_price,
+                    spread_bps: if mid > 0.0 {
+                        (bbo.ask_price - bbo.bid_price) / mid * 10_000.0
+                    } else {
+                        0.0
+                    },
+                }
+            })
+            .collect::<Vec<_>>();
+        top_spreads.sort_by(|left, right| {
+            right
+                .spread_bps
+                .total_cmp(&left.spread_bps)
+                .then_with(|| left.market_id.cmp(&right.market_id))
+        });
+        top_spreads.truncate(top);
+
+        ScanSummary {
+            events: self.events,
+            live_markets: self.latest.len(),
+            events_per_second,
+            top_spreads,
+        }
+    }
 }
 
 /// Split market subscriptions into connection-sized shards while preserving
