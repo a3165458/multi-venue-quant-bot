@@ -1,5 +1,8 @@
 use std::time::Duration;
 
+use clap::Parser;
+
+use crate::{Cli, Commands};
 use crate::hft::{
     parse_bbo_update, plan_subscription_shards, BboUpdate, BookContinuity, BookHealth, ScanStats,
     StandardRateBudget,
@@ -194,4 +197,26 @@ fn scan_stats_report_event_rate_and_rank_current_spreads() {
     assert_eq!(summary.top_spreads.len(), 2);
     assert_eq!(summary.top_spreads[0].symbol, "ETH");
     assert!(summary.top_spreads[0].spread_bps > summary.top_spreads[1].spread_bps);
+}
+
+#[test]
+fn scan_cli_defaults_to_all_mainnet_markets_in_observation_mode() {
+    let cli = Cli::try_parse_from(["lighter-bot", "scan"]).expect("valid scan command");
+
+    match cli.command {
+        Commands::Scan {
+            url,
+            ws_url,
+            duration,
+            top,
+            market_type,
+        } => {
+            assert_eq!(url, "https://mainnet.zklighter.elliot.ai");
+            assert_eq!(ws_url, "wss://mainnet.zklighter.elliot.ai/stream");
+            assert_eq!(duration, 30);
+            assert_eq!(top, 10);
+            assert_eq!(market_type, "all");
+        }
+        _ => panic!("expected scan command"),
+    }
 }
