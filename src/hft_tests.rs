@@ -3,6 +3,7 @@ use std::time::Duration;
 use crate::hft::{
     parse_bbo_update, plan_subscription_shards, BookContinuity, BookHealth, StandardRateBudget,
 };
+use crate::lighter::{types::WsMessage, websocket::LighterWebSocket};
 
 #[test]
 fn subscription_plan_respects_per_connection_limit() {
@@ -107,4 +108,32 @@ fn rejects_ticker_without_two_sided_positive_prices() {
     });
 
     assert!(parse_bbo_update(&missing_ask).is_err());
+}
+
+#[test]
+fn websocket_emits_typed_bbo_updates() {
+    let raw = serde_json::json!({
+        "channel": "ticker:1",
+        "nonce": 42,
+        "ticker": {
+            "s": "BTC",
+            "a": {"price": "100.1", "size": "2"},
+            "b": {"price": "100.0", "size": "3"}
+        },
+        "timestamp": 1773158679717_u64,
+        "type": "update/ticker"
+    })
+    .to_string();
+
+    let message = LighterWebSocket::parse_message(&raw)
+        .expect("valid websocket envelope")
+        .expect("data message");
+
+    match message {
+        WsMessage::BboUpdate(bbo) => {
+            assert_eq!(bbo.market_id, 1);
+            assert_eq!(bbo.nonce, 42);
+        }
+        other => panic!("expected BBO update, received {other:?}"),
+    }
 }
