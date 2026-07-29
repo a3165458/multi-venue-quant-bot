@@ -23,14 +23,30 @@ struct StrOrErr {
     err: *mut c_char,
 }
 
+type SignCreateOrderFn = unsafe extern "C" fn(
+    c_int,
+    c_longlong,
+    c_longlong,
+    c_int,
+    c_int,
+    c_int,
+    c_int,
+    c_int,
+    c_int,
+    c_longlong,
+    c_longlong,
+    c_int,
+    c_int,
+    c_longlong,
+    c_int,
+    c_longlong,
+) -> SignedTxResponse;
+
 #[allow(dead_code)]
 struct SignerLib {
     _lib: Library,
     create_client: unsafe extern "C" fn(*mut c_char, *mut c_char, c_int, c_int, c_longlong) -> *mut c_char,
-    sign_create_order: unsafe extern "C" fn(
-        c_int, c_longlong, c_longlong, c_int, c_int, c_int, c_int, c_int, c_int,
-        c_longlong, c_longlong, c_int, c_int, c_longlong, c_int, c_longlong,
-    ) -> SignedTxResponse,
+    sign_create_order: SignCreateOrderFn,
     sign_cancel_order: unsafe extern "C" fn(c_int, c_longlong, c_longlong, c_int, c_longlong) -> SignedTxResponse,
     sign_cancel_all_orders: unsafe extern "C" fn(c_int, c_longlong, c_longlong, c_int, c_longlong) -> SignedTxResponse,
     create_auth_token: unsafe extern "C" fn(c_longlong, c_int, c_longlong) -> StrOrErr,
@@ -84,10 +100,7 @@ pub fn init(
         let create_client: Symbol<unsafe extern "C" fn(*mut c_char, *mut c_char, c_int, c_int, c_longlong) -> *mut c_char> =
             lib.get(b"CreateClient")
                 .map_err(|e| LighterError::FfiError(format!("Symbol CreateClient not found: {}", e)))?;
-        let sign_create_order: Symbol<unsafe extern "C" fn(
-            c_int, c_longlong, c_longlong, c_int, c_int, c_int, c_int, c_int, c_int,
-            c_longlong, c_longlong, c_int, c_int, c_longlong, c_int, c_longlong,
-        ) -> SignedTxResponse> =
+        let sign_create_order: Symbol<SignCreateOrderFn> =
             lib.get(b"SignCreateOrder")
                 .map_err(|e| LighterError::FfiError(format!("Symbol SignCreateOrder not found: {}", e)))?;
         let sign_cancel_order: Symbol<unsafe extern "C" fn(c_int, c_longlong, c_longlong, c_int, c_longlong) -> SignedTxResponse> =

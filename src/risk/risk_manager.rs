@@ -291,6 +291,7 @@ impl RiskManager {
     }
 
     /// Get current max leverage setting
+    #[allow(dead_code)]
     pub fn max_leverage(&self) -> f64 {
         self.max_leverage
     }
@@ -322,6 +323,7 @@ pub struct PositionCloseSignal {
     pub size: f64,
     pub entry_price: f64,
     pub current_price: f64,
+    #[allow(dead_code)]
     pub pnl_pct: f64,
     pub reason: String,
 }

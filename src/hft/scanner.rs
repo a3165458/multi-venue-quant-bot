@@ -4,11 +4,7 @@ use tokio::sync::mpsc;
 use tracing::{info, warn};
 
 use super::{plan_subscription_shards, ScanStats};
-use crate::lighter::{
-    client::LighterClient,
-    types::WsMessage,
-    websocket::LighterWebSocket,
-};
+use crate::lighter::{client::LighterClient, types::WsMessage, websocket::LighterWebSocket};
 
 const MAX_SUBSCRIPTIONS_PER_CONNECTION: usize = 100;
 const WS_CLIENT_MESSAGE_INTERVAL: Duration = Duration::from_millis(310);
@@ -187,11 +183,7 @@ pub async fn run_market_scan(
     for quote in summary.top_spreads {
         println!(
             "  {:>5} {:<14} bid={:<14.8} ask={:<14.8} spread={:.2} bps",
-            quote.market_id,
-            quote.symbol,
-            quote.bid_price,
-            quote.ask_price,
-            quote.spread_bps
+            quote.market_id, quote.symbol, quote.bid_price, quote.ask_price, quote.spread_bps
         );
     }
 

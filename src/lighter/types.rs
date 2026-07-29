@@ -31,7 +31,7 @@ pub enum OrderType {
 impl OrderType {
     /// Convert to Lighter protocol integer
     #[allow(dead_code)]
-    pub fn to_lighter_int(&self) -> i32 {
+    pub fn to_lighter_int(self) -> i32 {
         match self {
             OrderType::Limit => 0,
             OrderType::Market => 1,

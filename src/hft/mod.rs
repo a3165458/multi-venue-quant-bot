@@ -174,10 +174,12 @@ pub fn plan_subscription_shards(
 /// Enforcing a one-second gap and refusing to accumulate idle capacity keeps
 /// the client within that budget without allowing bursts.
 #[derive(Debug, Default)]
+#[allow(dead_code)] // Wired into the per-key execution actor in Phase 3.
 pub struct StandardRateBudget {
     last_action_at: Option<Duration>,
 }
 
+#[allow(dead_code)]
 impl StandardRateBudget {
     pub fn new() -> Self {
         Self::default()
@@ -198,6 +200,7 @@ impl StandardRateBudget {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)] // Used by the full order-book continuity path in Phase 1.
 pub enum BookHealth {
     Syncing,
     Live,
@@ -209,6 +212,7 @@ pub enum BookHealth {
 /// A halted book can only become live after a fresh snapshot. Deltas never
 /// self-heal a detected gap.
 #[derive(Debug)]
+#[allow(dead_code)]
 pub struct BookContinuity {
     health: BookHealth,
     last_nonce: Option<u64>,
@@ -223,6 +227,7 @@ impl Default for BookContinuity {
     }
 }
 
+#[allow(dead_code)]
 impl BookContinuity {
     pub fn new() -> Self {
         Self::default()

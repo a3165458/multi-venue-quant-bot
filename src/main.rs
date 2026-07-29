@@ -1562,11 +1562,11 @@ async fn run_live_trading(config_path: &str) -> Result<()> {
                                 })
                                 .and_then(|p| p["side"].as_str().map(|s| s.to_string()))
                         };
-                        let would_increase = match (existing_side.as_deref(), &signal.side) {
-                            (Some("Buy"), &lighter::types::Side::Buy) => true,
-                            (Some("Sell"), &lighter::types::Side::Sell) => true,
-                            _ => false,
-                        };
+                        let would_increase = matches!(
+                            (existing_side.as_deref(), signal.side),
+                            (Some("Buy"), lighter::types::Side::Buy)
+                                | (Some("Sell"), lighter::types::Side::Sell)
+                        );
                         if would_increase {
                             info!("⚠️ Leverage {:.1}x > {:.1}x limit, blocking same-direction signal: {} {:?}",
                                 current_leverage, leverage_limit, signal.symbol, signal.side);

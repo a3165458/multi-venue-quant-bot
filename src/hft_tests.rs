@@ -2,12 +2,12 @@ use std::time::Duration;
 
 use clap::Parser;
 
-use crate::{Cli, Commands};
 use crate::hft::{
     parse_bbo_update, plan_subscription_shards, BboUpdate, BookContinuity, BookHealth, ScanStats,
     StandardRateBudget,
 };
 use crate::lighter::{types::WsMessage, websocket::LighterWebSocket};
+use crate::{Cli, Commands};
 
 #[test]
 fn subscription_plan_respects_per_connection_limit() {
@@ -19,10 +19,7 @@ fn subscription_plan_respects_per_connection_limit() {
     assert_eq!(shards[0].len(), 100);
     assert_eq!(shards[1].len(), 100);
     assert_eq!(shards[2].len(), 5);
-    assert_eq!(
-        shards.into_iter().flatten().collect::<Vec<_>>(),
-        market_ids
-    );
+    assert_eq!(shards.into_iter().flatten().collect::<Vec<_>>(), market_ids);
 }
 
 #[test]

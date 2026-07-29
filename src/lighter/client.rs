@@ -598,6 +598,7 @@ impl LighterClient {
     }
 
     /// Place an order using FFI signing
+    #[allow(dead_code)]
     pub async fn place_order(
         &self,
         _symbol: &str,

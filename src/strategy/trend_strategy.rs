@@ -45,6 +45,7 @@ struct TrendState {
 }
 
 impl TrendStrategy {
+    #[allow(dead_code)]
     pub fn new(
         fast_period: usize,
         slow_period: usize,

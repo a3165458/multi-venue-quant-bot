@@ -87,6 +87,7 @@ pub fn create_strategy(settings: &Config) -> Result<Box<dyn Strategy>> {
 }
 
 /// 根据策略名称创建策略（用于回测）
+#[allow(dead_code)]
 pub fn create_strategy_from_name(name: &str) -> Result<Box<dyn Strategy>> {
     create_strategy_with_params(name, None)
 }

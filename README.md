@@ -12,6 +12,7 @@
 - **风控系统**: 止损、最大回撤、日亏损限制、杠杆限制
 - **PnL 持久化**: 净值曲线、交易历史、每日盈亏自动保存和恢复
 - **高性能**: Tokio 异步运行时，低延迟订单执行
+- **全市场扫描**: 自动发现所有市场，按 WebSocket 限制分片并统计实时 BBO 事件率
 
 ## 🚀 快速开始
 
@@ -65,6 +66,25 @@ npm install -g pm2
 pm2 start ecosystem.config.js
 pm2 logs lighter-bot
 ```
+
+### 全市场只读扫描
+
+`scan` 不读取账户密钥、不加载签名库，也不会创建、修改或撤销订单：
+
+```bash
+# 扫描主网全部市场 30 秒，输出当前价差最大的 10 个市场
+cargo run --release -- scan
+
+# 只扫描永续市场
+cargo run --release -- scan --market-type perp --duration 60 --top 20
+
+# Robinhood Chain
+cargo run --release -- scan \
+  --url https://api.rh.lighter.xyz \
+  --ws-url wss://api.rh.lighter.xyz/stream
+```
+
+扫描器每个市场只订阅一个 `ticker`/BBO 频道，每条连接最多承载 100 个市场，并对启动订阅进行节流。价差排名只是候选机会，不代表可成交利润；进入实盘策略前仍需过滤深度、延迟、滑点和库存风险。
 
 ## ⚙️ 配置说明
 

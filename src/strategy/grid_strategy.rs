@@ -129,7 +129,7 @@ impl GridStrategy {
     /// 实盘硬上限：每侧最多半数网格层，且限制在 [3, 5]
     fn live_hard_cap(grid_count: usize) -> usize {
         let half = grid_count / 2;
-        half.min(5).max(3)
+        half.clamp(3, 5)
     }
 
     /// 指定库存政策构造（回测/研究用；`Hard` + 缺省值等价于 `new`）。
