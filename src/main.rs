@@ -2,6 +2,7 @@
 mod backtest;
 mod dashboard;
 mod data;
+mod hft;
 mod lighter;
 mod risk;
 mod strategy;
