@@ -293,7 +293,7 @@ impl LighterWebSocket {
 
     /// Parse a WebSocket message from Lighter.
     /// Returns Ok(None) for non-data messages (subscription confirmations, etc.)
-    fn parse_message(text: &str) -> Result<Option<WsMessage>> {
+    pub(crate) fn parse_message(text: &str) -> Result<Option<WsMessage>> {
         let value: serde_json::Value = serde_json::from_str(text)?;
 
         let channel = value.get("channel").and_then(|c| c.as_str()).unwrap_or("");
@@ -382,28 +382,8 @@ impl LighterWebSocket {
 
         // Ticker updates for price tracking
         if channel.starts_with("ticker:") && msg_type.contains("update") {
-            let market_id = Self::parse_channel_market_id(channel).unwrap_or(0);
-            let symbol = Self::market_id_to_symbol(market_id);
-
-            // Try multiple locations for price data
-            let price: f64 = value.get("ticker")
-                .and_then(|t| t["last_trade_price"].as_f64()
-                    .or_else(|| t["last_trade_price"].as_str().and_then(|s| s.parse().ok())))
-                .or_else(|| value["last_trade_price"].as_f64())
-                .or_else(|| value["last_trade_price"].as_str().and_then(|s| s.parse().ok()))
-                .unwrap_or(0.0);
-            if price > 0.0 {
-                let trade = Trade {
-                    id: "ticker".to_string(),
-                    symbol,
-                    market_id,
-                    price,
-                    quantity: 0.0,
-                    side: Side::Buy,
-                    timestamp: chrono::Utc::now(),
-                };
-                return Ok(Some(WsMessage::TradeUpdate(trade)));
-            }
+            let bbo = crate::hft::parse_bbo_update(&value)?;
+            return Ok(Some(WsMessage::BboUpdate(bbo)));
         }
 
         // Subscription confirmation or unknown — ignore

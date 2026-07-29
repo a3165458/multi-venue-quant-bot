@@ -196,6 +196,7 @@ pub struct AccountInfo {
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub enum WsMessage {
+    BboUpdate(crate::hft::BboUpdate),
     OrderBookUpdate(OrderBook),
     TradeUpdate(Trade),
     OrderUpdate(Order),
