@@ -1,6 +1,9 @@
 use config::{Config, File, FileFormat};
 
+use crate::lighter::types::{OrderType, Side, TradeSignal};
+
 use super::profitability::{ProfitabilityGuard, SignalEconomics};
+use super::risk_manager::RiskManager;
 
 fn settings(yaml: &str) -> Config {
     Config::builder()
@@ -120,4 +123,72 @@ profitability:
     let decision = guard.evaluate(SignalEconomics::entry(Some(3.0)));
     assert!(decision.allowed);
     assert!((decision.total_cost_bps - 1.0).abs() < 1e-12);
+}
+
+fn live_settings() -> Config {
+    settings(
+        r#"
+profitability:
+  enabled: true
+  entry_fee_bps: 2
+  exit_fee_bps: 2
+  entry_slippage_bps: 1
+  exit_slippage_bps: 1
+  funding_bps: 0
+  adverse_selection_bps: 1
+  min_net_edge_bps: 2
+risk:
+  stop_loss:
+    max_drawdown_percent: 10
+    daily_loss_limit_percent: 5
+    position_stop_loss_percent: 3
+    position_take_profit_percent: 5
+  position_limit:
+    max_leverage: 3
+    max_position_size: 10000
+trading:
+  position:
+    max_single_trade_percent: 50
+    max_total_position_percent: 100
+"#,
+    )
+}
+
+fn signal(expected_edge_bps: Option<f64>, risk_reducing: bool) -> TradeSignal {
+    TradeSignal {
+        symbol: "BTC".to_string(),
+        market_id: 1,
+        side: Side::Buy,
+        price: 100.0,
+        quantity: 1.0,
+        order_type: OrderType::Limit,
+        reason: "profitability integration test".to_string(),
+        timestamp: chrono::Utc::now(),
+        expected_edge_bps,
+        risk_reducing,
+    }
+}
+
+#[tokio::test]
+async fn risk_manager_enforces_profitability_before_position_limits_pass() {
+    let manager = RiskManager::new(&live_settings()).expect("risk manager");
+
+    assert!(!manager
+        .check_signal(&signal(Some(9.0), false))
+        .await
+        .expect("decision"));
+    assert!(manager
+        .check_signal(&signal(Some(10.0), false))
+        .await
+        .expect("decision"));
+}
+
+#[tokio::test]
+async fn risk_manager_never_blocks_explicit_risk_reduction_for_profitability() {
+    let manager = RiskManager::new(&live_settings()).expect("risk manager");
+
+    assert!(manager
+        .check_signal(&signal(None, true))
+        .await
+        .expect("decision"));
 }
