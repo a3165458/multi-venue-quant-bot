@@ -7,6 +7,10 @@ mod risk;
 mod strategy;
 mod utils;
 
+#[cfg(test)]
+#[path = "hft_tests.rs"]
+mod hft_tests;
+
 use anyhow::{Context, Result};
 use chrono::Utc;
 use clap::{Parser, Subcommand};
