@@ -90,13 +90,13 @@ profitability:
     );
     assert!(ProfitabilityGuard::from_config(&negative_slippage).is_err());
 
-    let nan_buffer = settings(
-        r#"
-profitability:
-  enabled: true
-  min_net_edge_bps: .nan
-"#,
-    );
+    let nan_buffer = Config::builder()
+        .set_override("profitability.enabled", true)
+        .expect("enabled override")
+        .set_override("profitability.min_net_edge_bps", f64::NAN)
+        .expect("NaN override")
+        .build()
+        .expect("test config");
     assert!(ProfitabilityGuard::from_config(&nan_buffer).is_err());
 }
 
