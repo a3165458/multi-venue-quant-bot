@@ -27,6 +27,7 @@ fn format_summary_includes_alpha_fields() {
         peak_position_grids: 6.5,
         liq_count: 2,
         bars_over_soft_cap: 17,
+        blocked_by_profitability: 3,
     };
     let text = crate::backtest::metrics::format_summary_for_test(&results);
     assert!(
@@ -40,6 +41,10 @@ fn format_summary_includes_alpha_fields() {
     assert!(
         text.contains("总手续费") || text.contains("commission") || text.contains("1.25"),
         "missing commission: {text}"
+    );
+    assert!(
+        text.contains("收益门槛拦截") || text.contains("blocked"),
+        "missing blocked: {text}"
     );
 }
 
@@ -68,6 +73,7 @@ fn format_summary_includes_peak_risk_fields() {
         peak_position_grids: 6.5,
         liq_count: 2,
         bars_over_soft_cap: 17,
+        blocked_by_profitability: 0,
     };
     let text = crate::backtest::metrics::format_summary_for_test(&results);
     for needle in [

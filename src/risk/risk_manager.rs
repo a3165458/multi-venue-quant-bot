@@ -3,7 +3,7 @@ use chrono::Utc;
 use config::Config;
 use tracing::{info, warn};
 
-use crate::lighter::types::{TradeSignal, Position, Side};
+use crate::lighter::types::{Position, Side, TradeSignal};
 use crate::risk::profitability::{ProfitabilityGuard, SignalEconomics};
 
 /// 风险管理器
@@ -35,11 +35,13 @@ impl RiskManager {
     pub fn new(settings: &Config) -> Result<Self> {
         let max_drawdown_pct = settings
             .get_float("risk.stop_loss.max_drawdown_percent")
-            .unwrap_or(10.0) / 100.0;
+            .unwrap_or(10.0)
+            / 100.0;
 
         let daily_loss_limit_pct = settings
             .get_float("risk.stop_loss.daily_loss_limit_percent")
-            .unwrap_or(5.0) / 100.0;
+            .unwrap_or(5.0)
+            / 100.0;
 
         let max_leverage = settings
             .get_float("risk.position_limit.max_leverage")
@@ -51,19 +53,23 @@ impl RiskManager {
 
         let max_single_trade_pct = settings
             .get_float("trading.position.max_single_trade_percent")
-            .unwrap_or(10.0) / 100.0;
+            .unwrap_or(10.0)
+            / 100.0;
 
         let max_total_position_pct = settings
             .get_float("trading.position.max_total_position_percent")
-            .unwrap_or(50.0) / 100.0;
+            .unwrap_or(50.0)
+            / 100.0;
 
         let position_stop_loss_pct = settings
             .get_float("risk.stop_loss.position_stop_loss_percent")
-            .unwrap_or(5.0) / 100.0;
+            .unwrap_or(5.0)
+            / 100.0;
 
         let position_take_profit_pct = settings
             .get_float("risk.stop_loss.position_take_profit_percent")
-            .unwrap_or(8.0) / 100.0;
+            .unwrap_or(8.0)
+            / 100.0;
         let profitability_guard = ProfitabilityGuard::from_config(settings)?;
 
         info!("风控初始化: 最大回撤 {:.1}%, 日亏损限制 {:.1}%, 最大杠杆 {:.0}x, 止损 {:.1}%, 止盈 {:.1}%",
@@ -159,7 +165,10 @@ impl RiskManager {
         // 检查2：每日亏损限制
         let daily_loss = -self.current_daily_pnl / self.initial_equity;
         if daily_loss >= self.daily_loss_limit_pct {
-            warn!("❌ 风控拒绝: 已达到每日亏损限制 ({:.2}%)", daily_loss * 100.0);
+            warn!(
+                "❌ 风控拒绝: 已达到每日亏损限制 ({:.2}%)",
+                daily_loss * 100.0
+            );
             return Ok(false);
         }
 
@@ -172,18 +181,29 @@ impl RiskManager {
 
         // 检查4：单笔交易大小（杠杆感知：考虑最大杠杆倍数）
         let trade_value = signal.price * signal.quantity;
-        let leverage_factor = if self.max_leverage > 1.0 { self.max_leverage } else { 1.0 };
+        let leverage_factor = if self.max_leverage > 1.0 {
+            self.max_leverage
+        } else {
+            1.0
+        };
         let max_trade_value = self.current_equity * self.max_single_trade_pct * leverage_factor;
         if trade_value > max_trade_value {
-            warn!("❌ 风控拒绝: 交易金额 ${:.2} 超过单笔限制 ${:.2} (equity*{:.0}%*{:.0}x)",
-                trade_value, max_trade_value, self.max_single_trade_pct * 100.0, leverage_factor);
+            warn!(
+                "❌ 风控拒绝: 交易金额 ${:.2} 超过单笔限制 ${:.2} (equity*{:.0}%*{:.0}x)",
+                trade_value,
+                max_trade_value,
+                self.max_single_trade_pct * 100.0,
+                leverage_factor
+            );
             return Ok(false);
         }
 
         // 检查5：持仓大小
         if trade_value > self.max_position_size {
-            warn!("❌ 风控拒绝: 交易金额 ${:.2} 超过最大持仓限制 ${:.2}",
-                trade_value, self.max_position_size);
+            warn!(
+                "❌ 风控拒绝: 交易金额 ${:.2} 超过最大持仓限制 ${:.2}",
+                trade_value, self.max_position_size
+            );
             return Ok(false);
         }
 
@@ -247,8 +267,14 @@ impl RiskManager {
 
             // Stop-loss: close if loss exceeds threshold
             if pnl_pct <= -self.position_stop_loss_pct {
-                warn!("🛑 止损触发: {} {:?} entry={:.2} now={:.2} pnl={:.2}%",
-                    pos.symbol, pos.side, pos.entry_price, current_price, pnl_pct * 100.0);
+                warn!(
+                    "🛑 止损触发: {} {:?} entry={:.2} now={:.2} pnl={:.2}%",
+                    pos.symbol,
+                    pos.side,
+                    pos.entry_price,
+                    current_price,
+                    pnl_pct * 100.0
+                );
                 signals.push(PositionCloseSignal {
                     symbol: pos.symbol.clone(),
                     side_to_close: match pos.side {
@@ -259,14 +285,24 @@ impl RiskManager {
                     entry_price: pos.entry_price,
                     current_price,
                     pnl_pct,
-                    reason: format!("止损: {:.2}% (阈值 -{:.1}%)", pnl_pct * 100.0, self.position_stop_loss_pct * 100.0),
+                    reason: format!(
+                        "止损: {:.2}% (阈值 -{:.1}%)",
+                        pnl_pct * 100.0,
+                        self.position_stop_loss_pct * 100.0
+                    ),
                 });
             }
 
             // Take-profit: close if profit exceeds threshold
             if pnl_pct >= self.position_take_profit_pct {
-                info!("🎯 止盈触发: {} {:?} entry={:.2} now={:.2} pnl=+{:.2}%",
-                    pos.symbol, pos.side, pos.entry_price, current_price, pnl_pct * 100.0);
+                info!(
+                    "🎯 止盈触发: {} {:?} entry={:.2} now={:.2} pnl=+{:.2}%",
+                    pos.symbol,
+                    pos.side,
+                    pos.entry_price,
+                    current_price,
+                    pnl_pct * 100.0
+                );
                 signals.push(PositionCloseSignal {
                     symbol: pos.symbol.clone(),
                     side_to_close: match pos.side {
@@ -277,7 +313,11 @@ impl RiskManager {
                     entry_price: pos.entry_price,
                     current_price,
                     pnl_pct,
-                    reason: format!("止盈: +{:.2}% (阈值 +{:.1}%)", pnl_pct * 100.0, self.position_take_profit_pct * 100.0),
+                    reason: format!(
+                        "止盈: +{:.2}% (阈值 +{:.1}%)",
+                        pnl_pct * 100.0,
+                        self.position_take_profit_pct * 100.0
+                    ),
                 });
             }
         }
@@ -294,11 +334,21 @@ impl RiskManager {
         position_stop_loss_pct: Option<f64>,
         position_take_profit_pct: Option<f64>,
     ) {
-        if let Some(v) = max_drawdown_pct { self.max_drawdown_pct = v / 100.0; }
-        if let Some(v) = daily_loss_limit_pct { self.daily_loss_limit_pct = v / 100.0; }
-        if let Some(v) = max_leverage { self.max_leverage = v; }
-        if let Some(v) = position_stop_loss_pct { self.position_stop_loss_pct = v / 100.0; }
-        if let Some(v) = position_take_profit_pct { self.position_take_profit_pct = v / 100.0; }
+        if let Some(v) = max_drawdown_pct {
+            self.max_drawdown_pct = v / 100.0;
+        }
+        if let Some(v) = daily_loss_limit_pct {
+            self.daily_loss_limit_pct = v / 100.0;
+        }
+        if let Some(v) = max_leverage {
+            self.max_leverage = v;
+        }
+        if let Some(v) = position_stop_loss_pct {
+            self.position_stop_loss_pct = v / 100.0;
+        }
+        if let Some(v) = position_take_profit_pct {
+            self.position_take_profit_pct = v / 100.0;
+        }
         info!("🔧 Risk params updated: drawdown={:.1}%, daily_loss={:.1}%, leverage={:.0}x, sl={:.1}%, tp={:.1}%",
             self.max_drawdown_pct * 100.0, self.daily_loss_limit_pct * 100.0, self.max_leverage,
             self.position_stop_loss_pct * 100.0, self.position_take_profit_pct * 100.0);
@@ -334,7 +384,9 @@ impl RiskManager {
             daily_loss_limit: self.daily_loss_limit_pct * 100.0,
             position_stop_loss_pct: self.position_stop_loss_pct * 100.0,
             position_take_profit_pct: self.position_take_profit_pct * 100.0,
-            is_healthy: drawdown < self.max_drawdown_pct && daily_loss < self.daily_loss_limit_pct && !self.emergency_triggered,
+            is_healthy: drawdown < self.max_drawdown_pct
+                && daily_loss < self.daily_loss_limit_pct
+                && !self.emergency_triggered,
             emergency_triggered: self.emergency_triggered,
         }
     }

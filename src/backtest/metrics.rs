@@ -59,6 +59,7 @@ fn format_summary(results: &BacktestResults) -> String {
   峰值持仓格数: {:.2}
   强平次数:     {}
   超软上限K线:  {}
+  收益门槛拦截: {}
 
 ========================================
 "#,
@@ -82,6 +83,7 @@ fn format_summary(results: &BacktestResults) -> String {
         results.peak_position_grids,
         results.liq_count,
         results.bars_over_soft_cap,
+        results.blocked_by_profitability,
     )
 }
 

@@ -6,561 +6,950 @@
 <title>Lighter Quant Bot | Dashboard</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <script src="https://unpkg.com/lucide@latest"></script>
 <style>
-/* ── Light Theme ── */
+/* ══════════════════════════════════════════════════════════════════════════
+   Lighter Bot · 设计层 —— 按参考稿 1:1 复刻
+   --------------------------------------------------------------------------
+   配色直接取自参考图的像素采样：
+     页面底 #F4F4F4 / 卡片 #FFFFFF / 区块头部条 #EFEEF1 / 发丝描边 #ECECEC / 锚点卡 #000
+   参考稿只有亮色一套；暗色是本项目自己的，规则是**反相**：
+   亮色下"最高对比块"是黑卡压白底，暗色下就是纸白卡压黑底 —— 保持同一个视觉层级。
+
+   两条硬约束：
+   1. class 名与 CSS 变量名一律不改。app.js 有 100+ 个 id/class hook，改名会静默失效。
+   2. 涨跌不能只靠颜色：.c-up/.c-down 始终与 .pnl-arrow 的方向符号成对出现。
+   ═════════════════════════════════════════════════════════════════════════ */
+
 :root, [data-theme="light"] {
-  --bg-body: #F4F7FE;
+  --bg-body: #F4F4F4;
   --bg-card: #FFFFFF;
-  --bg-card-hover: #FAFBFF;
-  --bg-input: #F4F7FE;
-  --bg-sidebar: #FFFFFF;
-  --bg-overlay: rgba(0,0,0,0.3);
-  --primary: #4318FF;
-  --primary-hover: #3311DB;
-  --primary-dim: rgba(67,24,255,0.08);
-  --primary-gradient: linear-gradient(135deg, #868CFF 0%, #4318FF 100%);
-  --text-main: #2B3674;
-  --text-sub: #A3AED0;
-  --text-muted: #C4CAD8;
-  --success: #05CD99;
-  --success-bg: #E6FFF5;
-  --danger: #EE5D50;
-  --danger-bg: #FFEFEF;
-  --warning: #FFB547;
-  --warning-bg: #FFF8EB;
-  --border: #E9EDF7;
-  --shadow: 0 18px 40px rgba(112,144,176,0.12);
-  --shadow-sm: 0 4px 12px rgba(112,144,176,0.08);
-  --chart-grid: #E9EDF7;
-  --chart-text: #A3AED0;
-  --scrollbar-track: #F0F2F8;
-  --scrollbar-thumb: #D0D5E0;
-  --radius-lg: 20px;
-  --radius-md: 14px;
-  --radius-sm: 10px;
-  --sidebar-w: 290px;
-  --topbar-h: 90px;
+  --bg-card-hover: #FAFAFA;
+  --bg-strip: #EFEEF1;          /* 区块卡的头部/底部条 */
+  --bg-input: #F4F4F4;
+  --bg-overlay: rgba(0,0,0,0.34);
+  --primary: #000000;
+  --on-primary: #FFFFFF;
+  --primary-hover: #1A1A1A;
+  --primary-dim: rgba(0,0,0,0.06);
+  --primary-gradient: linear-gradient(180deg,#1A1A1A 0%,#000000 100%);
+  --text-main: #111111;
+  --text-sub: #5F5F5F;
+  --text-muted: #A2A2A0;
+  --success: #2E9E62;
+  --success-bg: rgba(46,158,98,0.12);
+  --danger: #B0505A;
+  --danger-bg: rgba(176,80,90,0.12);
+  --warning: #9A6B1F;
+  --warning-bg: rgba(154,107,31,0.13);
+  --border: #ECECEC;
+  --border-strong: #D9D9D9;
+  --accent: #2E9E62;
+  --accent-bg: rgba(46,158,98,0.10);
+  --accent-glow: none;
+  --shadow: 0 1px 2px rgba(0,0,0,0.04);
+  --shadow-sm: none;
+  --chart-grid: #EFEFEF;
+  --chart-text: #A2A2A0;
+  --scrollbar-track: transparent;
+  --scrollbar-thumb: #D9D9D9;
+  /* 锚点卡：亮色 = 黑底纸字 */
+  --hero-bg: #000000;
+  --hero-fg: #FFFFFF;
+  --hero-sub: #8C8C8C;
+  --hero-line: rgba(255,255,255,0.16);
+  --hero-pill: rgba(255,255,255,0.05);
+  --dot-grid: rgba(0,0,0,0.07);
+  --radius-lg: 14px;
+  --radius-md: 11px;
+  --radius-sm: 8px;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
 }
 
-/* ── Dark Theme ── */
 [data-theme="dark"] {
-  --bg-body: #0B1437;
-  --bg-card: #111C44;
-  --bg-card-hover: #162050;
-  --bg-input: #0B1437;
-  --bg-sidebar: #111C44;
-  --bg-overlay: rgba(0,0,0,0.6);
-  --primary: #7551FF;
-  --primary-hover: #6340E8;
-  --primary-dim: rgba(117,81,255,0.15);
-  --primary-gradient: linear-gradient(135deg, #868CFF 0%, #7551FF 100%);
-  --text-main: #FFFFFF;
-  --text-sub: #A3AED0;
-  --text-muted: #56607B;
-  --success: #01B574;
-  --success-bg: rgba(1,181,116,0.12);
-  --danger: #E31A1A;
-  --danger-bg: rgba(227,26,26,0.12);
-  --warning: #FFB547;
-  --warning-bg: rgba(255,181,71,0.12);
-  --border: #1B254B;
-  --shadow: 0 18px 40px rgba(0,0,0,0.3);
-  --shadow-sm: 0 4px 12px rgba(0,0,0,0.2);
-  --chart-grid: #1B254B;
-  --chart-text: #56607B;
-  --scrollbar-track: #0B1437;
-  --scrollbar-thumb: #1B254B;
+  --bg-body: #0B0B0B;
+  --bg-card: #131313;
+  --bg-card-hover: #1A1A1A;
+  --bg-strip: #191919;
+  --bg-input: #101010;
+  --bg-overlay: rgba(0,0,0,0.66);
+  --primary: #FFFFFF;
+  --on-primary: #000000;
+  --primary-hover: #E6E6E6;
+  --primary-dim: rgba(255,255,255,0.10);
+  --primary-gradient: linear-gradient(180deg,#FFFFFF 0%,#D8D8D8 100%);
+  --text-main: #F2F2F2;
+  --text-sub: #9A9A9A;
+  --text-muted: #6A6A68;
+  --success: #45BE79;
+  --success-bg: rgba(69,190,121,0.14);
+  --danger: #D2707A;
+  --danger-bg: rgba(210,112,122,0.14);
+  --warning: #D2A244;
+  --warning-bg: rgba(210,162,68,0.14);
+  --border: #242424;
+  --border-strong: #383838;
+  --accent: #45BE79;
+  --accent-bg: rgba(69,190,121,0.12);
+  --shadow: 0 1px 2px rgba(0,0,0,0.4);
+  --chart-grid: #202020;
+  --chart-text: #6A6A68;
+  --scrollbar-thumb: #2E2E2E;
+  /* 反相：暗色下最高对比块变成纸白 */
+  --hero-bg: #F2F2F2;
+  --hero-fg: #0B0B0B;
+  --hero-sub: #6E6E6E;
+  --hero-line: rgba(0,0,0,0.14);
+  --hero-pill: rgba(0,0,0,0.05);
+  --dot-grid: rgba(255,255,255,0.07);
 }
 
 /* ── Reset ── */
 *,*::before,*::after { margin:0; padding:0; box-sizing:border-box; }
-body { font-family:'DM Sans',sans-serif; background:var(--bg-body); color:var(--text-main); display:flex; min-height:100vh; transition: background 0.3s, color 0.3s; }
-
-/* ── Scrollbar ── */
-::-webkit-scrollbar { width:6px; }
+body {
+  font-family:'DM Sans',-apple-system,sans-serif; background:var(--bg-body);
+  color:var(--text-main); min-height:100vh; -webkit-font-smoothing:antialiased;
+  transition:background 0.25s, color 0.25s;
+}
+::-webkit-scrollbar { width:6px; height:6px; }
 ::-webkit-scrollbar-track { background:var(--scrollbar-track); }
 ::-webkit-scrollbar-thumb { background:var(--scrollbar-thumb); border-radius:3px; }
 
-/* ── Sidebar ── */
-aside {
-  width:var(--sidebar-w); background:var(--bg-sidebar); padding:32px 0;
-  display:flex; flex-direction:column; position:fixed; height:100vh;
-  border-right:1px solid var(--border); z-index:50;
-  transition: background 0.3s, border-color 0.3s;
+/* 参考稿的招牌微标签：等宽、全大写、字距 0.13em、压到 10px */
+.kicker, .card-subtitle {
+  font-family:var(--font-mono); font-size:10px; font-weight:500;
+  text-transform:uppercase; letter-spacing:0.13em; color:var(--text-muted);
+  line-height:1.5;
 }
-.logo { padding:0 32px; margin-bottom:40px; font-size:22px; font-weight:700; display:flex; align-items:center; gap:12px; }
-.logo-icon { width:34px; height:34px; border-radius:10px; display:flex; align-items:center; justify-content:center; color:#fff; background:var(--primary-gradient); }
-.nav-links { list-style:none; flex:1; }
-.nav-item {
-  padding:12px 28px 12px 36px; display:flex; align-items:center; gap:14px;
-  color:var(--text-sub); text-decoration:none; font-weight:500; font-size:15px;
-  position:relative; transition:all 0.2s; cursor:pointer; border:none; background:none; width:100%;
-}
-.nav-item:hover { color:var(--text-main); }
-.nav-item.active { color:var(--text-main); }
-.nav-item.active::after { content:''; position:absolute; right:0; width:4px; height:32px; background:var(--primary); border-radius:4px 0 0 4px; }
-.nav-item.active svg { color:var(--primary); }
-.nav-item svg { width:20px; height:20px; flex-shrink:0; }
 
-.sb-ailab {
-  margin:0 24px; padding:16px; background:var(--primary-gradient); color:#fff;
-  border-radius:16px; text-decoration:none; font-weight:700; font-size:14px;
-  display:flex; align-items:center; gap:10px;
-  box-shadow:0 10px 20px rgba(67,24,255,0.2); transition:transform 0.15s;
-}
-.sb-ailab:hover { transform:translateY(-2px); }
-.sb-ailab svg { width:18px; height:18px; flex-shrink:0; }
-
-.sb-footer { padding:16px 32px; margin-top:12px; border-top:1px solid var(--border); }
-.sb-status { display:flex; align-items:center; gap:8px; font-size:12px; color:var(--text-sub); }
-.sb-dot { width:8px; height:8px; border-radius:50%; background:var(--danger); flex-shrink:0; }
-.sb-dot.live { background:var(--success); animation:blink 2s ease-in-out infinite; }
-@keyframes blink { 0%,100%{opacity:1}50%{opacity:0.3} }
-
-/* ── Main ── */
+/* ══ 外壳：单栏纵向堆叠，没有侧栏（参考稿如此）══ */
 main {
-  margin-left:var(--sidebar-w); flex:1; padding:0 32px 32px;
+  max-width:1240px; margin:0 auto; padding:16px 16px 0;
   display:flex; flex-direction:column; min-height:100vh;
 }
+aside { display:none; }               /* 侧栏已并入头部卡 */
 
-/* ── Top bar ── */
+/* ══ 头部卡 ══ 徽标 + 微标签/标题（左）+ 状态胶囊（右），第二行是页面导航 ══ */
 .topbar {
-  display:flex; justify-content:space-between; align-items:center;
-  padding:24px 0; position:sticky; top:0; z-index:30;
-  background:var(--bg-body); transition:background 0.3s;
+  background:var(--bg-card); border:1px solid var(--border);
+  border-radius:var(--radius-lg); margin-bottom:12px; overflow:hidden;
+  position:relative; z-index:30;
 }
-.breadcrumb { font-size:14px; color:var(--text-sub); font-weight:500; }
-.breadcrumb span { display:block; font-size:30px; font-weight:700; color:var(--text-main); margin-top:4px; }
-.topnav {
-  display:flex; align-items:center; gap:8px;
-  background:var(--bg-card); padding:8px 12px; border-radius:30px;
-  box-shadow:var(--shadow-sm); transition:background 0.3s;
+.tb-main { display:flex; align-items:center; gap:14px; padding:14px 16px; }
+.logo { display:flex; align-items:center; gap:13px; min-width:0; }
+.logo-icon {
+  width:52px; height:52px; border-radius:14px; flex-shrink:0;
+  display:flex; align-items:center; justify-content:center;
+  color:var(--on-primary); background:var(--primary);
 }
+.logo-icon svg { width:25px; height:25px; }
+.breadcrumb { min-width:0; }
+.breadcrumb .kicker { display:block; }
+.brand-title {
+  font-size:33px; font-weight:700; letter-spacing:-0.03em; line-height:1.1;
+  margin-top:1px; white-space:nowrap;
+}
+/* "Lighter Bot · quant engine" —— 后半截用细体灰字，和参考稿一致 */
+.brand-title em { font-style:normal; font-weight:400; color:var(--text-muted); }
+.tb-right { margin-left:auto; display:flex; flex-direction:column; align-items:flex-end; gap:6px; }
+
+.pill {
+  display:inline-flex; align-items:center; gap:6px;
+  font-family:var(--font-mono); font-size:10.5px; font-weight:600;
+  text-transform:uppercase; letter-spacing:0.1em; white-space:nowrap;
+  padding:5px 11px; border-radius:99px;
+  border:1px solid var(--border-strong); color:var(--text-main); background:var(--bg-card);
+}
+.pill.solid { background:var(--primary); color:var(--on-primary); border-color:var(--primary); }
+.pill .sb-dot { width:6px; height:6px; }
+
+/* 导航条：参考稿没有这一行，但它也没有多页应用。
+   做成头部卡内的第二条 strip，用的是区块卡同一套 header-strip 语言。 */
+.tb-nav {
+  display:flex; align-items:center; gap:6px; flex-wrap:wrap;
+  padding:9px 16px; background:var(--bg-strip); border-top:1px solid var(--border);
+}
+.nav-links { display:contents; list-style:none; }
+.nav-links li { display:contents; }
+.nav-item {
+  display:inline-flex; align-items:center; gap:7px; cursor:pointer;
+  font-family:var(--font-mono); font-size:10.5px; font-weight:600;
+  text-transform:uppercase; letter-spacing:0.1em; text-decoration:none;
+  padding:5px 11px; border-radius:99px; border:1px solid transparent;
+  background:transparent; color:var(--text-sub); transition:all 0.15s;
+}
+.nav-item svg { width:14px; height:14px; }
+.nav-item:hover { color:var(--text-main); border-color:var(--border-strong); }
+.nav-item.active { background:var(--primary); color:var(--on-primary); border-color:var(--primary); }
+.nav-item.active svg { color:var(--on-primary); }
+.nav-spacer { flex:1; }
+
+.topnav { display:flex; align-items:center; gap:4px; }
 .search-wrap {
-  display:flex; align-items:center; gap:8px;
-  background:var(--bg-input); border-radius:20px; padding:8px 14px;
-  transition:background 0.3s;
+  display:flex; align-items:center; gap:7px; margin-right:4px;
+  background:var(--bg-card); border:1px solid var(--border-strong);
+  border-radius:99px; padding:5px 11px;
 }
+.search-wrap svg { width:13px; height:13px; color:var(--text-muted); }
 .search-wrap input {
-  border:none; background:transparent; outline:none;
-  font-size:13px; color:var(--text-main); font-family:inherit; width:140px;
+  border:none; background:transparent; outline:none; font-size:12px;
+  color:var(--text-main); font-family:var(--font-mono); width:118px;
 }
 .search-wrap input::placeholder { color:var(--text-muted); }
 .topnav-btn {
-  width:36px; height:36px; border-radius:50%; border:none;
+  width:28px; height:28px; border-radius:99px; border:1px solid transparent;
   background:transparent; color:var(--text-sub); cursor:pointer;
   display:flex; align-items:center; justify-content:center;
   transition:all 0.15s; position:relative;
 }
-.topnav-btn:hover { background:var(--bg-input); color:var(--text-main); }
-.topnav-btn svg { width:20px; height:20px; }
-.notif-dot {
-  position:absolute; top:6px; right:6px; width:7px; height:7px;
-  border-radius:50%; background:var(--danger);
+.topnav-btn:hover { border-color:var(--border-strong); color:var(--text-main); }
+.topnav-btn svg { width:15px; height:15px; }
+.notif-dot { position:absolute; top:3px; right:3px; width:6px; height:6px; border-radius:50%; background:var(--danger); }
+.sb-ailab, .sb-footer, .sb-status, .sb-spacer, .mobile-nav-btn, .mobile-nav-backdrop { display:none; }
+.sb-dot { width:7px; height:7px; border-radius:50%; background:var(--danger); flex-shrink:0; display:inline-block; }
+.sb-dot.live { background:var(--success); animation:blink 2s ease-in-out infinite; }
+@keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.28} }
+
+/* ══ 通用区块卡 ══ 头部条（微标签+标题+胶囊）/ 主体 / 底部条 ══ */
+.card, .bx, .panel, .ai-section {
+  background:var(--bg-card); border:1px solid var(--border);
+  border-radius:var(--radius-lg); box-shadow:none;
 }
-.topnav-avatar {
-  width:36px; height:36px; border-radius:50%;
-  background:var(--primary-dim); border:2px solid var(--primary);
-  display:flex; align-items:center; justify-content:center;
-  color:var(--primary); font-weight:700; font-size:13px; cursor:pointer;
+.sec { background:var(--bg-card); border:1px solid var(--border); border-radius:var(--radius-lg); overflow:hidden; margin-bottom:12px; }
+.sec-head {
+  display:flex; align-items:flex-end; justify-content:space-between; gap:12px;
+  padding:11px 16px 10px; background:var(--bg-strip); border-bottom:1px solid var(--border);
+}
+.sec-title { font-size:17px; font-weight:700; letter-spacing:-0.015em; line-height:1.1; margin-top:2px; text-transform:uppercase; }
+.sec-body { padding:16px; position:relative; }
+.sec-body.dotted {
+  background-image:radial-gradient(var(--dot-grid) 0.9px, transparent 0.9px);
+  background-size:14px 14px;
+}
+.sec-foot {
+  display:flex; justify-content:space-between; gap:12px; flex-wrap:wrap;
+  padding:9px 16px; border-top:1px solid var(--border);
+  font-family:var(--font-mono); font-size:10px; text-transform:uppercase;
+  letter-spacing:0.11em; color:var(--text-muted);
+}
+.sec-foot b { color:var(--text-sub); font-weight:600; }
+
+.card { padding:16px; }
+.card-header { display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:14px; gap:12px; }
+.card-title { font-size:15px; font-weight:700; letter-spacing:-0.01em; }
+.card-subtitle { margin-top:4px; }
+
+/* ══ 第一排：锚点黑卡 + 收益卡 ══ */
+.hero-row { display:grid; grid-template-columns:1.32fr 1fr; gap:12px; margin-bottom:12px; }
+
+.console {
+  background:var(--hero-bg); color:var(--hero-fg); border-radius:var(--radius-lg);
+  padding:20px 22px 18px; display:flex; flex-direction:column; justify-content:space-between;
+  min-height:186px; border:1px solid var(--hero-bg);
+  /* 亮色的 success/danger 压在黑底上几乎看不见，局部换高亮版 */
+  --success:#45BE79; --danger:#D2707A;
+}
+[data-theme="dark"] .console { --success:#1F8A4F; --danger:#A8434D; }
+.con-bar { display:flex; align-items:center; gap:9px; flex-wrap:wrap; }
+.hero-kicker {
+  font-family:var(--font-mono); font-size:10.5px; font-weight:600; text-transform:uppercase;
+  letter-spacing:0.13em; color:var(--hero-sub); display:flex; align-items:center; gap:7px;
+}
+.hero-chip {
+  font-family:var(--font-mono); font-size:10px; font-weight:600; text-transform:uppercase;
+  letter-spacing:0.1em; padding:4px 10px; border-radius:99px;
+  border:1px solid var(--hero-line); color:var(--hero-fg); white-space:nowrap;
+}
+.hero-chip.solid { background:var(--hero-fg); color:var(--hero-bg); border-color:var(--hero-fg); }
+.con-spacer { flex:1; }
+
+.con-num { display:flex; align-items:baseline; gap:14px; flex-wrap:wrap; margin:14px 0 0; }
+.hero-value {
+  font-size:60px; font-weight:700; letter-spacing:-0.045em; line-height:0.95;
+  font-variant-numeric:tabular-nums;
+}
+.hero-value .cur { font-size:0.55em; color:var(--hero-sub); margin-right:-2px; letter-spacing:-0.04em; }
+.hero-delta {
+  font-family:var(--font-mono); font-size:14px; letter-spacing:0.01em;
+  font-variant-numeric:tabular-nums; color:var(--hero-sub);
+}
+.hero-delta b, .hero-delta .value { font-weight:700; color:var(--hero-fg); }
+.hero-delta .pnl-arrow { font-size:0.75em; }
+.hero-paused { color:#D2A244; font-weight:600; }
+
+.con-stats { display:flex; gap:7px; flex-wrap:wrap; margin-top:16px; }
+.con-stat {
+  display:inline-flex; align-items:baseline; gap:7px; white-space:nowrap;
+  font-family:var(--font-mono); font-size:12px; font-variant-numeric:tabular-nums;
+  padding:5px 12px; border-radius:99px;
+  background:var(--hero-pill); border:1px solid var(--hero-line); color:var(--hero-fg);
+}
+.con-stat i { font-style:normal; color:var(--hero-sub); font-size:11px; }
+/* app.js 的 setPnl() 会把 className 硬写成 "value c-up|c-down"，只能靠上下文接住 */
+.con-stat .value { font-size:12px; font-weight:600; }
+.con-stat .pnl-arrow { font-size:0.78em; }
+
+/* 收益卡 */
+.runcard { display:flex; flex-direction:column; overflow:hidden; }
+.runcard .sec-head { align-items:center; }
+.runcard-body { padding:14px 16px 16px; display:flex; flex-direction:column; flex:1; }
+.run-top { display:flex; align-items:baseline; justify-content:space-between; gap:12px; }
+.runcard-big {
+  font-size:42px; font-weight:700; letter-spacing:-0.04em; line-height:1;
+  font-variant-numeric:tabular-nums;
+}
+.runcard-big small { font-size:0.58em; letter-spacing:-0.02em; }
+.run-side, .run-top .value { font-size:21px; font-weight:700; font-variant-numeric:tabular-nums; letter-spacing:-0.02em; }
+.tape-live { display:flex; flex-wrap:wrap; gap:0 16px; margin-top:7px; }
+.tape-item { display:flex; align-items:baseline; gap:7px; font-family:var(--font-mono); font-variant-numeric:tabular-nums; }
+.tape-sym  { font-size:11px; color:var(--text-muted); letter-spacing:0.1em; }
+.tape-mark { font-size:13px; font-weight:600; }
+.tape-d    { font-size:11px; }
+.tape-meta { font-size:10px; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.1em; }
+.tape-idle { font-family:var(--font-mono); font-size:10px; text-transform:uppercase; letter-spacing:0.12em; color:var(--text-muted); }
+@keyframes tickUp   { 0%{background:var(--success-bg)} 100%{background:transparent} }
+@keyframes tickDown { 0%{background:var(--danger-bg)}  100%{background:transparent} }
+.tape-item.up { animation:tickUp 0.9s ease-out; }
+.tape-item.down { animation:tickDown 0.9s ease-out; }
+
+.run-legs { display:flex; gap:26px; margin-top:12px; }
+.run-leg .kicker { display:block; }
+.run-leg b { font-family:var(--font-mono); font-size:14px; font-weight:600; font-variant-numeric:tabular-nums; }
+.runcard-meta { font-family:var(--font-mono); font-size:11px; color:var(--text-muted); font-variant-numeric:tabular-nums; }
+.spark-wrap { flex:1; min-height:56px; position:relative; margin-top:6px; }
+.spark-wrap canvas { position:absolute; inset:0; width:100%!important; height:100%!important; }
+.spark-empty {
+  position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+  font-family:var(--font-mono); font-size:10px; text-transform:uppercase;
+  letter-spacing:0.11em; color:var(--text-muted);
+}
+/* 参考稿底部那排小横杠 —— 这里当净值曲线的区间选择器用 */
+.range-group { display:flex; gap:7px; align-items:center; }
+.range-btn {
+  width:20px; height:3px; padding:0; border:none; border-radius:2px;
+  background:var(--border-strong); cursor:pointer; font-size:0; transition:all 0.15s;
+}
+.range-btn:hover { background:var(--text-muted); }
+.range-btn.active { background:var(--primary); width:26px; }
+
+/* ══ THE LOOP ══ */
+.loop-stage { position:relative; height:242px; width:100%; max-width:900px; margin:0 auto; flex-shrink:0; }
+.loop-orbit { position:absolute; inset:0; width:100%; height:100%; color:var(--text-main); overflow:visible; }
+.loop-dot { color:var(--primary); transition:opacity 0.4s; }
+.sec.stale .loop-dot { opacity:0; }
+.sec.stale { opacity:0.55; }
+.loop-center { position:absolute; left:50%; top:50%; transform:translate(-50%,-46%); text-align:center; pointer-events:none; }
+.loop-center-word { font-size:64px; font-weight:700; letter-spacing:-0.045em; line-height:0.9; }
+.loop-center-sub { font-family:var(--font-mono); font-size:14px; font-weight:700; letter-spacing:0.12em; margin-top:6px; }
+.loop-node {
+  position:absolute; min-width:158px; padding:11px 14px; text-align:center;
+  background:var(--bg-card); border:2px dashed var(--border-strong);
+  border-radius:var(--radius-md); transition:background-color 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+}
+.loop-node b { display:block; font-size:15px; font-weight:700; letter-spacing:0.02em; text-transform:uppercase; }
+.loop-node span { display:block; font-family:var(--font-mono); font-size:10px; text-transform:uppercase; letter-spacing:0.09em; color:var(--text-muted); margin-top:2px; }
+.loop-node.lit {
+  background:var(--primary); border-color:var(--primary); border-style:solid;
+  color:var(--on-primary);
+}
+.loop-node.lit span { color:var(--on-primary); opacity:0.66; }
+.loop-n-top { left:50%; top:0; transform:translateX(-50%); }
+.loop-n-bottom { left:50%; bottom:0; transform:translateX(-50%); }
+.loop-n-left { left:0; top:50%; transform:translateY(-50%); }
+.loop-n-right { right:0; top:50%; transform:translateY(-50%); }
+.loop-legend { display:none; }        /* 图例已并入 .sec-foot */
+
+/* ══ 状态气泡（参考稿 HIDDEN STATE GRAPH 的位置，装的是真实风控读数）══ */
+.bub-wrap { display:flex; align-items:center; justify-content:center; gap:26px; min-height:230px; flex-wrap:wrap; }
+.bub { text-align:center; }
+.bub-circle {
+  border-radius:50%; display:flex; flex-direction:column; align-items:center; justify-content:center;
+  margin:0 auto; transition:width 0.5s, height 0.5s, background 0.3s;
+  border:2px solid var(--text-main);
+}
+.bub-circle .bub-k { font-family:var(--font-mono); font-size:11px; letter-spacing:0.11em; text-transform:uppercase; }
+.bub-circle .bub-v { font-size:23px; font-weight:700; letter-spacing:-0.02em; font-variant-numeric:tabular-nums; margin-top:1px; }
+.bub.primary .bub-circle { background:var(--primary); color:var(--on-primary); border-color:var(--primary); }
+.bub.warn .bub-circle { border-color:var(--danger); color:var(--danger); background:var(--bg-card); }
+.bub.plain .bub-circle { border-color:var(--border-strong); color:var(--text-main); background:var(--bg-card); }
+.bub-cap { font-family:var(--font-mono); font-size:10px; color:var(--text-muted); letter-spacing:0.1em; text-transform:uppercase; margin-top:9px; }
+
+/* ══ 挂单栅格（参考稿 THE SWARM 的卡片规格）══ */
+.swarm-grid { display:grid; grid-template-columns:repeat(2,1fr); gap:11px 22px; }
+.swarm-card {
+  background:var(--bg-card); border:1px solid var(--border-strong);
+  border-radius:var(--radius-md); padding:12px 14px; transition:all 0.2s; min-width:0;
+}
+.swarm-card.near {           /* 离市价最近的一档：参考稿里那张反相卡 */
+  background:var(--primary); color:var(--on-primary); border-color:var(--primary);
+  box-shadow:0 0 0 3px var(--bg-card), 0 0 0 4px var(--primary);
+}
+.swarm-head { display:flex; justify-content:space-between; align-items:center; gap:8px; }
+.swarm-idx { font-family:var(--font-mono); font-size:11px; color:var(--text-muted); letter-spacing:0.08em; }
+.swarm-card.near .swarm-idx { color:rgba(255,255,255,0.6); }
+[data-theme="dark"] .swarm-card.near .swarm-idx { color:rgba(0,0,0,0.55); }
+.swarm-mid { display:flex; justify-content:space-between; align-items:baseline; gap:10px; margin-top:4px; }
+.swarm-name { font-size:19px; font-weight:700; letter-spacing:-0.015em; font-variant-numeric:tabular-nums; }
+.swarm-dist { font-family:var(--font-mono); font-size:12px; font-variant-numeric:tabular-nums; }
+.swarm-sub { font-family:var(--font-mono); font-size:11.5px; color:var(--text-muted); margin-top:3px; font-variant-numeric:tabular-nums; }
+.swarm-card.near .swarm-sub, .swarm-card.near .swarm-dist { color:rgba(255,255,255,0.7); }
+[data-theme="dark"] .swarm-card.near .swarm-sub, [data-theme="dark"] .swarm-card.near .swarm-dist { color:rgba(0,0,0,0.6); }
+.swarm-bar { display:flex; gap:3px; margin-top:9px; }
+.swarm-seg { flex:1; height:9px; background:var(--border); border-radius:1px; }
+.swarm-seg.on { background:var(--primary); }
+.swarm-card.near .swarm-seg { background:rgba(255,255,255,0.22); }
+.swarm-card.near .swarm-seg.on { background:var(--on-primary); }
+.swarm-empty {
+  grid-column:1/-1; text-align:center; padding:44px; color:var(--text-muted);
+  font-family:var(--font-mono); font-size:10.5px; text-transform:uppercase; letter-spacing:0.12em;
 }
 
-/* ── Notification Panel ── */
-.notif-panel {
-  display:none; position:absolute; top:52px; right:0; width:340px;
-  background:var(--bg-card); border:1px solid var(--border); border-radius:var(--radius-md);
-  box-shadow:var(--shadow); z-index:100; max-height:380px; overflow-y:auto;
-  transition:background 0.3s, border-color 0.3s;
+/* ══ 事件流 ══ */
+.rail { display:flex; flex-direction:column; gap:6px; max-height:238px; overflow-y:auto; scrollbar-width:none; }
+.event-stream-section { display:flex; flex-direction:column; min-height:0; }
+.event-stream-section > .sec-body { flex:1; min-height:270px; }
+.event-stream-section .rail { position:absolute; inset:16px; min-height:0; max-height:none; }
+.event-stream-section .rail-chip {
+  flex:1 0 auto; min-height:38px; align-items:center;
+  background:var(--bg-card); border-color:var(--border-strong);
 }
-.notif-panel.show { display:block; }
-.notif-header { padding:14px 18px; border-bottom:1px solid var(--border); font-weight:700; font-size:14px; display:flex; justify-content:space-between; }
-.notif-clear { font-size:12px; color:var(--primary); cursor:pointer; font-weight:600; border:none; background:none; }
-.notif-item {
-  padding:12px 18px; border-bottom:1px solid var(--border); font-size:13px;
-  display:flex; gap:10px; align-items:flex-start; transition:background 0.15s;
+.rail::-webkit-scrollbar { display:none; }
+.rail-empty { font-family:var(--font-mono); font-size:10px; text-transform:uppercase; letter-spacing:0.12em; color:var(--text-muted); padding:6px 0; }
+.rail-chip {
+  display:flex; align-items:baseline; gap:9px; flex-shrink:0;
+  padding:7px 11px; border:1px solid var(--border); border-radius:var(--radius-sm);
+  background:var(--bg-strip); font-family:var(--font-mono); font-size:11px;
+  font-variant-numeric:tabular-nums; animation:railIn 0.45s cubic-bezier(0.16,1,0.3,1);
 }
-.notif-item:hover { background:var(--bg-input); }
-.notif-icon { width:32px; height:32px; border-radius:50%; display:flex; align-items:center; justify-content:center; flex-shrink:0; font-size:14px; }
-.notif-icon.trade { background:var(--success-bg); color:var(--success); }
-.notif-icon.warn { background:var(--warning-bg); color:var(--warning); }
-.notif-icon.err { background:var(--danger-bg); color:var(--danger); }
-.notif-text { flex:1; }
-.notif-text .notif-msg { color:var(--text-main); font-weight:500; }
-.notif-text .notif-time { color:var(--text-sub); font-size:11px; margin-top:2px; }
-.notif-empty { padding:32px; text-align:center; color:var(--text-sub); font-size:13px; }
+@keyframes railIn { from { opacity:0; transform:translateY(-10px); } to { opacity:1; transform:none; } }
+.rail-chip .rail-t { color:var(--text-muted); font-size:10px; flex-shrink:0; }
+.rail-chip .rail-k { font-weight:700; letter-spacing:0.08em; flex-shrink:0; }
+.rail-chip > span:last-child { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.rail-chip.risk .rail-k { color:var(--warning); }
 
-/* ── Pages ── */
+/* ══ 成交闪现 ══ */
+.toasts { position:fixed; bottom:20px; right:20px; z-index:900; display:flex; flex-direction:column-reverse; gap:8px; pointer-events:none; }
+.toast {
+  min-width:250px; padding:12px 15px; border-radius:var(--radius-md);
+  background:var(--hero-bg); color:var(--hero-fg); border:1px solid var(--hero-bg);
+  box-shadow:0 10px 30px rgba(0,0,0,0.18); font-family:var(--font-mono); font-variant-numeric:tabular-nums;
+  animation:toastIn 0.4s cubic-bezier(0.16,1,0.3,1), toastOut 0.5s ease-in 5.2s forwards;
+  --success:#45BE79; --danger:#D2707A;
+}
+[data-theme="dark"] .toast { --success:#1F8A4F; --danger:#A8434D; }
+.toast .toast-k { font-size:10px; text-transform:uppercase; letter-spacing:0.13em; color:var(--hero-sub); display:flex; justify-content:space-between; gap:10px; }
+.toast .toast-main { font-size:15px; font-weight:700; margin-top:5px; }
+.toast .toast-pnl { font-size:12.5px; margin-top:3px; }
+@keyframes toastIn  { from { opacity:0; transform:translate(26px,10px); } to { opacity:1; transform:none; } }
+@keyframes toastOut { to { opacity:0; transform:translateX(26px); } }
+
+/* ══ 页脚跑马灯 ══ */
+.footbar {
+  margin-top:auto; padding:14px 4px 18px; display:flex; justify-content:space-between;
+  gap:16px; flex-wrap:wrap;
+}
+.footbar div { font-family:var(--font-mono); font-size:10.5px; text-transform:uppercase; letter-spacing:0.12em; color:var(--text-muted); }
+.footbar b { color:var(--text-main); font-weight:700; }
+
+/* ══ 两列区块 ══ */
+.duo { display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:12px; }
+.duo > .sec { margin-bottom:0; }
+.sec-body.chart { height:262px; position:relative; }
+
+/* ══ 页面 ══ */
 .page { display:none; }
 .page.active { display:block; }
 
-/* ── Cards ── */
-.card {
-  background:var(--bg-card); border-radius:var(--radius-lg); padding:24px;
-  box-shadow:var(--shadow-sm); transition:background 0.3s, box-shadow 0.3s;
-}
-.card-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:20px; }
-.card-title { font-size:18px; font-weight:700; }
-.card-subtitle { font-size:13px; color:var(--text-sub); margin-top:2px; }
-
-/* ── Stats Grid ── */
-.stats-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:20px; margin-bottom:24px; }
-.stat-card { display:flex; align-items:center; gap:15px; }
-.stat-icon {
-  width:56px; height:56px; background:var(--bg-input); border-radius:50%;
-  display:flex; align-items:center; justify-content:center; color:var(--primary);
-  transition:background 0.3s;
-}
-.stat-info .label { font-size:14px; color:var(--text-sub); font-weight:500; }
-.stat-info .value { font-size:24px; font-weight:700; font-variant-numeric:tabular-nums; transition:color 0.3s; }
-
-/* ── Charts Grid ── */
-.charts-grid { display:grid; grid-template-columns:2fr 1fr; gap:20px; margin-bottom:24px; }
-
-.chart-toolbar { display:flex; align-items:center; gap:8px; }
-.range-group { display:flex; gap:6px; flex-wrap:wrap; }
-.range-btn {
-  padding:6px 10px; border-radius:10px; border:1px solid var(--border);
-  background:transparent; color:var(--text-sub); font-size:12px;
-  font-weight:700; font-family:inherit; cursor:pointer; transition:all 0.15s;
-}
-.range-btn:hover { border-color:var(--text-sub); color:var(--text-main); }
-.range-btn.active { background:var(--primary-dim); border-color:var(--primary-dim); color:var(--primary); }
-
-/* ── Bottom Grid (positions + risk) ── */
-.bottom-grid { display:grid; grid-template-columns:1fr 360px; gap:20px; margin-bottom:24px; }
-
-/* ── Tables ── */
+/* ══ 表格 ══ */
 table { width:100%; border-collapse:collapse; }
 th {
-  text-align:left; font-size:11px; color:var(--text-sub); text-transform:uppercase;
-  letter-spacing:0.5px; padding:12px 16px; border-bottom:1px solid var(--border);
-  font-weight:600;
+  text-align:left; font-family:var(--font-mono); font-size:10px; color:var(--text-muted);
+  text-transform:uppercase; letter-spacing:0.12em; padding:10px 14px;
+  border-bottom:1px solid var(--border); font-weight:500; white-space:nowrap;
 }
-td {
-  padding:14px 16px; font-size:14px; font-weight:500; color:var(--text-main);
-  border-bottom:1px solid var(--border); font-variant-numeric:tabular-nums;
-  transition:background 0.15s;
-}
+td { padding:11px 14px; font-size:13px; font-weight:500; color:var(--text-main); border-bottom:1px solid var(--border); font-variant-numeric:tabular-nums; }
+tr:last-child td { border-bottom:none; }
 tr:hover td { background:var(--bg-card-hover); }
 .td-r { text-align:right; }
-.empty-cell { text-align:center; padding:40px 16px !important; color:var(--text-sub); font-size:13px; }
+.empty-cell { text-align:center; padding:40px 14px !important; color:var(--text-muted); font-family:var(--font-mono); font-size:10.5px; text-transform:uppercase; letter-spacing:0.11em; }
 
-/* ── Badges ── */
-.badge { padding:5px 12px; border-radius:10px; font-size:12px; font-weight:700; display:inline-flex; align-items:center; gap:5px; }
-.badge-up { background:var(--success-bg); color:var(--success); }
-.badge-down { background:var(--danger-bg); color:var(--danger); }
-.badge-warn { background:var(--warning-bg); color:var(--warning); }
-.badge-info { background:var(--primary-dim); color:var(--primary); }
-.badge-neutral { background:var(--bg-input); color:var(--text-sub); }
+/* ══ 徽标 ══ */
+.badge {
+  padding:3px 9px; border-radius:99px; font-family:var(--font-mono); font-size:10px;
+  font-weight:600; letter-spacing:0.08em; text-transform:uppercase;
+  display:inline-flex; align-items:center; gap:4px; border:1px solid var(--border-strong);
+}
+.badge-up { background:var(--success-bg); color:var(--success); border-color:transparent; }
+.badge-down { background:var(--danger-bg); color:var(--danger); border-color:transparent; }
+.badge-warn { background:var(--warning-bg); color:var(--warning); border-color:transparent; }
+.badge-info { background:var(--primary-dim); color:var(--text-main); border-color:var(--border); }
+.badge-neutral { background:transparent; color:var(--text-sub); }
 
-/* ── PnL Colors ── */
 .c-up { color:var(--success) !important; }
 .c-down { color:var(--danger) !important; }
-.pnl-arrow { font-size:0.7em; margin-right:2px; vertical-align:middle; }
+.pnl-arrow { font-size:0.72em; margin-right:2px; vertical-align:middle; }
 
-/* ── Risk Monitor ── */
-.risk-section { padding:16px; border-top:1px solid var(--border); }
-.risk-title { font-size:11px; font-weight:700; color:var(--primary); text-transform:uppercase; letter-spacing:0.6px; margin-bottom:12px; }
-.risk-item { margin-bottom:10px; }
+/* ══ 风控条 ══ */
+.risk-section { padding:14px 16px; border-top:1px solid var(--border); }
+.risk-title { font-family:var(--font-mono); font-size:10px; font-weight:500; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.13em; margin-bottom:11px; }
+.risk-item { margin-bottom:11px; }
 .risk-item:last-child { margin-bottom:0; }
-.risk-labels { display:flex; justify-content:space-between; font-size:12px; margin-bottom:4px; }
+.risk-labels { display:flex; justify-content:space-between; font-family:var(--font-mono); font-size:11px; margin-bottom:5px; font-variant-numeric:tabular-nums; }
 .risk-k { color:var(--text-sub); }
 .risk-v { font-weight:700; }
 .risk-bar { height:4px; background:var(--border); border-radius:2px; overflow:hidden; }
-.risk-fill { height:100%; border-radius:2px; transition:width 0.5s,background 0.3s; }
-.risk-fill.ok { background:var(--success); }
+.risk-fill { height:100%; border-radius:2px; transition:width 0.5s, background 0.3s; }
+.risk-fill.ok { background:var(--primary); }
 .risk-fill.warn { background:var(--warning); }
 .risk-fill.danger { background:var(--danger); }
 
-/* ── Stat rows ── */
-.info-row { display:flex; justify-content:space-between; padding:10px 16px; font-size:13px; border-bottom:1px solid var(--border); }
+.info-row { display:flex; justify-content:space-between; padding:10px 16px; border-bottom:1px solid var(--border); }
 .info-row:last-child { border-bottom:none; }
-.info-k { color:var(--text-sub); font-weight:500; }
-.info-v { font-weight:700; font-variant-numeric:tabular-nums; }
+.info-k { font-family:var(--font-mono); font-size:10px; text-transform:uppercase; letter-spacing:0.12em; color:var(--text-muted); }
+.info-v { font-family:var(--font-mono); font-weight:600; font-size:12.5px; font-variant-numeric:tabular-nums; }
 
-/* ── PnL bars ── */
-.pnl-section { padding:16px; border-top:1px solid var(--border); }
-.pnl-bar-row { display:flex; align-items:center; gap:8px; margin-bottom:6px; }
-.pnl-bar-date { font-size:11px; color:var(--text-sub); width:56px; flex-shrink:0; font-weight:600; }
-.pnl-bar-track { flex:1; height:18px; background:var(--bg-input); border-radius:4px; position:relative; overflow:hidden; }
-.pnl-bar-fill { position:absolute; top:0; bottom:0; border-radius:4px; min-width:2px; transition:width 0.4s; }
-.pnl-bar-fill.pos { background:var(--success-bg); left:50%; }
-.pnl-bar-fill.neg { background:var(--danger-bg); right:50%; }
-.pnl-bar-center { position:absolute; left:50%; top:0; bottom:0; width:1px; background:var(--border); }
-.pnl-bar-val { font-size:11px; width:56px; text-align:right; font-weight:700; font-variant-numeric:tabular-nums; flex-shrink:0; }
+/* ══ 每日盈亏 ══ */
+.pnl-section { padding:14px 16px; border-top:1px solid var(--border); }
+.pnl-bar-row { display:flex; align-items:center; gap:9px; margin-bottom:6px; }
+.pnl-bar-date { font-family:var(--font-mono); font-size:10px; color:var(--text-muted); width:52px; flex-shrink:0; }
+.pnl-bar-track { flex:1; height:14px; background:var(--bg-input); border-radius:3px; position:relative; overflow:hidden; }
+.pnl-bar-fill { position:absolute; top:0; bottom:0; border-radius:3px; min-width:2px; transition:width 0.4s; }
+.pnl-bar-fill.pos { background:var(--success); left:50%; }
+.pnl-bar-fill.neg { background:var(--danger); right:50%; }
+.pnl-bar-center { position:absolute; left:50%; top:0; bottom:0; width:1px; background:var(--border-strong); }
+.pnl-bar-val { font-family:var(--font-mono); font-size:10px; width:56px; text-align:right; font-weight:600; font-variant-numeric:tabular-nums; flex-shrink:0; }
 
-/* ── Log ── */
-.log-area { padding:12px; font-family:'SF Mono','Fira Code',monospace; font-size:11px; max-height:240px; overflow-y:auto; }
-.log-line { padding:2px 0; line-height:1.7; white-space:pre-wrap; word-break:break-all; }
+/* ══ 日志 ══ */
+.log-area { padding:12px 16px; font-family:var(--font-mono); font-size:11px; max-height:238px; overflow-y:auto; }
+.log-line { padding:1px 0; line-height:1.75; white-space:pre-wrap; word-break:break-all; }
 .log-ts { color:var(--text-muted); }
-.log-i { color:var(--primary); }
+.log-i { color:var(--text-sub); }
 .log-w { color:var(--warning); }
 .log-e { color:var(--danger); }
 .log-t { color:var(--success); }
 
-/* ── Tabs ── */
-.tab-bar { display:flex; gap:4px; margin-bottom:16px; }
+/* ══ Tabs ══ */
+.tab-bar { display:flex; gap:5px; }
 .tab-btn {
-  padding:7px 16px; border-radius:10px; border:none; cursor:pointer;
-  font-size:13px; font-weight:600; font-family:inherit;
-  background:transparent; color:var(--text-sub); transition:all 0.15s;
+  padding:5px 12px; border-radius:99px; border:1px solid transparent; cursor:pointer;
+  font-family:var(--font-mono); font-size:10.5px; text-transform:uppercase; letter-spacing:0.1em;
+  font-weight:600; background:transparent; color:var(--text-muted); transition:all 0.15s;
 }
-.tab-btn:hover { color:var(--text-main); background:var(--bg-input); }
-.tab-btn.active { background:var(--primary-dim); color:var(--primary); }
+.tab-btn:hover { color:var(--text-main); border-color:var(--border-strong); }
+.tab-btn.active { background:var(--primary); color:var(--on-primary); border-color:var(--primary); }
 .tab-panel { display:none; }
 .tab-panel.active { display:block; }
 
-/* ── Buttons ── */
-.btn { padding:10px 20px; border-radius:12px; border:none; font-weight:700; font-family:inherit; cursor:pointer; font-size:13px; transition:all 0.15s; }
-.btn-primary { background:var(--primary); color:#fff; }
-.btn-primary:hover { background:var(--primary-hover); transform:translateY(-1px); }
-.btn-outline { background:transparent; border:1px solid var(--border); color:var(--text-main); }
-.btn-outline:hover { border-color:var(--text-sub); background:var(--bg-input); }
-
-/* ── Strategy cards ── */
-.strat-grid { display:grid; grid-template-columns:1fr 1fr; gap:20px; }
-.cfg-group { margin-bottom:16px; }
-.cfg-label { display:block; font-size:11px; color:var(--text-sub); margin-bottom:6px; font-weight:700; text-transform:uppercase; letter-spacing:0.5px; }
-.cfg-input {
-  width:100%; padding:12px 14px; border-radius:12px; border:1px solid var(--border);
-  background:var(--bg-input); color:var(--text-main); font-weight:600;
-  font-size:14px; font-family:inherit; transition:border 0.2s,background 0.3s;
+/* ══ 按钮 ══ */
+.btn {
+  padding:9px 16px; border-radius:99px; border:1px solid transparent;
+  font-family:var(--font-mono); font-size:11px; text-transform:uppercase;
+  letter-spacing:0.1em; font-weight:700; cursor:pointer; transition:all 0.15s;
 }
-.cfg-input:focus { outline:none; border-color:var(--primary); }
-.cfg-msg { text-align:center; margin-top:10px; font-size:14px; font-weight:600; min-height:20px; }
-
-/* ── Market Toggles ── */
-.market-toggle {
-  display:flex; align-items:center; gap:12px; cursor:pointer;
-  padding:10px 14px; border-radius:12px; background:var(--bg-input);
-  transition:background 0.2s;
-}
-.market-toggle:hover { background:var(--bg-card-hover); }
-.market-toggle input { display:none; }
-.mt-slider {
-  width:44px; height:24px; background:var(--border); border-radius:12px;
-  position:relative; transition:background 0.3s; flex-shrink:0;
-}
-.mt-slider::after {
-  content:''; position:absolute; top:3px; left:3px; width:18px; height:18px;
-  background:#fff; border-radius:50%; transition:transform 0.2s; box-shadow:0 1px 3px rgba(0,0,0,0.2);
-}
-.market-toggle input:checked + .mt-slider { background:var(--success); }
-.market-toggle input:checked + .mt-slider::after { transform:translateX(20px); }
-.mt-label { font-weight:600; font-size:14px; }
-.mt-id { color:var(--text-sub); font-size:12px; font-weight:500; }
-
-/* ── Action Buttons ── */
-.btn-pause {
-  background:var(--warning); color:#fff; border:none; padding:12px 20px;
-  border-radius:12px; font-weight:700; font-family:inherit; cursor:pointer;
-  font-size:13px; transition:all 0.15s;
-}
-.btn-pause:hover { filter:brightness(0.9); transform:translateY(-1px); }
-.btn-pause.paused { background:var(--success); }
+.btn-primary { background:var(--primary); color:var(--on-primary); border-color:var(--primary); }
+.btn-primary:hover { background:var(--primary-hover); border-color:var(--primary-hover); }
+.btn-outline { background:transparent; border-color:var(--border-strong); color:var(--text-main); }
+.btn-outline:hover { border-color:var(--primary); background:var(--bg-strip); }
+.btn-pause { background:var(--warning-bg); color:var(--warning); border:1px solid var(--warning); padding:9px 16px; border-radius:99px; font-family:var(--font-mono); font-size:11px; text-transform:uppercase; letter-spacing:0.1em; font-weight:700; cursor:pointer; transition:all 0.15s; }
+.btn-pause:hover { background:var(--warning); color:var(--bg-card); }
+.btn-pause.paused { background:var(--success-bg); color:var(--success); border-color:var(--success); }
+.btn-pause.paused:hover { background:var(--success); color:var(--bg-card); }
 .btn-danger-outline { border-color:var(--danger) !important; color:var(--danger) !important; }
 .btn-danger-outline:hover { background:var(--danger-bg) !important; }
 
-/* ── Settings ── */
-.settings-grid { display:grid; grid-template-columns:1fr 1fr; gap:20px; }
-
-/* ── History filter ── */
-.filter-bar { display:flex; gap:12px; align-items:center; margin-bottom:20px; }
-.filter-search-wrap { flex:1; position:relative; }
-.filter-search-wrap svg { position:absolute; left:14px; top:50%; transform:translateY(-50%); color:var(--text-muted); width:16px; height:16px; }
-.filter-search {
-  width:100%; padding:10px 14px 10px 40px; border-radius:12px;
-  border:1px solid var(--border); background:var(--bg-input);
-  color:var(--text-main); font-size:13px; font-family:inherit; transition:border 0.2s,background 0.3s;
+/* ══ 表单 ══ */
+.cfg-group, .form-group { margin-bottom:13px; }
+.cfg-label, .form-label { display:block; font-family:var(--font-mono); font-size:10px; color:var(--text-muted); margin-bottom:6px; font-weight:500; text-transform:uppercase; letter-spacing:0.12em; }
+.cfg-input, .form-input {
+  width:100%; padding:10px 12px; border-radius:var(--radius-sm); border:1px solid var(--border-strong);
+  background:var(--bg-input); color:var(--text-main); font-weight:500; font-size:13px;
+  font-family:var(--font-mono); font-variant-numeric:tabular-nums; transition:border 0.2s, background 0.2s;
 }
+.cfg-input:focus, .form-input:focus { outline:none; border-color:var(--primary); background:var(--bg-card); }
+.cfg-msg { text-align:center; margin-top:10px; font-family:var(--font-mono); font-size:11px; min-height:18px; }
+
+.market-toggle { display:flex; align-items:center; gap:12px; cursor:pointer; padding:10px 13px; border-radius:var(--radius-sm); background:var(--bg-strip); border:1px solid transparent; transition:all 0.2s; }
+.market-toggle:hover { border-color:var(--border-strong); }
+.market-toggle input { display:none; }
+.mt-slider { width:36px; height:20px; background:var(--border-strong); border-radius:99px; position:relative; transition:background 0.25s; flex-shrink:0; }
+.mt-slider::after { content:''; position:absolute; top:2.5px; left:2.5px; width:15px; height:15px; background:var(--bg-card); border-radius:50%; transition:transform 0.2s; }
+.market-toggle input:checked + .mt-slider { background:var(--primary); }
+.market-toggle input:checked + .mt-slider::after { transform:translateX(16px); }
+.mt-label { font-family:var(--font-mono); font-weight:700; font-size:12.5px; letter-spacing:0.05em; }
+.mt-id { color:var(--text-muted); font-family:var(--font-mono); font-size:10px; }
+
+/* ══ 其它页面的栅格 ══ */
+.stats-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:1px; background:var(--border); border:1px solid var(--border); border-radius:var(--radius-lg); overflow:hidden; margin-bottom:12px; }
+.strat-grid, .settings-grid { display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:12px; }
+.stats-grid > .card { border:none; border-radius:0; }
+.stat-card { display:flex; align-items:center; gap:13px; }
+.stat-icon { width:38px; height:38px; background:var(--bg-strip); border-radius:var(--radius-sm); display:flex; align-items:center; justify-content:center; color:var(--text-sub); flex-shrink:0; }
+.stat-icon svg { width:17px; height:17px; }
+.stat-info .label { font-family:var(--font-mono); font-size:10px; text-transform:uppercase; letter-spacing:0.12em; color:var(--text-muted); }
+.stat-info .value { font-size:21px; font-weight:700; font-variant-numeric:tabular-nums; letter-spacing:-0.02em; margin-top:2px; }
+
+/* ══ 历史筛选 ══ */
+.filter-bar { display:flex; gap:10px; align-items:center; margin-bottom:14px; }
+.filter-search-wrap { flex:1; position:relative; }
+.filter-search-wrap svg { position:absolute; left:12px; top:50%; transform:translateY(-50%); color:var(--text-muted); width:14px; height:14px; }
+.filter-search { width:100%; padding:9px 12px 9px 34px; border-radius:99px; border:1px solid var(--border-strong); background:var(--bg-card); color:var(--text-main); font-size:12.5px; font-family:var(--font-mono); }
 .filter-search:focus { outline:none; border-color:var(--primary); }
 .filter-search::placeholder { color:var(--text-muted); }
-.filter-group { display:flex; gap:6px; }
-.fpill {
-  padding:7px 14px; border-radius:10px; border:1px solid var(--border);
-  background:transparent; color:var(--text-sub); font-size:12px;
-  font-weight:600; font-family:inherit; cursor:pointer; transition:all 0.15s;
+.filter-group { display:flex; gap:5px; }
+.fpill { padding:6px 12px; border-radius:99px; border:1px solid var(--border-strong); background:transparent; color:var(--text-sub); font-family:var(--font-mono); font-size:10px; text-transform:uppercase; letter-spacing:0.1em; font-weight:600; cursor:pointer; transition:all 0.15s; }
+.fpill:hover { color:var(--text-main); }
+.fpill.active { background:var(--primary); border-color:var(--primary); color:var(--on-primary); }
+
+/* ══ 通知面板 ══ */
+.notif-panel { display:none; position:absolute; top:46px; right:16px; width:330px; background:var(--bg-card); border:1px solid var(--border-strong); border-radius:var(--radius-md); box-shadow:0 12px 30px rgba(0,0,0,0.12); z-index:100; max-height:380px; overflow-y:auto; }
+.notif-panel.show { display:block; }
+.notif-header { padding:12px 15px; border-bottom:1px solid var(--border); font-family:var(--font-mono); font-size:10.5px; text-transform:uppercase; letter-spacing:0.12em; font-weight:700; display:flex; justify-content:space-between; align-items:center; }
+.notif-clear { font-family:var(--font-mono); font-size:10px; text-transform:uppercase; letter-spacing:0.1em; color:var(--text-sub); cursor:pointer; border:1px solid var(--border-strong); background:none; padding:3px 8px; border-radius:99px; }
+.notif-item { padding:11px 15px; border-bottom:1px solid var(--border); font-size:12.5px; display:flex; gap:10px; align-items:flex-start; }
+.notif-icon { width:24px; height:24px; border-radius:99px; display:flex; align-items:center; justify-content:center; flex-shrink:0; font-size:12px; }
+.notif-icon.trade { background:var(--success-bg); color:var(--success); }
+.notif-icon.warn { background:var(--warning-bg); color:var(--warning); }
+.notif-icon.err { background:var(--danger-bg); color:var(--danger); }
+.notif-text { flex:1; }
+.notif-text .notif-time { color:var(--text-muted); font-family:var(--font-mono); font-size:10px; margin-top:2px; }
+.notif-empty { padding:28px; text-align:center; color:var(--text-muted); font-family:var(--font-mono); font-size:10.5px; text-transform:uppercase; letter-spacing:0.11em; }
+
+/* ══ 离线条 ══ */
+#ws-offline { position:fixed; top:0; left:0; right:0; background:var(--danger); color:#fff; text-align:center; padding:6px; font-family:var(--font-mono); font-size:10.5px; text-transform:uppercase; letter-spacing:0.12em; z-index:1000; display:none; }
+
+/* ══ 响应式 ══ */
+@media (max-width:1080px) {
+  .hero-row, .duo { grid-template-columns:1fr; }
+  .loop-stage { height:216px; }
+  .event-stream-section > .sec-body { min-height:0; }
+  .event-stream-section .rail { position:static; max-height:360px; min-height:0; }
 }
-.fpill:hover { border-color:var(--text-sub); color:var(--text-main); }
-.fpill.active { background:var(--primary); border-color:var(--primary); color:#fff; }
-
-/* ── WS offline bar ── */
-#ws-offline { position:fixed; top:0; left:0; right:0; background:var(--danger); color:#fff; text-align:center; padding:6px; font-size:12px; font-weight:600; z-index:1000; display:none; }
-
-/* ── Responsive ── */
-@media (max-width:1280px) {
+@media (max-width:900px) {
+  .swarm-grid { grid-template-columns:1fr; }
   .stats-grid { grid-template-columns:repeat(2,1fr); }
-  .charts-grid { grid-template-columns:1fr; }
-  .bottom-grid { grid-template-columns:1fr; }
-  .strat-grid { grid-template-columns:1fr; }
-  .settings-grid { grid-template-columns:1fr; }
+  .strat-grid, .settings-grid { grid-template-columns:1fr; }
+  /* 环形在窄屏会重叠，退化成竖排 */
+  .loop-stage { height:auto; display:flex; flex-direction:column; gap:9px; }
+  .loop-orbit, .loop-center { display:none; }
+  .loop-node, .loop-n-top, .loop-n-bottom, .loop-n-left, .loop-n-right { position:static; transform:none; width:100%; }
 }
-@media (max-width:768px) {
-  aside { display:none; }
-  main { margin-left:0; }
+@media (max-width:680px) {
+  main { padding:12px 12px 0; }
+  .brand-title { font-size:21px; white-space:normal; }
+  .hero-value { font-size:42px; }
+  .runcard-big { font-size:32px; }
   .stats-grid { grid-template-columns:1fr; }
+  .search-wrap { display:none; }
 }
 </style>
 </head>
 <body>
 
-<div id="ws-offline">⚡ Connection lost. Reconnecting...</div>
+<!-- 成交闪现：只有 trade_history 真的新增记录时才出现 -->
+<div id="fill-toasts" class="toasts"></div>
 
-<!-- ═══ SIDEBAR ═══ -->
-<aside>
-  <div class="logo">
-    <div class="logo-icon"><i data-lucide="zap"></i></div>
-    Lighter Bot
-  </div>
-  <ul class="nav-links">
-    <li><a href="#" class="nav-item active" data-page="dashboard"><i data-lucide="layout-dashboard"></i> <span data-i18n="dashboard">Dashboard</span></a></li>
-    <li><a href="#" class="nav-item" data-page="strategies"><i data-lucide="trending-up"></i> <span data-i18n="strategies">Strategies</span></a></li>
-    <li><a href="#" class="nav-item" data-page="portfolio"><i data-lucide="wallet"></i> <span data-i18n="portfolio">Portfolio</span></a></li>
-    <li><a href="#" class="nav-item" data-page="history"><i data-lucide="clock"></i> <span data-i18n="history">History</span></a></li>
-    <li><a href="#" class="nav-item" data-page="settings"><i data-lucide="settings"></i> <span data-i18n="settings">Settings</span></a></li>
-  </ul>
-  <div style="padding:0 24px; margin-bottom:16px;">
-    <a href="/ai" class="sb-ailab"><i data-lucide="sparkles"></i> AI Strategy Lab</a>
-  </div>
-  <div class="sb-footer">
-    <div class="sb-status">
-      <span class="sb-dot" id="status-dot"></span>
-      <span id="status-label">Connecting...</span>
-      <span style="margin-left:auto; font-family:monospace;" id="clock">--:--</span>
-    </div>
-  </div>
-</aside>
+<div id="ws-offline">Connection lost. Reconnecting...</div>
 
-<!-- ═══ MAIN ═══ -->
+<!-- ═══ 头部卡 ═══
+     参考稿没有侧栏，整页是单栏纵向堆叠，所以导航并进头部卡的第二条 strip，
+     用的是区块卡同一套 header-strip 语言。.nav-item 的 class 和 data-page
+     原样保留 —— app.js 靠它们切页。 -->
 <main>
   <div class="topbar">
-    <div class="breadcrumb">Pages / <span id="current-page-title">Dashboard</span></div>
-    <div class="topnav">
-      <div class="search-wrap">
-        <i data-lucide="search" style="width:16px;height:16px;"></i>
-        <input type="text" placeholder="Search..." id="global-search">
+    <div class="tb-main">
+      <div class="logo">
+        <div class="logo-icon"><i data-lucide="zap"></i></div>
+        <div class="breadcrumb">
+          <span class="kicker" data-i18n="brandKicker">WS IN · ORDERS OUT · TWO CONTROL LOOPS</span>
+          <div class="brand-title">Lighter Bot<em> · quant engine</em></div>
+        </div>
       </div>
-      <button class="topnav-btn" id="btn-notif" title="Notifications">
-        <i data-lucide="bell"></i>
-        <span class="notif-dot" id="notif-dot" style="display:none"></span>
-      </button>
-      <button class="topnav-btn" id="btn-theme" title="Toggle dark/light mode">
-        <i data-lucide="moon" id="theme-icon"></i>
-      </button>
-      <button class="topnav-btn" id="btn-lang" title="切换语言 / Switch language">
-        <span style="font-size:13px;font-weight:700;" id="lang-label">EN</span>
-      </button>
-      <!-- Notification Panel -->
-      <div class="notif-panel" id="notif-panel">
-        <div class="notif-header"><span>Notifications</span><button class="notif-clear" id="notif-clear">Clear all</button></div>
-        <div id="notif-list"><div class="notif-empty">No notifications yet</div></div>
+      <div class="tb-right">
+        <span class="pill"><span class="sb-dot" id="status-dot"></span><span id="status-label">Connecting...</span></span>
+        <span class="pill" id="loop-tick">IDLE</span>
       </div>
     </div>
+
+    <div class="tb-nav">
+      <ul class="nav-links">
+        <li><a href="#" class="nav-item active" data-page="dashboard"><i data-lucide="layout-dashboard"></i> <span data-i18n="dashboard">Dashboard</span></a></li>
+        <li><a href="#" class="nav-item" data-page="strategies"><i data-lucide="trending-up"></i> <span data-i18n="strategies">Strategies</span></a></li>
+        <li><a href="#" class="nav-item" data-page="portfolio"><i data-lucide="wallet"></i> <span data-i18n="portfolio">Portfolio</span></a></li>
+        <li><a href="#" class="nav-item" data-page="history"><i data-lucide="clock"></i> <span data-i18n="history">History</span></a></li>
+        <li><a href="#" class="nav-item" data-page="settings"><i data-lucide="settings"></i> <span data-i18n="settings">Settings</span></a></li>
+      </ul>
+      <a href="/ai" class="nav-item"><i data-lucide="sparkles"></i> <span>AI Lab</span></a>
+      <span class="nav-spacer"></span>
+      <div class="topnav">
+        <div class="search-wrap">
+          <i data-lucide="search"></i>
+          <input type="text" placeholder="Search..." id="global-search">
+        </div>
+        <button class="topnav-btn" id="btn-notif" title="Notifications">
+          <i data-lucide="bell"></i>
+          <span class="notif-dot" id="notif-dot" style="display:none"></span>
+        </button>
+        <button class="topnav-btn" id="btn-theme" title="Toggle dark/light mode">
+          <i data-lucide="moon" id="theme-icon"></i>
+        </button>
+        <button class="topnav-btn" id="btn-lang" title="切换语言 / Switch language">
+          <span style="font-size:12px;font-weight:700;font-family:var(--font-mono);" id="lang-label">EN</span>
+        </button>
+      </div>
+    </div>
+    <div class="notif-panel" id="notif-panel">
+      <div class="notif-header"><span>Notifications</span><button class="notif-clear" id="notif-clear">Clear all</button></div>
+      <div id="notif-list"><div class="notif-empty">No notifications yet</div></div>
+    </div>
   </div>
+
+  <!-- app.js 会往这两个 id 写值；参考稿的头部没有它们的位置，放进不占版面的隐藏节点，
+       这样切页标题和时钟逻辑不用改，也不会在 UI 上多出一块 -->
+  <span id="current-page-title" hidden></span><span id="clock" hidden></span>
 
   <!-- ═══ DASHBOARD PAGE ═══ -->
   <div id="page-dashboard" class="page active">
-    <div class="stats-grid">
-      <div class="card stat-card">
-        <div class="stat-icon"><i data-lucide="bar-chart-3"></i></div>
-        <div class="stat-info"><div class="label" data-i18n="equity">Equity</div><div class="value" id="mc-equity">$0.00</div></div>
+
+    <!-- ═══ 第一排：锚点黑卡 + 收益卡 ═══ 对应参考稿的 TOTAL PNL / TOP RUNS -->
+    <div class="hero-row">
+      <div class="console">
+        <div>
+          <div class="con-bar">
+            <span class="hero-kicker"><span class="sb-dot" id="hero-dot"></span> <span data-i18n="equity">Equity</span> · LIVE</span>
+            <span class="hero-chip solid" id="hero-strategy">—</span>
+            <span class="con-spacer"></span>
+            <span class="hero-chip" id="hero-markets">—</span>
+          </div>
+          <div class="con-num">
+            <div class="hero-value" id="mc-equity">$0.00</div>
+            <div class="hero-delta"><b id="mc-daily" class="value">$0.00</b> <span data-i18n="today">today</span></div>
+          </div>
+        </div>
+        <div class="con-stats">
+          <!-- status.total_trades 是**下单次数**不是成交数；成交与胜率由后两格从 trade_history 现算 -->
+          <span class="con-stat"><b id="hero-placed">—</b><i data-i18n="ordersPlaced">orders placed</i></span>
+          <span class="con-stat"><b id="hero-fills">—</b><i data-i18n="fillsCapped">fills (last 200)</i></span>
+          <span class="con-stat"><b id="hero-wr">—</b><i data-i18n="winRate">WR</i></span>
+          <span class="con-stat"><span id="mc-upnl" class="value">$0.00</span><i data-i18n="unrealizedPnl">unrealized</i></span>
+          <span class="con-stat"><b id="since-fill">—</b><i data-i18n="sinceFill">since last fill</i></span>
+          <span class="con-stat"><b id="hero-age">—</b><i data-i18n="lastPush">last push</i><span id="hero-paused"></span></span>
+        </div>
       </div>
-      <div class="card stat-card">
-        <div class="stat-icon" style="color:var(--success);"><i data-lucide="trending-up"></i></div>
-        <div class="stat-info"><div class="label" data-i18n="unrealizedPnl">Unrealized P&amp;L</div><div class="value" id="mc-upnl">$0.00</div></div>
-      </div>
-      <div class="card stat-card">
-        <div class="stat-icon" style="color:var(--warning);"><i data-lucide="calendar"></i></div>
-        <div class="stat-info"><div class="label" data-i18n="dailyPnl">Daily P&amp;L</div><div class="value" id="mc-daily">$0.00</div></div>
-      </div>
-      <div class="card stat-card">
-        <div class="stat-icon" style="color:var(--primary);"><i data-lucide="sigma"></i></div>
-        <div class="stat-info"><div class="label" data-i18n="totalPnl">Total P&amp;L</div><div class="value" id="mc-total">$0.00</div></div>
+
+      <div class="sec runcard" style="margin-bottom:0;">
+        <div class="sec-head">
+          <div>
+            <div class="kicker" data-i18n="totalReturn">★ TOTAL RETURN · SINCE INCEPTION</div>
+          </div>
+          <span class="kicker" id="run-src">—</span>
+        </div>
+        <div class="runcard-body">
+          <div class="run-top">
+            <div class="runcard-big" id="run-ret">—</div>
+            <div class="run-side c-up" id="mc-total">$0.00</div>
+          </div>
+          <!-- 行情：mark_price / 盘口中间价每帧都在变，是页面上唯一持续跳动的真实数字 -->
+          <div class="tape-live" id="tape"><div class="tape-idle" data-i18n="tapeIdle">WAITING FOR MARKET DATA</div></div>
+          <div class="run-legs">
+            <div class="run-leg"><span class="kicker" data-i18n="initial">INITIAL</span><b id="run-base">—</b></div>
+            <div class="run-leg"><span class="kicker" data-i18n="peakEquity">PEAK</span><b id="s-peak">—</b></div>
+            <div class="run-leg"><span class="kicker" data-i18n="available">AVAILABLE</span><b id="s-avail">—</b></div>
+          </div>
+          <div class="spark-wrap">
+            <canvas id="sparkChart"></canvas>
+            <div class="spark-empty" id="spark-empty">NO EQUITY HISTORY</div>
+          </div>
+          <!-- 参考稿底部那排小横杠，这里当净值曲线的区间选择器 -->
+          <div class="range-group" id="eq-range-group">
+            <button class="range-btn active" data-range="all" title="ALL">ALL</button>
+            <button class="range-btn" data-range="30d" title="30D">30D</button>
+            <button class="range-btn" data-range="7d" title="7D">7D</button>
+            <button class="range-btn" data-range="24h" title="24H">24H</button>
+          </div>
+        </div>
       </div>
     </div>
 
-    <div class="charts-grid">
-      <div class="card">
-        <div class="card-header">
-          <div class="card-title" data-i18n="equityCurve">Equity Curve</div>
-          <div class="chart-toolbar">
-            <div class="range-group" id="eq-range-group">
-              <button class="range-btn active" data-range="all">ALL</button>
-              <button class="range-btn" data-range="30d">30D</button>
-              <button class="range-btn" data-range="7d">7D</button>
-              <button class="range-btn" data-range="24h">24H</button>
+    <!-- ═══ THE LOOP ═══
+         机器人有两条独立的下单回路（WS 主循环 + 10s 刷新任务）。这张图不是装饰：
+         每个节点的亮灭都由底部条里写明的真实 WS 事件触发，没有计时器驱动的假动画。 -->
+    <div class="sec" id="loop-card">
+      <div class="sec-head">
+        <div>
+          <div class="kicker" data-i18n="loopKicker">TWO CONTROL LOOPS · WS MAIN + 10S REFRESH</div>
+          <div class="sec-title" data-i18n="theLoop">THE LOOP</div>
+        </div>
+        <span class="pill solid" id="loop-sub">WAITING FOR WS</span>
+      </div>
+      <div class="sec-body dotted">
+        <div class="loop-stage">
+          <svg class="loop-orbit" viewBox="0 0 900 242" preserveAspectRatio="none" aria-hidden="true">
+            <!-- 椭圆的四个极点正好落在四个节点的中心：
+                 侧节点宽 158、贴左右边 → 中心 x=79 / 821；上下节点高 ~48、贴上下边 → 中心 y=24 / 218。
+                 于是 cx=450 cy=121 rx=371 ry=97。 -->
+            <path id="loop-path" d="M 450,24 A 371,97 0 0,1 821,121 A 371,97 0 0,1 450,218 A 371,97 0 0,1 79,121 A 371,97 0 0,1 450,24"
+                  fill="none" stroke="currentColor" stroke-width="2.5" stroke-dasharray="10 10" opacity="0.55"/>
+            <!-- 四个箭头，指示环的运行方向（顺时针） -->
+            <g fill="currentColor" opacity="0.34">
+              <path d="M -7,-6 L 7,0 L -7,6 Z" transform="translate(265,38) rotate(-36)"/>
+              <path d="M -7,-6 L 7,0 L -7,6 Z" transform="translate(635,38) rotate(36)"/>
+              <path d="M -7,-6 L 7,0 L -7,6 Z" transform="translate(635,204) rotate(144)"/>
+              <path d="M -7,-6 L 7,0 L -7,6 Z" transform="translate(265,204) rotate(216)"/>
+            </g>
+            <circle class="loop-dot" r="7" fill="currentColor">
+              <!-- dur 与服务端 /ws 推送周期一致（tokio interval 3s），一圈正好一帧 -->
+              <animateMotion id="loop-motion" dur="3s" begin="indefinite" repeatCount="indefinite">
+                <mpath href="#loop-path"/>
+              </animateMotion>
+            </circle>
+          </svg>
+          <div class="loop-center">
+            <div class="loop-center-word">LOOP</div>
+            <div class="loop-center-sub" id="loop-rev">REV 0</div>
+          </div>
+          <div class="loop-node loop-n-top" id="loop-n-push"><b>PUSH</b><span>state 3s</span></div>
+          <div class="loop-node loop-n-right" id="loop-n-risk"><b>RISK</b><span>drawdown gate</span></div>
+          <div class="loop-node loop-n-bottom" id="loop-n-order"><b>ORDER</b><span>open orders</span></div>
+          <div class="loop-node loop-n-left" id="loop-n-fill"><b>FILL</b><span>trade history</span></div>
+        </div>
+      </div>
+      <div class="sec-foot">
+        <div><b>PUSH</b> <span data-i18n="legendPush">on every /ws state frame</span> · <b>RISK</b> <span data-i18n="legendRisk">drawdown / daily-loss figures change</span> · <b>ORDER</b> <span data-i18n="legendOrder">open-order count changes</span> · <b>FILL</b> <span data-i18n="legendFill">trade_history gains a record</span></div>
+        <div data-i18n="legendDot">ONE LAP = ONE /WS FRAME (3S)</div>
+      </div>
+    </div>
+
+    <!-- ═══ 两列：风控状态 + 净值曲线 ═══
+         对应参考稿的 HIDDEN STATE GRAPH / PROBABILITY TREE 两格。
+         参考稿那两块背后是模型内部状态，本项目没有对应数据源，所以换成两个真实读数，
+         而不是照搬形状再填假概率。 -->
+    <div class="duo">
+      <div class="sec">
+        <div class="sec-head">
+          <div>
+            <div class="kicker" data-i18n="riskKicker">HOW MUCH ROOM IS LEFT</div>
+            <div class="sec-title" data-i18n="riskMonitor">RISK STATE</div>
+          </div>
+          <span class="pill" data-i18n="refreshLoop">LIVE · 10S REFRESH</span>
+        </div>
+        <div class="sec-body dotted">
+          <!-- 每个气泡按**各自的上限**取比例，不是三者凑成 100%：
+               回撤上限 15%、日亏上限 8% 不是同一个整体的两部分，凑成一个圆会说谎。 -->
+          <div class="bub-wrap">
+            <div class="bub plain"><div class="bub-circle" id="bub-dd"><span class="bub-k">DD</span><span class="bub-v" id="r-dd">0.0%</span></div><div class="bub-cap" id="bub-dd-cap">—</div></div>
+            <div class="bub plain"><div class="bub-circle" id="bub-dl"><span class="bub-k">DAILY</span><span class="bub-v" id="r-dl">0.0%</span></div><div class="bub-cap" id="bub-dl-cap">—</div></div>
+            <div class="bub primary"><div class="bub-circle" id="bub-hr"><span class="bub-k" data-i18n="headroom">HEADROOM</span><span class="bub-v" id="bub-hr-v">—</span></div><div class="bub-cap" data-i18n="headroomCap">LOWEST REMAINING MARGIN</div></div>
+          </div>
+        </div>
+        <div class="sec-foot">
+          <div style="flex:1;min-width:220px;">
+            <div class="risk-item">
+              <div class="risk-labels"><span class="risk-k" data-i18n="maxDrawdown">Max Drawdown</span><span class="risk-v" id="r-dd-echo">—</span></div>
+              <div class="risk-bar"><div class="risk-fill ok" id="r-dd-bar" style="width:0%"></div></div>
             </div>
-            <span style="font-size:12px;color:var(--text-sub);font-family:monospace;" id="chart-info">—</span>
+            <div class="risk-item">
+              <div class="risk-labels"><span class="risk-k" data-i18n="dailyLoss">Daily Loss</span><span class="risk-v" id="r-dl-echo">—</span></div>
+              <div class="risk-bar"><div class="risk-fill ok" id="r-dl-bar" style="width:0%"></div></div>
+            </div>
           </div>
         </div>
-        <div style="height:300px;"><canvas id="equityChart"></canvas></div>
       </div>
-      <div class="card">
-        <div class="card-header"><div class="card-title" data-i18n="weeklyPnl">Weekly P&amp;L</div></div>
-        <div style="height:300px;"><canvas id="revenueChart"></canvas></div>
+
+      <div class="sec">
+        <div class="sec-head">
+          <div>
+            <div class="kicker" id="chart-info">—</div>
+            <div class="sec-title" data-i18n="equityCurve">EQUITY CURVE</div>
+          </div>
+        </div>
+        <div class="sec-body chart"><canvas id="equityChart"></canvas></div>
+        <div class="sec-foot">
+          <div data-i18n="equityFootL">EVERY POINT IS A /API/PNL SNAPSHOT</div>
+          <div data-i18n="equityFootR">RANGE SET ON THE RETURN CARD</div>
+        </div>
       </div>
     </div>
 
-    <div class="bottom-grid">
-      <!-- Positions / Orders / Trades / Log tabs -->
-      <div class="card" style="padding:0; overflow:hidden;">
-        <div style="padding:16px 20px; display:flex; align-items:center; justify-content:space-between; border-bottom:1px solid var(--border);">
-          <div class="tab-bar" id="btm-tabs" style="margin-bottom:0;">
-            <button class="tab-btn active" data-t="positions" data-i18n="positions">Positions</button>
-            <button class="tab-btn" data-t="orders" data-i18n="orders">Orders</button>
-            <button class="tab-btn" data-t="trades" data-i18n="trades">Trades</button>
-            <button class="tab-btn" data-t="log" data-i18n="log">Log</button>
+    <!-- ═══ 挂单栅格 ═══ 对应参考稿的 THE SWARM：同样的卡片规格，格子里是真实挂单 -->
+    <div class="sec">
+      <div class="sec-head">
+        <div>
+          <div class="kicker" data-i18n="ordersKicker">EVERY CELL IS A RESTING ORDER · LIVE FROM /WS</div>
+          <div class="sec-title" data-i18n="openOrders">THE BOOK</div>
+        </div>
+        <span class="pill solid"><span id="swarm-count">0</span> <span data-i18n="orders">ORDERS</span></span>
+      </div>
+      <div class="sec-body dotted">
+        <div class="swarm-grid" id="swarm-grid">
+          <div class="swarm-empty">NO OPEN ORDERS</div>
+        </div>
+      </div>
+      <div class="sec-foot">
+        <div id="swarm-latest" data-i18n="swarmFootL">NEAREST TO MARKET IS INVERTED</div>
+        <div><span id="s-orders-label">0 open orders</span> · <span data-i18n="swarmFootR">FILL BAR = FILLED / QUANTITY</span></div>
+      </div>
+    </div>
+
+    <!-- ═══ 事件流 + 持仓/成交/日志 ═══
+         参考稿没有这两块的位置，但它们是这台机器真实存在的功能，
+         所以接在参考稿的堆叠之后，用完全相同的区块卡语言。 -->
+    <div class="duo">
+      <div class="sec event-stream-section">
+        <div class="sec-head">
+          <div>
+            <div class="kicker" data-i18n="railKicker">REAL EVENTS ONLY · NEWEST FIRST</div>
+            <div class="sec-title" data-i18n="eventLog">EVENT LOG</div>
           </div>
-          <span style="font-size:12px;color:var(--text-sub);font-weight:600;" id="s-orders-label">0 open orders</span>
         </div>
-        <div id="tp-positions" class="tab-panel active" style="max-height:360px;overflow-y:auto;">
-          <table><thead><tr><th data-i18n="market">Market</th><th data-i18n="side">Side</th><th data-i18n="size">Size</th><th data-i18n="entry">Entry</th><th data-i18n="mark">Mark</th><th class="td-r" data-i18n="unrealizedPnl">Unrealized P&amp;L</th></tr></thead>
-          <tbody id="pos-tbody"><tr><td colspan="6" class="empty-cell" data-i18n="noPositions">No active positions</td></tr></tbody></table>
-        </div>
-        <div id="tp-orders" class="tab-panel" style="max-height:360px;overflow-y:auto;">
-          <table><thead><tr><th>ID</th><th>Market</th><th>Side</th><th>Price</th><th>Qty</th><th>Filled</th><th>Status</th></tr></thead>
-          <tbody id="ord-tbody"><tr><td colspan="7" class="empty-cell">No open orders</td></tr></tbody></table>
-        </div>
-        <div id="tp-trades" class="tab-panel" style="max-height:360px;overflow-y:auto;">
-          <table><thead><tr><th>Time</th><th>Market</th><th>Action</th><th>Side</th><th>Price</th><th>Qty</th><th class="td-r">P&amp;L</th></tr></thead>
-          <tbody id="trd-tbody"><tr><td colspan="7" class="empty-cell">No trades yet</td></tr></tbody></table>
-        </div>
-        <div id="tp-log" class="tab-panel">
-          <div class="log-area" id="log-box"></div>
+        <div class="sec-body">
+          <div class="rail" id="rail"><div class="rail-empty" data-i18n="railEmpty">NO EVENTS THIS SESSION</div></div>
         </div>
       </div>
 
-      <!-- Risk + PnL History -->
-      <div class="card" style="padding:0; overflow:hidden;">
-        <div style="padding:12px 16px; display:flex; align-items:center; justify-content:space-between; border-bottom:1px solid var(--border);">
-          <span style="font-size:14px; font-weight:700;" data-i18n="riskMonitor">Risk Monitor</span>
-          <span style="font-size:12px;color:var(--text-sub);font-weight:600;">Dashboard Lite</span>
-        </div>
-        <div class="risk-section" style="border-top:none;">
-          <div class="risk-title" data-i18n="riskMonitor">Risk Monitor</div>
-          <div class="risk-item">
-            <div class="risk-labels"><span class="risk-k" data-i18n="maxDrawdown">Max Drawdown</span><span class="risk-v" id="r-dd">0.0%</span></div>
-            <div class="risk-bar"><div class="risk-fill ok" id="r-dd-bar" style="width:0%"></div></div>
-          </div>
-          <div class="risk-item">
-            <div class="risk-labels"><span class="risk-k" data-i18n="dailyLoss">Daily Loss</span><span class="risk-v" id="r-dl">0.0%</span></div>
-            <div class="risk-bar"><div class="risk-fill ok" id="r-dl-bar" style="width:0%"></div></div>
+      <div class="sec">
+        <div class="sec-head">
+          <div>
+            <div class="kicker" data-i18n="thisWeek">THIS WEEK · REALISED</div>
+            <div class="sec-title" data-i18n="weeklyPnl">WEEKLY P&amp;L</div>
           </div>
         </div>
-        <div class="info-row"><span class="info-k" data-i18n="available">Available</span><span class="info-v" id="s-avail">—</span></div>
-        <div class="info-row"><span class="info-k" data-i18n="peakEquity">Peak Equity</span><span class="info-v" id="s-peak">—</span></div>
-        <div class="info-row"><span class="info-k" data-i18n="openOrders">Open Orders</span><span class="info-v" id="s-orders">0</span></div>
+        <div class="sec-body chart" style="height:190px;"><canvas id="revenueChart"></canvas></div>
         <div class="pnl-section">
-          <div class="risk-title" data-i18n="dailyPnlHistory">Daily P&amp;L History</div>
+          <div class="risk-title" data-i18n="dailyPnlHistory">DAILY P&amp;L HISTORY</div>
           <div id="pnl-history"><div class="notif-empty">Loading...</div></div>
         </div>
       </div>
     </div>
-  </div>
 
+    <div class="sec">
+      <div class="sec-head" style="align-items:center;">
+        <div class="tab-bar" id="btm-tabs">
+          <button class="tab-btn active" data-t="positions" data-i18n="positions">Positions</button>
+          <button class="tab-btn" data-t="orders" data-i18n="orders">Orders</button>
+          <button class="tab-btn" data-t="trades" data-i18n="trades">Trades</button>
+          <button class="tab-btn" data-t="log" data-i18n="log">Log</button>
+        </div>
+        <span class="kicker"><span id="s-orders">0</span> <span data-i18n="openOrders">open orders</span></span>
+      </div>
+      <div id="tp-positions" class="tab-panel active" style="max-height:320px;overflow-y:auto;">
+        <table><thead><tr><th data-i18n="market">Market</th><th data-i18n="side">Side</th><th data-i18n="size">Size</th><th data-i18n="entry">Entry</th><th data-i18n="mark">Mark</th><th class="td-r" data-i18n="unrealizedPnl">Unrealized P&amp;L</th></tr></thead>
+        <tbody id="pos-tbody"><tr><td colspan="6" class="empty-cell" data-i18n="noPositions">No active positions</td></tr></tbody></table>
+      </div>
+      <div id="tp-orders" class="tab-panel" style="max-height:320px;overflow-y:auto;">
+        <table><thead><tr><th>ID</th><th>Market</th><th>Side</th><th>Price</th><th>Qty</th><th>Filled</th><th>Status</th></tr></thead>
+        <tbody id="ord-tbody"><tr><td colspan="7" class="empty-cell">No open orders</td></tr></tbody></table>
+      </div>
+      <div id="tp-trades" class="tab-panel" style="max-height:320px;overflow-y:auto;">
+        <table><thead><tr><th>Time</th><th>Market</th><th>Action</th><th>Side</th><th>Price</th><th>Qty</th><th class="td-r">P&amp;L</th></tr></thead>
+        <tbody id="trd-tbody"><tr><td colspan="7" class="empty-cell">No trades yet</td></tr></tbody></table>
+      </div>
+      <div id="tp-log" class="tab-panel">
+        <div class="log-area" id="log-box"></div>
+      </div>
+    </div>
+  </div>
   <!-- ═══ STRATEGIES PAGE ═══ -->
   <div id="page-strategies" class="page">
     <!-- Trading Controls Card -->
@@ -658,9 +1047,9 @@ tr:hover td { background:var(--bg-card-hover); }
   <div id="page-portfolio" class="page">
     <div class="stats-grid">
       <div class="card stat-card"><div class="stat-icon"><i data-lucide="wallet"></i></div><div class="stat-info"><div class="label">Equity</div><div class="value" id="pf-equity">$0.00</div></div></div>
-      <div class="card stat-card"><div class="stat-icon" style="color:var(--success);"><i data-lucide="landmark"></i></div><div class="stat-info"><div class="label">Available</div><div class="value" id="pf-avail">$0.00</div></div></div>
-      <div class="card stat-card"><div class="stat-icon" style="color:var(--warning);"><i data-lucide="layers"></i></div><div class="stat-info"><div class="label">Positions</div><div class="value" id="pf-pos-count">0</div></div></div>
-      <div class="card stat-card"><div class="stat-icon" style="color:var(--primary);"><i data-lucide="list-ordered"></i></div><div class="stat-info"><div class="label">Open Orders</div><div class="value" id="pf-ord-count">0</div></div></div>
+      <div class="card stat-card"><div class="stat-icon"><i data-lucide="landmark"></i></div><div class="stat-info"><div class="label">Available</div><div class="value" id="pf-avail">$0.00</div></div></div>
+      <div class="card stat-card"><div class="stat-icon"><i data-lucide="layers"></i></div><div class="stat-info"><div class="label">Positions</div><div class="value" id="pf-pos-count">0</div></div></div>
+      <div class="card stat-card"><div class="stat-icon"><i data-lucide="list-ordered"></i></div><div class="stat-info"><div class="label">Open Orders</div><div class="value" id="pf-ord-count">0</div></div></div>
     </div>
     <div class="card" style="margin-bottom:20px;">
       <div class="card-header"><div class="card-title">Positions</div></div>
@@ -683,9 +1072,9 @@ tr:hover td { background:var(--bg-card-hover); }
       </div>
     </div>
     <div class="stats-grid" style="margin-bottom:20px;">
-      <div class="card stat-card"><div class="stat-icon" style="color:var(--success);"><i data-lucide="trending-up"></i></div><div class="stat-info"><div class="label" data-i18n="totalPnl">Total PNL</div><div class="value" id="hc-pnl">$0.00</div></div></div>
-      <div class="card stat-card"><div class="stat-icon" style="color:var(--primary);"><i data-lucide="circle-check-big"></i></div><div class="stat-info"><div class="label">Closed Trades</div><div class="value" id="hc-closed-trades">0</div></div></div>
-      <div class="card stat-card"><div class="stat-icon" style="color:var(--warning);"><i data-lucide="activity"></i></div><div class="stat-info"><div class="label" data-i18n="volume">Volume</div><div class="value" id="hc-volume">$0</div></div></div>
+      <div class="card stat-card"><div class="stat-icon"><i data-lucide="trending-up"></i></div><div class="stat-info"><div class="label" data-i18n="totalPnl">Total PNL</div><div class="value" id="hc-pnl">$0.00</div></div></div>
+      <div class="card stat-card"><div class="stat-icon"><i data-lucide="circle-check-big"></i></div><div class="stat-info"><div class="label">Closed Trades</div><div class="value" id="hc-closed-trades">0</div></div></div>
+      <div class="card stat-card"><div class="stat-icon"><i data-lucide="activity"></i></div><div class="stat-info"><div class="label" data-i18n="volume">Volume</div><div class="value" id="hc-volume">$0</div></div></div>
       <div class="card stat-card"><div class="stat-icon"><i data-lucide="timer"></i></div><div class="stat-info"><div class="label" data-i18n="avgDuration">Avg Duration</div><div class="value" id="hc-duration">—</div></div></div>
     </div>
     <div class="filter-bar">
@@ -780,9 +1169,579 @@ tr:hover td { background:var(--bg-card-hover); }
     </div>
   </div>
 
+  <!-- 页脚跑马灯：全是实时值，没有装饰性文案 -->
+  <div class="footbar">
+    <div><b id="fb-strategy">—</b> · <span id="fb-markets">—</span></div>
+    <div><b id="fb-conn">DISCONNECTED</b> · PUSH <span id="fb-age">—</span> · ORDERS <span id="fb-orders">0</span> · <span id="fb-ver">—</span></div>
+  </div>
 </main>
 
 <script src="/app.js"></script>
+<script>
+/* ══════════════════════════════════════════════════════════════════════════
+   新面板（hero / THE LOOP / 挂单栅格 / 页脚）的渲染层。
+   --------------------------------------------------------------------------
+   刻意独立于 app.js：app.js 有 104 个 id hook 和两张 Chart.js 图，
+   混进去改动面太大。这里只做**只读旁路** —— app.js 里唯一的改动是
+   handleMessage() 末尾多一行 `window.__panels && window.__panels.on(msg)`。
+
+   一条原则：**没有真实数据的格子就留空**，不放占位数字。
+   参考稿里的 HIDDEN STATE GRAPH / PROBABILITY TREE 没有对应数据源
+   （EMA-20 档位状态在 grid_strategy 内部，没进 DashboardState，也没进 WS），
+   所以没有照搬 —— 在实盘面板上放看起来可信但其实是编的概率，比留空更糟。
+   ═════════════════════════════════════════════════════════════════════════ */
+(function () {
+  'use strict';
+  var $ = function (id) { return document.getElementById(id); };
+  var txt = function (id, v) { var e = $(id); if (e) e.textContent = v; };
+
+  /* JS 生成的文案。DOM 里那些走 data-i18n，由 app.js 的 applyI18n() 统一处理；
+     这里只装它管不到的动态串。app.js 切语言时会回调下面的 lang()。 */
+  var LANG = 'en';
+  var STR = {
+    en: { waiting:'WAITING FOR WS', live:'LIVE · 3S STATE PUSH', paused:'TRADING PAUSED',
+          pausedTag:' · PAUSED', noOrders:'NO OPEN ORDERS', filled:'FILLED', idle:'IDLE',
+          noHist:'NO EQUITY HISTORY', noData:'NO DATA', failed:'FETCH FAILED', pts:'PTS',
+          conn:'LIVE', disconn:'DISCONNECTED', all:'ALL' },
+    cn: { waiting:'等待 WS', live:'实时 · 3s 状态推送', paused:'交易已暂停',
+          pausedTag:' · 已暂停', noOrders:'暂无挂单', filled:'已成交', idle:'空闲',
+          noHist:'暂无净值历史', noData:'暂无数据', failed:'拉取失败', pts:'个点',
+          conn:'在线', disconn:'已断开', all:'全部' }
+  };
+  function s(k) { return (STR[LANG] || STR.en)[k]; }
+  STR.en.tapeIdle = 'WAITING FOR POSITION DATA'; STR.cn.tapeIdle = '等待持仓数据';
+  STR.en.away = 'away'; STR.cn.away = '距市价';
+  STR.en.flat = 'FLAT'; STR.cn.flat = '无持仓';
+  STR.en.noFeed = 'no feed'; STR.cn.noFeed = '暂无行情';
+  STR.en.fillTag = 'FILL';   STR.cn.fillTag = '成交';
+  STR.en.orderTag = 'ORDERS'; STR.cn.orderTag = '挂单';
+  STR.en.riskTag = 'RISK';   STR.cn.riskTag = '风控';
+  STR.en.stateTag = 'STATE'; STR.cn.stateTag = '状态';
+  STR.en.ddCap = 'DRAWDOWN'; STR.cn.ddCap = '回撤';
+  STR.en.dlCap = 'DAILY';    STR.cn.dlCap = '日亏';
+  STR.en.railEmpty = 'NO PERSISTED EVENTS'; STR.cn.railEmpty = '暂无持久化事件';
+
+  var lastPush = 0;          // 最近一帧 ws 推送的本地时间
+  var prevOrders = null;     // 上一次的挂单数，用于判断 ORDER 节点
+  var prevRiskKey = null;
+  var pushes = 0;
+  var spark = null;
+  var lastSpark = null;    // 主题切换时要拿它重画
+  var lastOrders = null;   // 语言切换时要拿它重渲染
+  var lastPaused = null;   // 同上：loop-sub 的文案依赖它
+  var prevPausedSeen = null;
+  var marks = {};          // symbol -> 上一帧的 mark_price，用来判断跳动方向
+  var lastEquity = null;
+  var lastPositions = null;
+  var marketNames = {};    // market_id -> symbol，来自 /api/trading/markets
+  var activeIds = [];
+
+  function symbolsOf(ids) {
+    if (!ids || !ids.length) return [];
+    return ids.map(function (id) { return marketNames[id] || ('#' + id); });
+  }
+
+  /* 净值在两帧之间做补间。数值全程是真的（起点和终点都是服务端给的），
+     只是把 3s 一次的阶跃摊开，否则整块界面 3 秒才动一下，看着像死的。 */
+  var rollTimers = {};
+  function rollTo(id, from, to, fmt) {
+    var el = $(id); if (!el) return;
+    if (rollTimers[id]) cancelAnimationFrame(rollTimers[id]);
+    if (from === null || from === to) { el.innerHTML = fmt(to); return; }
+    var t0 = performance.now(), dur = 900;
+    (function step(now) {
+      var k = Math.min(1, (now - t0) / dur);
+      k = 1 - Math.pow(1 - k, 3);                  // ease-out，末段慢下来
+      el.innerHTML = fmt(from + (to - from) * k);
+      if (k < 1) rollTimers[id] = requestAnimationFrame(step);
+    })(t0);
+  }
+
+  /* 行情跳动条。主轴是「激活市场」，价格取自 status.last_prices（主循环每 tick 从盘口
+     中间价注入，空仓也有）；持仓只是叠加上去的一层。之前以 positions 为主轴，
+     bot 空仓时整条就是空的 —— 而它大部分时间都空仓。 */
+  var lastPrices = {};
+  function renderTape() {
+    var el = $('tape'); if (!el) return;
+    var syms = symbolsOf(activeIds);
+    if (!syms.length) syms = Object.keys(lastPrices);
+    if (!syms.length) { el.innerHTML = '<div class="tape-idle">' + s('tapeIdle') + '</div>'; return; }
+
+    var posBySym = {};
+    (lastPositions || []).forEach(function (p) { if (p && p.symbol) posBySym[p.symbol] = p; });
+
+    el.innerHTML = syms.map(function (sym) {
+      var pos = posBySym[sym];
+      var safeSym = esc(sym);
+      var safeSide = esc(pos && pos.side || '');
+      // 有持仓时用 mark_price（与浮动盈亏同源），否则用盘口中间价
+      var px = (pos && parseFloat(pos.mark_price)) || lastPrices[sym] || 0;
+      if (!px) {
+        return '<div class="tape-item"><span class="tape-sym">' + safeSym + '</span>' +
+               '<span class="tape-meta">' + s('noFeed') + '</span></div>';
+      }
+      var dp = px < 100 ? 4 : 2;
+      var prev = marks[sym];
+      var dir = (prev == null || px === prev) ? '' : (px > prev ? 'up' : 'down');
+      var d = prev == null ? 0 : px - prev;
+      marks[sym] = px;
+      var arrow = d > 0 ? '\u25b2' : d < 0 ? '\u25bc' : '\u2014';
+      var cls = d > 0 ? 'c-up' : d < 0 ? 'c-down' : '';
+      var size = pos ? parseFloat(pos.size) || 0 : 0;
+      return '<div class="tape-item ' + dir + '">' +
+        '<span class="tape-sym">' + safeSym + '</span>' +
+        '<span class="tape-mark">' + px.toFixed(dp) + '</span>' +
+        '<span class="tape-d ' + cls + '">' + arrow + ' ' + (d >= 0 ? '+' : '') + d.toFixed(dp) + '</span>' +
+        '<span class="tape-meta">' + (size ? safeSide + ' ' + size : s('flat')) + '</span>' +
+      '</div>';
+    }).join('');
+  }
+
+  /* 自上次以来新增的成交。服务端只推最近 20 条且长度封顶，
+     所以按「最新一条的身份」定位切点；首帧只记基线，不当成一批新成交刷屏。 */
+  var seenKey = null;
+  function tradeKey(t) { return [t.timestamp, t.price, t.side, t.quantity].join('|'); }
+  function newSince(list) {
+    if (!list.length) return [];
+    var head = tradeKey(list[0]);
+    if (seenKey === null) { seenKey = head; return []; }   // 首帧：只对齐基线
+    if (head === seenKey) return [];
+    var out = [];
+    for (var i = 0; i < list.length; i++) {
+      if (tradeKey(list[i]) === seenKey) break;
+      out.push(list[i]);
+    }
+    seenKey = head;
+    return out;
+  }
+
+  /* ── 事件流 & 成交闪现 ──
+     只有真实事件才会产生条目：成交（trade_history 新增）、挂单数变化、
+     风控读数变化、暂停/恢复。bot 安静时事件流就是空的，不造假事件填充。 */
+  var lastEventList = [];
+  function clock(ts) {
+    var d = ts ? new Date(ts) : new Date();
+    var pad = function (n) { return (n < 10 ? '0' : '') + n; };
+    return pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
+  }
+  function esc(value) {
+    return String(value == null ? '' : value)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  }
+  function eventLabel(kind) {
+    if (kind === 'risk') return s('riskTag');
+    if (kind === 'order') return s('orderTag');
+    if (kind === 'fill') return s('fillTag');
+    return s('stateTag');
+  }
+  function renderEvents(events) {
+    var el = $('rail'); if (!el) return;
+    lastEventList = Array.isArray(events) ? events.slice(0, 200) : [];
+    if (!lastEventList.length) {
+      el.innerHTML = '<div class="rail-empty" data-i18n="railEmpty">' + s('railEmpty') + '</div>';
+      return;
+    }
+    el.innerHTML = lastEventList.map(function (event) {
+      var kind = String(event.kind || 'state').toLowerCase();
+      return '<div class="rail-chip ' + esc(kind) + '">' +
+        '<span class="rail-t">' + clock(event.timestamp_ms) + '</span>' +
+        '<span class="rail-k">' + esc(eventLabel(kind)) + '</span>' +
+        '<span>' + esc(event.detail) + '</span></div>';
+    }).join('');
+    var latest = lastEventList[0];
+    txt('swarm-latest', clock(latest.timestamp_ms) + '  ' + eventLabel(latest.kind) + '  ' + latest.detail);
+  }
+  function loadPersistentEvents() {
+    fetch('/api/events').then(function (response) { return response.json(); })
+      .then(function (payload) { renderEvents(payload.events || []); })
+      .catch(function () {});
+  }
+
+  function toast(t) {
+    var box = $('fill-toasts'); if (!box) return;
+    var pnl = typeof t.pnl === 'number' ? t.pnl : null;
+    var el = document.createElement('div');
+    el.className = 'toast';
+    var px = parseFloat(t.price) || 0;
+    var side = esc(t.side || '');
+    var symbol = esc(t.symbol || t.market || '');
+    var quantity = esc(t.quantity || '');
+    el.innerHTML =
+      '<div class="toast-k"><span>' + s('fillTag') + '</span><span>' + clock(t.timestamp) + '</span></div>' +
+      '<div class="toast-main">' + side + ' ' + symbol +
+        ' ' + quantity + ' @ ' + px.toFixed(px < 100 ? 4 : 2) + '</div>' +
+      (pnl === null || pnl === 0 ? '' :
+        '<div class="toast-pnl ' + (pnl > 0 ? 'c-up' : 'c-down') + '">' +
+        (pnl > 0 ? '\u25b2 +$' : '\u25bc -$') + Math.abs(pnl).toFixed(2) + '</div>');
+    box.appendChild(el);
+    // 封顶 4 条：一批成交（或 seenKey 被挤出 20 条窗口时的补报）会一次性堆满屏幕
+    while (box.children.length > 4) box.removeChild(box.firstChild);
+    setTimeout(function () { el.remove(); }, 5900);
+  }
+
+  /* ── THE LOOP：一帧 WS 就是一圈；节点只在真实动作与圆点接触时点亮 ── */
+  var timers = {};
+  function lite(node) {
+    var el = $('loop-n-' + node);
+    if (!el) return;
+    el.classList.add('lit');
+    clearTimeout(timers[node]);
+    timers[node] = setTimeout(function () { el.classList.remove('lit'); }, 520);
+  }
+
+  var loopActions = { risk:false, order:false, fill:false };
+  var loopContactTimers = {};
+  function queueLoopAction(node) {
+    if (Object.prototype.hasOwnProperty.call(loopActions, node)) loopActions[node] = true;
+  }
+  function scheduleLoopContact(node, delay) {
+    clearTimeout(loopContactTimers[node]);
+    loopContactTimers[node] = setTimeout(function () {
+      if (!loopActions[node]) return;
+      loopActions[node] = false;
+      lite(node);
+    }, delay);
+  }
+  function restartLoopMotion() {
+    var motion = $('loop-motion');
+    if (motion && typeof motion.beginElement === 'function') motion.beginElement();
+  }
+  function beginLoopCycle() {
+    restartLoopMotion();
+    lite('push');
+    scheduleLoopContact('risk', 750);
+    scheduleLoopContact('order', 1500);
+    scheduleLoopContact('fill', 2250);
+  }
+
+  /* ── 数字格式化，与 app.js 的口径保持一致 ── */
+  // 参考稿里货币符号比数字小一号且更淡
+  function fmtEq(v) { return '<span class="cur">$</span>' + v.toFixed(2); }
+  function money(v) {
+    var s = (v < 0 ? '-' : '+') + '$' + Math.abs(v).toFixed(2);
+    return s;
+  }
+  /* 最近一次成交的时间戳。服务端推的是最近 20 条，取其中最大值即可。 */
+  var lastFillAt = 0;
+  function noteLastFill(list) {
+    for (var i = 0; i < list.length; i++) {
+      var ts = new Date(list[i].timestamp).getTime();
+      if (ts && ts > lastFillAt) lastFillAt = ts;
+    }
+  }
+  function hms(ms) {
+    var sec = Math.floor(ms / 1000);
+    var d = Math.floor(sec / 86400);
+    var h = Math.floor(sec % 86400 / 3600), m = Math.floor(sec % 3600 / 60), q = sec % 60;
+    var pad = function (n) { return (n < 10 ? '0' : '') + n; };
+    if (d) return d + 'd ' + pad(h) + ':' + pad(m);   // 超 24h 带天数，免得跟时钟读数混淆
+    return (h ? h + ':' : '') + pad(m) + ':' + pad(q);
+  }
+
+  function ago(ms) {
+    if (!ms) return '—';
+    var s = (Date.now() - ms) / 1000;
+    return s < 1 ? '<1s' : s.toFixed(s < 10 ? 1 : 0) + 's';
+  }
+
+  /* ── 迷你净值曲线：数据来自 /api/pnl 的 equity_history（真实历史，不是本次会话累积）── */
+  function drawSpark(points) {
+    lastSpark = points || lastSpark;
+    points = lastSpark;
+    var cv = $('sparkChart');
+    if (!cv || typeof Chart === 'undefined') return;
+    if (!points || points.length < 2) return;
+    var empty = $('spark-empty');
+    if (empty) empty.style.display = 'none';
+    var css = getComputedStyle(document.documentElement);
+    // 用中性墨色而不是涨绿跌红：这条线画的是最近窗口，旁边的 TOTAL RETURN 是累计口径，
+    // 两者方向可以相反，一红一绿并排会让人以为哪个算错了。方向交给形状。
+    // 取 --text-main：这条线现在画在白卡上，用 --hero-fg 会变成白底白线
+    var color = css.getPropertyValue('--text-main').trim() || '#111';
+    if (spark) spark.destroy();
+    spark = new Chart(cv.getContext('2d'), {
+      type: 'line',
+      data: {
+        labels: points.map(function () { return ''; }),
+        datasets: [{
+          data: points.map(function (p) { return p.v; }),
+          borderColor: color, borderWidth: 1.4, pointRadius: 0,
+          fill: true, tension: 0.25,
+          backgroundColor: 'rgba(0,0,0,0.05)'
+        }]
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false, animation: false,
+        plugins: { legend: { display: false }, tooltip: { enabled: false } },
+        scales: { x: { display: false }, y: { display: false } }
+      }
+    });
+  }
+
+  function loadHistory() {
+    fetch('/api/pnl').then(function (r) { return r.json(); }).then(function (d) {
+      var hist = (d && d.equity_history) || [];
+      // 抽稀到 ~120 点，画 5000 点的迷你图既慢又看不出东西
+      var step = Math.max(1, Math.ceil(hist.length / 120));
+      drawSpark(hist.filter(function (_, i) { return i % step === 0; }));
+      txt('run-src', hist.length ? hist.length + ' ' + s('pts') : s('noData'));
+
+      var ret = d && typeof d.total_return_pct === 'number' ? d.total_return_pct : null;
+      if (ret !== null) {
+        var el = $('run-ret');
+        el.textContent = (ret >= 0 ? '+' : '') + ret.toFixed(2) + '%';
+        el.className = 'runcard-big ' + (ret > 0.001 ? 'c-up' : ret < -0.001 ? 'c-down' : '');
+      }
+      if (d && d.initial_equity) {
+        txt('run-base', '$' + d.initial_equity.toFixed(2) + '  →  $' + (d.equity || 0).toFixed(2));
+      }
+
+      // 成交笔数与胜率：只统计带 pnl 的平仓记录 —— status.total_trades 是下单数，不能当成交数用
+      var trades = (d && d.trades) || [];
+      var closes = trades.filter(function (t) { return typeof t.pnl === 'number' && t.pnl !== 0; });
+      txt('hero-fills', trades.length ? String(trades.length) : '—');
+      noteLastFill(trades);
+      if (closes.length) {
+        var wins = closes.filter(function (t) { return t.pnl > 0; }).length;
+        txt('hero-wr', (wins / closes.length * 100).toFixed(0) + '% · n=' + closes.length);
+      } else {
+        txt('hero-wr', '—');
+      }
+    }).catch(function () { txt('run-src', s('failed')); });
+
+    // 市场 id -> 符号。机器人启动时从 /orderBookDetails 动态注册，这里直接取它的结果，
+    // 不在前端硬编码 ETH=0/BTC=1。
+    fetch('/api/trading/markets').then(function (r) { return r.json(); }).then(function (m) {
+      (m && m.available_markets || []).forEach(function (x) { marketNames[x.id] = x.symbol; });
+      if (activeIds.length) {
+        var syms = symbolsOf(activeIds).join(' / ');
+        txt('hero-markets', syms); txt('fb-markets', syms);
+        renderTape();
+      }
+    }).catch(function () {});
+
+    // 版本号只在 /api/status 里，WS 的 status 帧不带 version
+    fetch('/api/status').then(function (r) { return r.json(); }).then(function (s) {
+      if (s && s.version) txt('fb-ver', 'v' + s.version);
+    }).catch(function () {});
+  }
+
+  /* ── 挂单栅格 ── */
+  function renderSwarm(list) {
+    lastOrders = list;
+    var grid = $('swarm-grid');
+    if (!grid) return;
+    txt('swarm-count', String(list.length));
+    if (!list.length) { grid.innerHTML = '<div class="swarm-empty">' + s('noOrders') + '</div>'; return; }
+    // 先找出离市价最近的一档
+    var nearestIdx = -1, best = Infinity;
+    list.slice(0, 12).forEach(function (o, i) {
+      var mk = marks[o.symbol], px = parseFloat(o.price) || 0;
+      if (!mk || !px) return;
+      var d = Math.abs((px - mk) / mk);
+      if (d < best) { best = d; nearestIdx = i; }
+    });
+    grid.innerHTML = list.slice(0, 12).map(function (o, i) {
+      var total = parseFloat(o.quantity) || 0;
+      var filled = parseFloat(o.filled_quantity) || 0;
+      var pct = total > 0 ? Math.min(1, filled / total) : 0;
+      var segs = '';
+      for (var k = 0; k < 10; k++) segs += '<div class="swarm-seg' + (k < Math.round(pct * 10) ? ' on' : '') + '"></div>';
+      var side = String(o.side || '');
+      var safeOrderSide = esc(side);
+      var safeOrderSymbol = esc(o.symbol || '—');
+      // 距市价的百分比：一笔不成交时，这是卡片上唯一还在动的数字
+      var mk = marks[o.symbol];
+      var px = parseFloat(o.price) || 0;
+      var dist = '';
+      var near = false;
+      if (mk && px) {
+        var dp = (px - mk) / mk * 100;
+        near = (i === nearestIdx);          // 只标最近的一张，参考稿里也只有一张反相卡
+        dist = '<span class="swarm-dist">' + (dp >= 0 ? '+' : '') + dp.toFixed(2) + '% ' + s('away') + '</span>';
+      }
+      return '<div class="swarm-card' + (near ? ' near' : '') + '">' +
+        '<div class="swarm-head">' +
+          '<span class="swarm-idx">' + String(i + 1).padStart(2, '0') + '</span>' +
+          '<span class="badge ' + (side === 'Buy' ? 'badge-up' : 'badge-down') + '">' + safeOrderSide + '</span>' +
+        '</div>' +
+        '<div class="swarm-mid">' +
+          '<span class="swarm-name">' + safeOrderSymbol + ' ' + (parseFloat(o.price) || 0).toFixed(2) + '</span>' + dist +
+        '</div>' +
+        '<div class="swarm-sub">' + filled + ' / ' + total + '  ·  ' + (pct * 100).toFixed(0) + '% ' + s('filled') + '</div>' +
+        '<div class="swarm-bar">' + segs + '</div>' +
+      '</div>';
+    }).join('');
+  }
+
+  /* ── WS 旁路入口，由 app.js 的 handleMessage() 调用 ── */
+  /* 风控气泡：每个圈按**各自的上限**取比例定尺寸，不是三者凑成 100%。
+     回撤上限 15% 和日亏上限 8% 不是同一个整体的两部分，硬凑成一个圆会说谎。 */
+  function sizeBubble(id, capId, used, limit, label) {
+    var el = $(id); if (!el) return 0;
+    var frac = limit > 0 ? Math.min(1, Math.max(0, used / limit)) : 0;
+    var d = 76 + frac * 84;                       // 76px(空) → 160px(触顶)
+    el.style.width = d + 'px'; el.style.height = d + 'px';
+    var box = el.parentElement;
+    if (box) box.className = 'bub ' + (frac >= 0.8 ? 'warn' : 'plain');
+    txt(capId, label + ' ' + used.toFixed(1) + '% / ' + limit.toFixed(0) + '%');
+    return 1 - frac;                              // 剩余余量
+  }
+
+  function on(msg) {
+    if (!msg || !msg.type) return;
+    lastPush = Date.now();
+
+    if (msg.type === 'events') {
+      renderEvents(msg.data);
+      return;
+    }
+
+    if (msg.type === 'status') {
+      var d = msg.data || {};
+      pushes++;
+      beginLoopCycle();
+      txt('loop-tick', 'REV ' + pushes);
+      txt('loop-rev', 'REV ' + pushes);
+      var eq = typeof d.equity === 'number' ? d.equity : null;
+      if (eq !== null) { rollTo('mc-equity', lastEquity, eq, fmtEq); lastEquity = eq; }
+      txt('hero-strategy', String(d.strategy || '—').toUpperCase());
+      txt('fb-strategy', String(d.strategy || '—').toUpperCase());
+      if (d.last_prices && typeof d.last_prices === 'object') {
+        lastPrices = d.last_prices;         // 每 3s 一帧，行情条的跳动就来自这里
+        renderTape();
+        if (lastOrders) renderSwarm(lastOrders);   // 挂单的「距市价」跟着重算
+      }
+      activeIds = Array.isArray(d.active_markets) ? d.active_markets : [];
+      var syms = symbolsOf(activeIds);
+      var mk = syms.length ? syms.join(' / ') : 'ALL';
+      txt('hero-markets', mk);
+      txt('fb-markets', mk);
+      txt('hero-placed', String(d.total_trades != null ? d.total_trades : '—'));
+      txt('fb-orders', String(d.open_orders || 0));
+
+      var pausedEl = $('hero-paused');
+      var card = $('loop-card');
+      lastPaused = !!d.trading_paused;
+      if (d.trading_paused) {
+        if (pausedEl) { pausedEl.textContent = s('pausedTag'); pausedEl.className = 'hero-paused'; }
+        if (card) card.classList.add('paused');
+        txt('loop-sub', s('paused'));
+      } else {
+        if (pausedEl) { pausedEl.textContent = ''; pausedEl.className = ''; }
+        if (card) card.classList.remove('paused');
+        txt('loop-sub', s('live'));
+      }
+
+      if (prevOrders !== null && d.open_orders !== prevOrders) {
+        queueLoopAction('order');
+      }
+      prevOrders = d.open_orders;
+
+      if (prevPausedSeen !== null && !!d.trading_paused !== prevPausedSeen) {
+        queueLoopAction('risk');
+      }
+      prevPausedSeen = !!d.trading_paused;
+    }
+
+    if (msg.type === 'positions' && Array.isArray(msg.data)) {
+      lastPositions = msg.data;
+      renderTape();
+      if (lastOrders) renderSwarm(lastOrders);
+    }
+
+    if (msg.type === 'open_orders' && Array.isArray(msg.data)) renderSwarm(msg.data);
+
+    if (msg.type === 'recent_trades' && Array.isArray(msg.data)) {
+      // 用「最新一条的身份」判断新成交，不能用数组长度：服务端推的是
+      // trade_history.rev().take(20)，超过 20 条之后长度恒为 20，
+      // 靠 length 变化永远检测不到成交（原来的 lite('fill') 也栽在这里）。
+      var fresh = newSince(msg.data);
+      if (fresh.length) {
+        queueLoopAction('fill');
+        fresh.forEach(function (t) {
+          toast(t);
+        });
+      }
+      noteLastFill(msg.data);
+    }
+
+    if (msg.type === 'risk' && msg.data) {
+      var r = msg.data;
+      var ddL = +r.max_drawdown_limit || 10, dlL = +r.daily_loss_limit || 5;
+      var ddU = +r.drawdown_pct || 0,        dlU = +r.daily_loss_pct || 0;
+      var hrDD = sizeBubble('bub-dd', 'bub-dd-cap', ddU, ddL, s('ddCap'));
+      var hrDL = sizeBubble('bub-dl', 'bub-dl-cap', dlU, dlL, s('dlCap'));
+      // 余量取两者里更紧的那个 —— 先触顶的那条才是真正的约束
+      var hr = Math.min(hrDD, hrDL);
+      var hrEl = $('bub-hr');
+      if (hrEl) { var d = 76 + hr * 84; hrEl.style.width = d + 'px'; hrEl.style.height = d + 'px'; }
+      txt('bub-hr-v', (hr * 100).toFixed(0) + '%');
+      // 底部条那两根进度条的读数（app.js 只写 r-dd/r-dl，这两个是本面板加的）
+      txt('r-dd-echo', ddU.toFixed(1) + '% / ' + ddL.toFixed(0) + '%');
+      txt('r-dl-echo', dlU.toFixed(1) + '% / ' + dlL.toFixed(0) + '%');
+      var key = [r.drawdown_pct, r.daily_loss_pct, r.is_healthy].join('|');
+      if (prevRiskKey !== null && key !== prevRiskKey) {
+        queueLoopAction('risk');
+      }
+      prevRiskKey = key;
+    }
+  }
+
+  window.__panels = {
+    on: on,
+    lang: function (l) {
+      LANG = (l === 'cn') ? 'cn' : 'en';
+      var e = $('spark-empty'); if (e) e.textContent = s('noHist');
+      var tk = $('loop-tick'); if (tk && !pushes) tk.textContent = s('idle');
+      if (lastOrders) renderSwarm(lastOrders);
+      renderTape();
+      renderEvents(lastEventList);
+      if (lastPaused !== null) txt('loop-sub', lastPaused ? s('paused') : s('live'));
+      else txt('loop-sub', s('waiting'));
+      loadHistory();
+    }
+  };
+
+  // 主题切换后重画迷你曲线（涨绿跌红取自 CSS 变量，换主题要重新取一次）
+  new MutationObserver(function () { drawSpark(lastSpark); })
+    .observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+
+  /* 心跳年龄每秒刷新一次；WS 本身 3s 一帧，不靠这个定时器造动画 */
+  setInterval(function () {
+    var a = ago(lastPush);
+    txt('hero-age', a);
+    txt('fb-age', a);
+    var dot = $('hero-dot');
+    var alive = lastPush && Date.now() - lastPush < 10000;
+    if (dot) dot.classList.toggle('live', !!alive);
+    // 轨道上的点是心跳指示：没推送就必须停，否则它在骗人
+    var lc = $('loop-card'); if (lc) lc.classList.toggle('stale', !alive);
+    var sf = $('since-fill');
+    if (sf) {
+      sf.textContent = lastFillAt ? hms(Date.now() - lastFillAt) : '—';
+      // 超过 1 小时没成交就标黄 —— 低频行情下这是最该被看见的一个数
+      sf.parentElement.classList.toggle('cold', !!lastFillAt && Date.now() - lastFillAt > 3600000);
+    }
+    txt('fb-conn', alive ? s('conn') : s('disconn'));
+  }, 1000);
+
+  window.__panels.lang(localStorage.getItem('lighter-lang') || 'en');
+  loadPersistentEvents();
+
+  /* Chart.js 在父级尺寸还没稳定时初始化会把画布算错（周盈亏那张会挤成一条）。
+     布局稳定后补两次 resize；用它自己的 API，不要用 CSS 去改 canvas 尺寸。 */
+  function nudgeCharts() {
+    if (typeof Chart === 'undefined' || !Chart.instances) return;
+    Object.values(Chart.instances).forEach(function (c) { try { c.resize(); } catch (e) {} });
+  }
+  requestAnimationFrame(nudgeCharts);
+  setTimeout(nudgeCharts, 900);
+  window.addEventListener('resize', nudgeCharts);
+  setInterval(loadHistory, 60000);
+})();
+</script>
 <script>lucide.createIcons();</script>
 </body>
 </html>

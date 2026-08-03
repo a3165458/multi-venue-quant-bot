@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc, Duration};
+use chrono::{DateTime, Duration, NaiveDate, NaiveDateTime, Utc};
 use std::fs;
 use std::io::BufRead;
 
@@ -7,8 +7,7 @@ use crate::lighter::types::Candlestick;
 
 /// 从CSV文件加载历史数据
 pub fn load_csv_data(path: &str) -> Result<Vec<Candlestick>> {
-    let content = fs::read_to_string(path)
-        .with_context(|| format!("读取文件失败: {}", path))?;
+    let content = fs::read_to_string(path).with_context(|| format!("读取文件失败: {}", path))?;
 
     let mut candles = Vec::new();
     let mut lines = content.as_bytes().lines();
@@ -166,8 +165,8 @@ pub fn generate_synthetic_data(symbol: &str, days: u32) -> Result<()> {
 
     // Realistic starting prices and volatility per symbol
     let (mut price, hourly_vol, vol_of_vol) = match symbol.to_uppercase().as_str() {
-        "BTC" | "BTCUSDT" => (66500.0_f64, 0.003, 0.3),   // ~0.3% hourly vol
-        "ETH" | "ETHUSDT" => (2020.0_f64, 0.004, 0.35),    // ~0.4% hourly vol
+        "BTC" | "BTCUSDT" => (66500.0_f64, 0.003, 0.3), // ~0.3% hourly vol
+        "ETH" | "ETHUSDT" => (2020.0_f64, 0.004, 0.35), // ~0.4% hourly vol
         _ => (1000.0_f64, 0.005, 0.3),
     };
 
@@ -208,7 +207,11 @@ pub fn generate_synthetic_data(symbol: &str, days: u32) -> Result<()> {
         candles.push(format!(
             "{},{:.2},{:.2},{:.2},{:.2},{:.4},{}",
             timestamp.to_rfc3339(),
-            open, high, low, close, volume,
+            open,
+            high,
+            low,
+            close,
+            volume,
             symbol.to_uppercase()
         ));
     }
@@ -216,7 +219,12 @@ pub fn generate_synthetic_data(symbol: &str, days: u32) -> Result<()> {
     let dir = "backtests/data";
     fs::create_dir_all(dir)?;
 
-    let filename = format!("{}/{}-synthetic-{}d-1h.csv", dir, symbol.to_uppercase(), days);
+    let filename = format!(
+        "{}/{}-synthetic-{}d-1h.csv",
+        dir,
+        symbol.to_uppercase(),
+        days
+    );
     let mut content = String::from("timestamp,open,high,low,close,volume,symbol\n");
     for line in &candles {
         content.push_str(line);
@@ -224,7 +232,12 @@ pub fn generate_synthetic_data(symbol: &str, days: u32) -> Result<()> {
     }
 
     fs::write(&filename, content)?;
-    tracing::info!("生成合成数据: {} ({} 条记录, {}天)", filename, candles.len(), days);
+    tracing::info!(
+        "生成合成数据: {} ({} 条记录, {}天)",
+        filename,
+        candles.len(),
+        days
+    );
 
     Ok(())
 }
@@ -279,7 +292,8 @@ mod tests {
         )
         .unwrap();
 
-        let candles = load_csv_data_in_range(file.to_str().unwrap(), "2024-01-02", "2024-01-02").unwrap();
+        let candles =
+            load_csv_data_in_range(file.to_str().unwrap(), "2024-01-02", "2024-01-02").unwrap();
         assert_eq!(candles.len(), 1);
         assert_eq!(candles[0].open, 2.0);
     }

@@ -9,7 +9,7 @@ use crate::lighter::types::*;
 
 #[path = "trend_ema.rs"]
 mod trend_ema;
-use trend_ema::ema_last_two;
+use trend_ema::{adx, ema_last_two, ema_series};
 
 /// 趋势跟踪策略
 ///
@@ -26,6 +26,13 @@ pub struct TrendStrategy {
     notional_per_trade: f64,
     /// 交叉时快慢线最小分离度（|fast-slow|/slow），过滤噪音交叉
     min_separation: f64,
+    /// ADX 进场门槛：低于该值视为震荡市，禁开新仓（0 = 关闭）。只过滤进场，不影响持仓离场。
+    adx_threshold: f64,
+    /// ADX 计算周期
+    adx_period: usize,
+    /// 慢线斜率确认：开多需 slow EMA 在 lookback 内上涨 min 比例，开空则下跌（0 = 关闭）
+    confirm_slope_min: f64,
+    confirm_lookback: usize,
     states: Mutex<HashMap<String, TrendState>>,
 }
 
@@ -78,8 +85,34 @@ impl TrendStrategy {
             trailing_stop_pct,
             notional_per_trade,
             min_separation: 0.0005, // 0.05%
+            adx_threshold: 0.0,
+            adx_period: 14,
+            confirm_slope_min: 0.0,
+            confirm_lookback: 0,
             states: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// 设置 ADX 震荡过滤门槛（阈值 > 0 才启用），用于回测扫描 A/B。
+    pub fn with_adx_filter(mut self, threshold: f64, period: usize) -> Self {
+        self.adx_threshold = threshold;
+        if period > 0 {
+            self.adx_period = period;
+        }
+        self
+    }
+
+    /// 设置慢线斜率确认：开多需 slow EMA 在 lookback 内上涨 min 比例，开空则下跌。
+    /// min<=0 或 lookback<=0 时关闭。仅过滤进场，不影响离场。
+    pub fn with_slope_confirm(mut self, min: f64, lookback: usize) -> Self {
+        if min > 0.0 && lookback > 0 {
+            self.confirm_slope_min = min;
+            self.confirm_lookback = lookback;
+        } else {
+            self.confirm_slope_min = 0.0;
+            self.confirm_lookback = 0;
+        }
+        self
     }
 
     /// 检查持仓离场条件，返回 (原因, 离场方向)
@@ -213,12 +246,65 @@ impl Strategy for TrendStrategy {
                 .position
                 .map(|p| Some(p.side) == state.pending_side)
                 .unwrap_or(false);
+
+            // ADX 震荡过滤：只在阈值启用且数据够时计算。ADX 值低于阈值 = 震荡市，禁新开仓。
+            let adx_gate = if self.adx_threshold <= 0.0 {
+                true
+            } else {
+                match snapshot.candles.get(symbol) {
+                    Some(cs) => {
+                        let h: Vec<f64> = cs.iter().map(|c| c.high).collect();
+                        let l: Vec<f64> = cs.iter().map(|c| c.low).collect();
+                        let c: Vec<f64> = cs.iter().map(|c| c.close).collect();
+                        match adx(&h, &l, &c, self.adx_period) {
+                            Some(a) => a >= self.adx_threshold,
+                            None => {
+                                debug!("{}: ADX warmup 不足", symbol);
+                                false
+                            }
+                        }
+                    }
+                    None => true, // 无成交数据时不额外拦截，交由 EMA 分支判断
+                }
+            };
+
+            // 慢线斜率确认：要求 slow EMA 正向朝入场方向运动（开多须上涨、开空须下跌），
+            // 滤掉交叉时慢线仍横盘/反向的假突破，提升进场胜率。只影响进场。
+            let slope_confirm = if self.confirm_lookback == 0 || self.confirm_slope_min <= 0.0 {
+                true
+            } else {
+                match ema_series(&prices, self.slow_period) {
+                    Some(ema) if ema.len() > self.confirm_lookback => {
+                        let now = ema[ema.len() - 1];
+                        let ago = ema[ema.len() - 1 - self.confirm_lookback];
+                        let rise = (now - ago) / ago;
+                        let want_buy = state.pending_side == Some(Side::Buy);
+                        let want_sell = state.pending_side == Some(Side::Sell);
+                        if want_buy {
+                            rise >= self.confirm_slope_min
+                        } else if want_sell {
+                            rise <= -self.confirm_slope_min
+                        } else {
+                            true
+                        }
+                    }
+                    _ => {
+                        debug!("{}: 斜率 warmup 不足", symbol);
+                        false
+                    }
+                }
+            };
+
             let desired_side = state.pending_side.filter(|&side| {
                 let regime_ok = match side {
                     Side::Buy => bull_regime,
                     Side::Sell => bear_regime,
                 };
-                regime_ok && separation >= self.min_separation && !same_side_open
+                regime_ok
+                    && separation >= self.min_separation
+                    && !same_side_open
+                    && adx_gate
+                    && slope_confirm
             });
 
             if let Some(side) = desired_side {

@@ -52,6 +52,9 @@ enum Commands {
         /// Strategy params: "grid_count=10,investment=8.0,deviation=0.008"
         #[arg(short, long)]
         params: Option<String>,
+        /// Config file for the profitability gate (same section as live)
+        #[arg(long)]
+        config: Option<String>,
     },
 
     /// Run parameter optimization sweep
@@ -68,6 +71,9 @@ enum Commands {
         capital: f64,
         #[arg(short, long)]
         output: Option<String>,
+        /// Config file for the profitability gate (same section as live)
+        #[arg(long)]
+        config: Option<String>,
     },
 
     /// Start dashboard only
@@ -136,6 +142,7 @@ async fn main() -> Result<()> {
             capital,
             output,
             params,
+            config,
         } => {
             run_backtest(
                 &strategy,
@@ -143,8 +150,11 @@ async fn main() -> Result<()> {
                 &start,
                 &end,
                 capital,
-                output.as_deref(),
-                params.as_deref(),
+                BacktestCliOpts {
+                    output,
+                    params,
+                    config,
+                },
             )
             .await
         }
@@ -155,7 +165,19 @@ async fn main() -> Result<()> {
             end,
             capital,
             output,
-        } => run_optimize(&strategy, &data, &start, &end, capital, output.as_deref()).await,
+            config,
+        } => {
+            run_optimize(
+                &strategy,
+                &data,
+                &start,
+                &end,
+                capital,
+                output.as_deref(),
+                config.as_deref(),
+            )
+            .await
+        }
         Commands::Dashboard { host, port } => run_dashboard(&host, port).await,
         Commands::Download {
             symbol,
@@ -349,6 +371,7 @@ async fn run_live_trading(config_path: &str) -> Result<()> {
             })
             .collect(),
         trade_history: Vec::new(),
+        event_history: Vec::new(),
         risk_status: None,
         daily_realized_pnl: 0.0,
         total_realized_pnl: 0.0,
@@ -408,6 +431,7 @@ async fn run_live_trading(config_path: &str) -> Result<()> {
         }),
         risk_update_requested: None,
         leverage_limit: 3.0,
+        last_prices: std::collections::HashMap::new(),
     }));
 
     // Restore persistent PnL data from disk
@@ -1416,6 +1440,42 @@ async fn run_live_trading(config_path: &str) -> Result<()> {
         // Run strategy
         let mut snapshot = data_store_clone.read().await.get_snapshot();
 
+        // 把盘口中间价写回 DashboardState。这是面板上唯一一个「空仓时也还在动」的数：
+        // positions 里的 mark_price 只有持仓才有，而这个 bot 大部分时间是空仓的。
+        //
+        // 两点注意：
+        // 1) 用 `ob.symbol` 而不是 map 的 key。二者当前相同（storage.rs 就是按
+        //    order_book.symbol 插入的），但显式取字段可以免疫 key 格式漂移 ——
+        //    键对不上时面板只会一直显示「暂无行情」，不会报错，很难查。
+        // 2) 这里在 WS 驱动的主循环热路径上，而 DashboardState 是唯一的跨任务控制面。
+        //    所以先只读比较、值真的变了才拿写锁；面板 3s 才消费一次，不会漏。
+        {
+            let mut prices = std::collections::HashMap::new();
+            for ob in snapshot.order_books.values() {
+                // 增量盘口更新的某一瞬间，买盘顶部可能还没补上，best_bid 会掉到很深的一档，
+                // 中间价随之被拉歪（实测出现过 (63193+60040)/2 = 61616，偏离 2.5%）。
+                // 价差超过 0.5% 就认为这一帧的盘口不完整，跳过不更新，保留上一个值。
+                let (Some(bid), Some(ask), Some(mid)) =
+                    (ob.best_bid(), ob.best_ask(), ob.mid_price())
+                else {
+                    continue;
+                };
+                if mid > 0.0 && bid > 0.0 && ask > bid && (ask - bid) / mid < 0.005 {
+                    prices.insert(ob.symbol.clone(), mid);
+                }
+            }
+            if !prices.is_empty() {
+                let changed = {
+                    let ds = dash_state.read().await;
+                    ds.last_prices != prices
+                };
+                if changed {
+                    // 整体赋值而非 extend：不再挂盘的市场会自动被剔除，不会无限累积
+                    dash_state.write().await.last_prices = prices;
+                }
+            }
+        }
+
         // Inject real exchange positions (signed: long = +, short = -) so the strategy
         // can cap one-sided accumulation against the actual position, not just its own
         // reset-prone internal state.
@@ -1792,20 +1852,25 @@ async fn run_live_trading(config_path: &str) -> Result<()> {
     Ok(())
 }
 
+struct BacktestCliOpts {
+    output: Option<String>,
+    params: Option<String>,
+    config: Option<String>,
+}
+
 async fn run_backtest(
     strategy_name: &str,
     data_path: &str,
     start_date: &str,
     end_date: &str,
     initial_capital: f64,
-    output_dir: Option<&str>,
-    params: Option<&str>,
+    opts: BacktestCliOpts,
 ) -> Result<()> {
     info!("📊 Starting backtest: {}", strategy_name);
     info!("   Data: {}", data_path);
     info!("   Period: {} to {}", start_date, end_date);
     info!("   Capital: ${:.2}", initial_capital);
-    if let Some(p) = params {
+    if let Some(p) = &opts.params {
         info!("   Params: {}", p);
     }
 
@@ -1815,10 +1880,25 @@ async fn run_backtest(
     let mut backtest_engine =
         backtest::engine::BacktestEngine::new(initial_capital, historical_data);
 
-    let bt_strategy = strategy::create_strategy_with_params(strategy_name, params)?;
+    // 收益门槛 parity：--config 指定与实盘相同的 yaml 时，回测也拒绝净收益不足的入场
+    if let Some(cfg) = &opts.config {
+        let settings = Config::builder()
+            .add_source(config::File::with_name(cfg))
+            .build()
+            .context("Failed to load config")?;
+        let guard = risk::profitability::ProfitabilityGuard::from_config(&settings)?;
+        let cost_bps = guard.total_cost_bps();
+        backtest_engine = backtest_engine.with_profitability(guard);
+        info!(
+            "🧮 Profitability gate enabled (total cost {:.2} bps)",
+            cost_bps
+        );
+    }
+
+    let bt_strategy = strategy::create_strategy_with_params(strategy_name, opts.params.as_deref())?;
     let results = backtest_engine.run(bt_strategy).await?;
 
-    let output_path = output_dir.unwrap_or("backtests/results");
+    let output_path = opts.output.as_deref().unwrap_or("backtests/results");
     backtest::metrics::generate_report(&results, output_path).await?;
 
     info!("📈 Backtest complete!");
@@ -1827,6 +1907,10 @@ async fn run_backtest(
     info!("   Max DD: {:.2}%", results.max_drawdown * 100.0);
     info!("   Trades: {}", results.trades.len());
     info!("   Win Rate: {:.1}%", results.win_rate * 100.0);
+    info!(
+        "   Blocked by profitability gate: {}",
+        results.blocked_by_profitability
+    );
 
     Ok(())
 }
@@ -1839,12 +1923,30 @@ async fn run_optimize(
     end_date: &str,
     initial_capital: f64,
     output_dir: Option<&str>,
+    config_path: Option<&str>,
 ) -> Result<()> {
     info!("🔬 Starting parameter optimization for: {}", strategy_name);
 
     let historical_data = data::loader::load_csv_data_in_range(data_path, start_date, end_date)
         .context("Failed to load historical data")?;
     info!("   Loaded {} candles", historical_data.len());
+
+    // 收益门槛 parity：--config 指定与实盘相同的 yaml 时，参数扫描也拒绝净收益不足的入场
+    let profitability = if let Some(cfg) = config_path {
+        let settings = Config::builder()
+            .add_source(config::File::with_name(cfg))
+            .build()
+            .context("Failed to load config")?;
+        let guard = risk::profitability::ProfitabilityGuard::from_config(&settings)?;
+        let cost_bps = guard.total_cost_bps();
+        info!(
+            "🧮 Profitability gate enabled (total cost {:.2} bps)",
+            cost_bps
+        );
+        Some(guard)
+    } else {
+        None
+    };
 
     // Define parameter grid based on strategy type
     let param_sets: Vec<String> = match strategy_name {
@@ -1915,6 +2017,9 @@ async fn run_optimize(
         let bt_strategy = strategy::create_strategy_with_params(strategy_name, Some(params))?;
         let mut engine =
             backtest::engine::BacktestEngine::new(initial_capital, historical_data.clone());
+        if let Some(guard) = &profitability {
+            engine = engine.with_profitability(guard.clone());
+        }
         let result = engine.run(bt_strategy).await?;
 
         results_vec.push(OptResult {
@@ -1994,6 +2099,9 @@ async fn run_optimize(
         );
         let bt_strategy = strategy::create_strategy_with_params(strategy_name, Some(&best.params))?;
         let mut engine = backtest::engine::BacktestEngine::new(initial_capital, historical_data);
+        if let Some(guard) = &profitability {
+            engine = engine.with_profitability(guard.clone());
+        }
         let result = engine.run(bt_strategy).await?;
         let best_dir = format!("{}/best", opt_dir);
         backtest::metrics::generate_report(&result, &best_dir).await?;

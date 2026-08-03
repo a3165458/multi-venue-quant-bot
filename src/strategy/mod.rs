@@ -38,11 +38,14 @@ pub fn create_strategy(settings: &Config) -> Result<Box<dyn Strategy>> {
         .unwrap_or(false);
 
     if grid_enabled {
-        let grid_count = settings.get_int("trading.strategies.grid_trading.grid_count")
+        let grid_count = settings
+            .get_int("trading.strategies.grid_trading.grid_count")
             .unwrap_or(10) as usize;
-        let investment = settings.get_float("trading.strategies.grid_trading.investment_per_grid")
+        let investment = settings
+            .get_float("trading.strategies.grid_trading.investment_per_grid")
             .unwrap_or(100.0);
-        let deviation = settings.get_float("trading.strategies.grid_trading.price_deviation")
+        let deviation = settings
+            .get_float("trading.strategies.grid_trading.price_deviation")
             .unwrap_or(0.02);
 
         // 实盘路径：yaml 可选覆盖库存政策，但 research_nocap 一律拒绝
@@ -64,22 +67,52 @@ pub fn create_strategy(settings: &Config) -> Result<Box<dyn Strategy>> {
             grid_count, investment, deviation, mode, soft_cap, hard_cap,
         )?))
     } else if trend_enabled {
-        let fast_ma = settings.get_int("trading.strategies.trend_following.fast_ma")
+        let fast_ma = settings
+            .get_int("trading.strategies.trend_following.fast_ma")
             .unwrap_or(10) as usize;
-        let slow_ma = settings.get_int("trading.strategies.trend_following.slow_ma")
+        let slow_ma = settings
+            .get_int("trading.strategies.trend_following.slow_ma")
             .unwrap_or(30) as usize;
-        let stop_loss = settings.get_float("trading.strategies.trend_following.stop_loss")
+        let stop_loss = settings
+            .get_float("trading.strategies.trend_following.stop_loss")
             .unwrap_or(0.05);
-        let take_profit = settings.get_float("trading.strategies.trend_following.take_profit")
+        let take_profit = settings
+            .get_float("trading.strategies.trend_following.take_profit")
             .unwrap_or(0.1);
-        let trailing_stop = settings.get_float("trading.strategies.trend_following.trailing_stop")
+        let trailing_stop = settings
+            .get_float("trading.strategies.trend_following.trailing_stop")
             .unwrap_or(0.0);
-        let notional = settings.get_float("trading.strategies.trend_following.notional")
+        let notional = settings
+            .get_float("trading.strategies.trend_following.notional")
             .unwrap_or(1000.0);
+        let adx_threshold = settings
+            .get_float("trading.strategies.trend_following.adx_threshold")
+            .unwrap_or(0.0);
+        let adx_period = settings
+            .get_int("trading.strategies.trend_following.adx_period")
+            .unwrap_or(14) as usize;
 
-        Ok(Box::new(trend_strategy::TrendStrategy::with_options(
-            fast_ma, slow_ma, stop_loss, take_profit, trailing_stop, notional,
-        )))
+        let slow_period_read = slow_ma;
+        let confirm_min = settings
+            .get_float("trading.strategies.trend_following.confirm_slope_min")
+            .unwrap_or(0.0);
+        let confirm_lookback = settings
+            .get_int("trading.strategies.trend_following.confirm_lookback")
+            .unwrap_or((slow_period_read / 2).max(1) as i64)
+            as usize;
+
+        Ok(Box::new(
+            trend_strategy::TrendStrategy::with_options(
+                fast_ma,
+                slow_ma,
+                stop_loss,
+                take_profit,
+                trailing_stop,
+                notional,
+            )
+            .with_adx_filter(adx_threshold, adx_period)
+            .with_slope_confirm(confirm_min, confirm_lookback),
+        ))
     } else {
         // Default to grid strategy
         Ok(Box::new(grid_strategy::GridStrategy::new(10, 100.0, 0.02)))
@@ -99,13 +132,20 @@ pub fn create_strategy_with_params(name: &str, params: Option<&str>) -> Result<B
 
     match name {
         "grid_trading" | "grid" => {
-            let grid_count = kv.get("grid_count").and_then(|v| v.parse().ok()).unwrap_or(10);
-            let investment = kv.get("investment_per_grid")
+            let grid_count = kv
+                .get("grid_count")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(10);
+            let investment = kv
+                .get("investment_per_grid")
                 .or_else(|| kv.get("investment"))
-                .and_then(|v| v.parse().ok()).unwrap_or(8.0);
-            let deviation = kv.get("price_deviation")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(8.0);
+            let deviation = kv
+                .get("price_deviation")
                 .or_else(|| kv.get("deviation"))
-                .and_then(|v| v.parse().ok()).unwrap_or(0.008);
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0.008);
 
             // 库存政策（回测/研究）。未指定时保持原行为 = 实盘硬上限。
             let mode_raw = kv.get("inventory_mode").map(|s| s.as_str());
@@ -137,19 +177,64 @@ pub fn create_strategy_with_params(name: &str, params: Option<&str>) -> Result<B
         "trend_following" | "trend" => {
             let fast_ma = kv.get("fast_ma").and_then(|v| v.parse().ok()).unwrap_or(7);
             let slow_ma = kv.get("slow_ma").and_then(|v| v.parse().ok()).unwrap_or(21);
-            let stop_loss = kv.get("stop_loss").and_then(|v| v.parse().ok()).unwrap_or(0.03);
-            let take_profit = kv.get("take_profit").and_then(|v| v.parse().ok()).unwrap_or(0.06);
-            let trailing_stop = kv.get("trailing_stop").and_then(|v| v.parse().ok()).unwrap_or(0.0);
-            let notional = kv.get("notional").and_then(|v| v.parse().ok()).unwrap_or(1000.0);
-            Ok(Box::new(trend_strategy::TrendStrategy::with_options(
-                fast_ma, slow_ma, stop_loss, take_profit, trailing_stop, notional,
-            )))
+            let stop_loss = kv
+                .get("stop_loss")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0.03);
+            let take_profit = kv
+                .get("take_profit")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0.06);
+            let trailing_stop = kv
+                .get("trailing_stop")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0.0);
+            let notional = kv
+                .get("notional")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(1000.0);
+            let adx_threshold = kv
+                .get("adx_threshold")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0.0);
+            let adx_period = kv
+                .get("adx_period")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(14);
+            let confirm_min = kv
+                .get("confirm_slope_min")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0.0);
+            let confirm_lookback = kv
+                .get("confirm_lookback")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or((slow_ma / 2).max(1));
+            Ok(Box::new(
+                trend_strategy::TrendStrategy::with_options(
+                    fast_ma,
+                    slow_ma,
+                    stop_loss,
+                    take_profit,
+                    trailing_stop,
+                    notional,
+                )
+                .with_adx_filter(adx_threshold, adx_period)
+                .with_slope_confirm(confirm_min, confirm_lookback),
+            ))
         }
         "dca" => {
-            let interval = kv.get("interval").and_then(|v| v.parse().ok()).unwrap_or(4.0);
+            let interval = kv
+                .get("interval")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(4.0);
             let amount = kv.get("amount").and_then(|v| v.parse().ok()).unwrap_or(5.0);
-            let dip = kv.get("dip_threshold").and_then(|v| v.parse().ok()).unwrap_or(2.0);
-            Ok(Box::new(dca_strategy::DcaStrategy::new(interval, amount, dip)))
+            let dip = kv
+                .get("dip_threshold")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(2.0);
+            Ok(Box::new(dca_strategy::DcaStrategy::new(
+                interval, amount, dip,
+            )))
         }
         _ => anyhow::bail!("未知策略: {}", name),
     }
@@ -163,7 +248,10 @@ fn parse_params(s: &str) -> std::collections::HashMap<String, String> {
     s.split(',')
         .filter_map(|pair| {
             let mut parts = pair.splitn(2, '=');
-            Some((parts.next()?.trim().to_string(), parts.next()?.trim().to_string()))
+            Some((
+                parts.next()?.trim().to_string(),
+                parts.next()?.trim().to_string(),
+            ))
         })
         .collect()
 }

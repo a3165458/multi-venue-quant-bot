@@ -286,3 +286,78 @@ async fn weak_death_cross_pending_confirms_sell() {
         .expect("confirmed death cross should sell");
     assert_eq!(sigs[0].side, Side::Sell);
 }
+
+#[tokio::test]
+async fn adx_gate_off_golden_cross_opens() {
+    // Gate 关闭(阈值 0)时，boilerplate golden cross 应照常开仓（回归：默认行为不变）
+    let strategy =
+        TrendStrategy::with_options(3, 6, 0.05, 0.1, 0.0, 1000.0).with_adx_filter(0.0, 14);
+    let mut closes: Vec<f64> = (0..14).map(|i| 110.0 - i as f64).collect();
+    closes.extend((0..8).map(|i| 98.0 + i as f64 * 3.0));
+
+    let mut opened = None;
+    for end in 10..=closes.len() {
+        let snap = snapshot_with_candles("BTC", 1_700_100_000 + end as i64 * 3600, &closes[..end]);
+        if let Some(sigs) = strategy.evaluate(&snap).await.unwrap() {
+            opened = Some(sigs[0].clone());
+            break;
+        }
+    }
+    assert!(opened.is_some(), "ADX 关闭时金叉应开仓");
+    assert_eq!(opened.unwrap().side, Side::Buy);
+}
+
+#[tokio::test]
+async fn adx_gate_on_impossible_high_blocks_open() {
+    // 阈值设为不可能达到的 200（远超 ADX 0-100 上限），必定拦下——验证门禁接线
+    // 其余 fixture 与 adx_gate_off_golden_cross_opens 完全一致，唯一变量是门槛。
+    let strategy =
+        TrendStrategy::with_options(3, 6, 0.05, 0.1, 0.0, 1000.0).with_adx_filter(200.0, 14);
+    let mut closes: Vec<f64> = (0..14).map(|i| 110.0 - i as f64).collect();
+    closes.extend((0..8).map(|i| 98.0 + i as f64 * 3.0));
+
+    let mut opened = false;
+    for end in 10..=closes.len() {
+        let snap = snapshot_with_candles("BTC", 1_700_200_000 + end as i64 * 3600, &closes[..end]);
+        if strategy.evaluate(&snap).await.unwrap().is_some() {
+            opened = true;
+            break;
+        }
+    }
+    assert!(!opened, "ADX 阈值极高时应拦住金叉开仓");
+}
+
+#[tokio::test]
+async fn slope_confirm_allows_rising_cross() {
+    let strategy =
+        TrendStrategy::with_options(3, 6, 0.05, 0.1, 0.0, 1000.0).with_slope_confirm(0.01, 5);
+    // 先跌（制造死叉/熊市态），后加速上涨，形成金叉且 slow 斜率显著为正
+    let mut closes: Vec<f64> = (0..14).map(|i| 110.0 - i as f64).collect();
+    closes.extend((0..10).map(|i| 96.0 + i as f64 * 3.0));
+
+    let mut opened = false;
+    for end in 16..=closes.len() {
+        let snap = snapshot_with_candles("BTC", 1_700_300_000 + end as i64 * 3600, &closes[..end]);
+        if strategy.evaluate(&snap).await.unwrap().is_some() {
+            opened = true;
+            break;
+        }
+    }
+    assert!(opened, "下跌后快速上涨形成的金叉应通过斜率确认");
+}
+
+#[tokio::test]
+async fn slope_confirm_blocks_flat_cross() {
+    let strategy =
+        TrendStrategy::with_options(3, 6, 0.05, 0.1, 0.0, 1000.0).with_slope_confirm(0.05, 5);
+    let flat: Vec<f64> = (0..60).map(|i| 50.0 + (i % 2) as f64 * 0.02).collect();
+    let mut opened = false;
+    for end in 20..=flat.len() {
+        let snap = snapshot_with_candles("BTC", 1_700_500_000 + end as i64 * 3600, &flat[..end]);
+        if strategy.evaluate(&snap).await.unwrap().is_some() {
+            opened = true;
+            break;
+        }
+    }
+    assert!(!opened, "横盘窄幅波动不应通过斜率确认");
+}

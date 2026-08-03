@@ -1,7 +1,7 @@
 use reqwest::Client;
 use serde_json::Value;
 use std::sync::atomic::{AtomicI64, Ordering};
-use tracing::{debug, info, error, warn};
+use tracing::{debug, error, info, warn};
 
 use super::error::LighterError;
 use super::ffi;
@@ -55,12 +55,7 @@ impl LighterClient {
 
     /// Backward-compatible constructor matching the old 4-arg signature.
     /// The api_key and secret_key params are ignored (signing is done via FFI).
-    pub fn new(
-        _api_key: &str,
-        _secret_key: &str,
-        rest_url: &str,
-        _ws_url: &str,
-    ) -> Self {
+    pub fn new(_api_key: &str, _secret_key: &str, rest_url: &str, _ws_url: &str) -> Self {
         Self::new_with_account(rest_url, 0, 0)
     }
 
@@ -73,7 +68,13 @@ impl LighterClient {
                 Ok(resp) => {
                     let status = resp.status();
                     if status.is_server_error() && attempt < max_retries {
-                        warn!("HTTP {} on GET {}, retry {}/{}...", status, url, attempt + 1, max_retries);
+                        warn!(
+                            "HTTP {} on GET {}, retry {}/{}...",
+                            status,
+                            url,
+                            attempt + 1,
+                            max_retries
+                        );
                         tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
                         delay = (delay * 2).min(10);
                         continue;
@@ -82,14 +83,26 @@ impl LighterClient {
                         code: -1,
                         message: format!("Response body read error: {}", e),
                     })?;
-                    let json: Value = serde_json::from_str(&body).map_err(|e| LighterError::ApiError {
-                        code: status.as_u16() as i32,
-                        message: format!("JSON parse error (HTTP {}): {} — body: {}", status, e, &body[..body.len().min(200)]),
-                    })?;
+                    let json: Value =
+                        serde_json::from_str(&body).map_err(|e| LighterError::ApiError {
+                            code: status.as_u16() as i32,
+                            message: format!(
+                                "JSON parse error (HTTP {}): {} — body: {}",
+                                status,
+                                e,
+                                &body[..body.len().min(200)]
+                            ),
+                        })?;
                     return Ok(json);
                 }
                 Err(e) if attempt < max_retries => {
-                    warn!("HTTP request error on GET {}: {}, retry {}/{}...", url, e, attempt + 1, max_retries);
+                    warn!(
+                        "HTTP request error on GET {}: {}, retry {}/{}...",
+                        url,
+                        e,
+                        attempt + 1,
+                        max_retries
+                    );
                     tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
                     delay = (delay * 2).min(10);
                     continue;
@@ -113,7 +126,11 @@ impl LighterClient {
             .as_str()
             .and_then(|s| s.parse::<i64>().ok())
             .or_else(|| resp["nonce"].as_i64())
-            .or_else(|| resp["next_nonce"].as_str().and_then(|s| s.parse::<i64>().ok()))
+            .or_else(|| {
+                resp["next_nonce"]
+                    .as_str()
+                    .and_then(|s| s.parse::<i64>().ok())
+            })
             .or_else(|| resp["next_nonce"].as_i64())
             .ok_or_else(|| LighterError::ApiError {
                 code: -1,
@@ -157,7 +174,11 @@ impl LighterClient {
         let collateral = account["collateral"]
             .as_str()
             .and_then(|s| s.parse::<f64>().ok())
-            .or_else(|| account["available_balance"].as_str().and_then(|s| s.parse().ok()))
+            .or_else(|| {
+                account["available_balance"]
+                    .as_str()
+                    .and_then(|s| s.parse().ok())
+            })
             .unwrap_or(0.0);
 
         let free_balance = account["available_balance"]
@@ -186,7 +207,11 @@ impl LighterClient {
                 if signed_size.abs() < 1e-12 {
                     continue;
                 }
-                let side = if signed_size >= 0.0 { Side::Buy } else { Side::Sell };
+                let side = if signed_size >= 0.0 {
+                    Side::Buy
+                } else {
+                    Side::Sell
+                };
                 let entry_price: f64 = p["avg_entry_price"]
                     .as_str()
                     .and_then(|s| s.parse().ok())
@@ -312,7 +337,11 @@ impl LighterClient {
 
         let last_price: f64 = details["last_trade_price"]
             .as_f64()
-            .or_else(|| details["last_trade_price"].as_str().and_then(|s| s.parse().ok()))
+            .or_else(|| {
+                details["last_trade_price"]
+                    .as_str()
+                    .and_then(|s| s.parse().ok())
+            })
             .unwrap_or(0.0);
 
         let symbol = details["symbol"]
@@ -360,9 +389,8 @@ impl LighterClient {
                 .map(|arr| {
                     arr.iter()
                         .filter_map(|lvl| {
-                            let price = lvl["price"]
-                                .as_str()
-                                .and_then(|s| s.parse::<f64>().ok())?;
+                            let price =
+                                lvl["price"].as_str().and_then(|s| s.parse::<f64>().ok())?;
                             let qty = lvl["size"]
                                 .as_str()
                                 .and_then(|s| s.parse::<f64>().ok())
@@ -413,14 +441,11 @@ impl LighterClient {
                 arr.iter()
                     .enumerate()
                     .filter_map(|(i, t)| {
-                        let price: f64 =
-                            t["price"].as_str().and_then(|s| s.parse().ok())?;
+                        let price: f64 = t["price"].as_str().and_then(|s| s.parse().ok())?;
                         let qty: f64 = t["size"]
                             .as_str()
                             .and_then(|s| s.parse().ok())
-                            .or_else(|| {
-                                t["quantity"].as_str().and_then(|s| s.parse().ok())
-                            })
+                            .or_else(|| t["quantity"].as_str().and_then(|s| s.parse().ok()))
                             .unwrap_or(0.0);
                         let side_str = t["side"].as_str().unwrap_or("buy");
                         let side = if side_str == "ask" || side_str == "sell" {
@@ -543,33 +568,32 @@ impl LighterClient {
             .text("tx_type", tx_type.to_string())
             .text("tx_info", tx_info.to_string());
 
-        info!("sendTx: tx_type={}, tx_info_preview={}...",
-            tx_type, &tx_info[..tx_info.len().min(200)]);
+        info!(
+            "sendTx: tx_type={}, tx_info_preview={}...",
+            tx_type,
+            &tx_info[..tx_info.len().min(200)]
+        );
 
-        let resp_raw = self
-            .client
-            .post(&url)
-            .multipart(form)
-            .send()
-            .await?;
+        let resp_raw = self.client.post(&url).multipart(form).send().await?;
 
         let status = resp_raw.status();
         let resp_text = resp_raw.text().await.unwrap_or_default();
         debug!("sendTx response ({}): {}", status, &resp_text);
 
         if !status.is_success() {
-            error!("sendTx FAILED ({}): {} — tx_type={}, tx_info={}", status, resp_text, tx_type, tx_info);
+            error!(
+                "sendTx FAILED ({}): {} — tx_type={}, tx_info={}",
+                status, resp_text, tx_type, tx_info
+            );
             return Err(LighterError::ApiError {
                 code: status.as_u16() as i32,
                 message: format!("HTTP {}: {}", status, resp_text),
             });
         }
 
-        let resp: Value = serde_json::from_str(&resp_text).map_err(|e| {
-            LighterError::ApiError {
-                code: -1,
-                message: format!("Failed to parse sendTx response: {} body={}", e, resp_text),
-            }
+        let resp: Value = serde_json::from_str(&resp_text).map_err(|e| LighterError::ApiError {
+            code: -1,
+            message: format!("Failed to parse sendTx response: {} body={}", e, resp_text),
         })?;
 
         // Check for API error
@@ -589,7 +613,10 @@ impl LighterClient {
             .unwrap_or("pending")
             .to_string();
 
-        info!("sendTx success: id={} full_response={}", order_id, resp_text);
+        info!(
+            "sendTx success: id={} full_response={}",
+            order_id, resp_text
+        );
 
         Ok(PlaceOrderResponse {
             order_id,
@@ -621,10 +648,15 @@ impl LighterClient {
         market_info: Option<&MarketInfo>,
     ) -> Result<PlaceOrderResponse, LighterError> {
         let (size_dec, price_dec, min_base, min_quote) = match market_info {
-            Some(mi) => (mi.size_decimals, mi.price_decimals, mi.min_base_amount, mi.min_quote_amount),
+            Some(mi) => (
+                mi.size_decimals,
+                mi.price_decimals,
+                mi.min_base_amount,
+                mi.min_quote_amount,
+            ),
             None => match market_id {
-                0 => (4, 2, 0.005, 10.0),   // ETH
-                1 => (5, 1, 0.0002, 10.0),  // BTC
+                0 => (4, 2, 0.005, 10.0),  // ETH
+                1 => (5, 1, 0.0002, 10.0), // BTC
                 _ => (4, 2, 0.005, 10.0),
             },
         };
@@ -632,13 +664,19 @@ impl LighterClient {
         // Enforce minimum quantity: must meet both min_base and min_quote
         let mut qty = quantity;
         if qty < min_base {
-            info!("Adjusting qty from {:.6} to min_base {:.6} for market {}", qty, min_base, market_id);
+            info!(
+                "Adjusting qty from {:.6} to min_base {:.6} for market {}",
+                qty, min_base, market_id
+            );
             qty = min_base;
         }
         let quote_value = qty * price;
         if quote_value < min_quote && price > 0.0 {
             qty = min_quote / price * 1.02; // 2% buffer for rounding
-            info!("Adjusting qty to {:.6} to meet min_quote ${:.2} for market {}", qty, min_quote, market_id);
+            info!(
+                "Adjusting qty to {:.6} to meet min_quote ${:.2} for market {}",
+                qty, min_quote, market_id
+            );
         }
 
         let size_multiplier = 10_f64.powi(size_dec as i32);
@@ -651,14 +689,20 @@ impl LighterClient {
         if actual_quote < min_quote && price > 0.0 {
             // Compute minimum base_amount that meets min_quote
             let min_base_for_quote = (min_quote / price * size_multiplier).ceil() as i64 + 1;
-            info!("Post-rounding fix: base_amount {} -> {} to meet min_quote ${:.2}", base_amount, min_base_for_quote, min_quote);
+            info!(
+                "Post-rounding fix: base_amount {} -> {} to meet min_quote ${:.2}",
+                base_amount, min_base_for_quote, min_quote
+            );
             base_amount = min_base_for_quote;
         }
 
         // Also ensure base_amount meets min_base in integer form
         let min_base_int = (min_base * size_multiplier).ceil() as i64;
         if base_amount < min_base_int {
-            info!("Post-rounding fix: base_amount {} -> min_base_int {}", base_amount, min_base_int);
+            info!(
+                "Post-rounding fix: base_amount {} -> min_base_int {}",
+                base_amount, min_base_int
+            );
             base_amount = min_base_int;
         }
 
@@ -702,8 +746,7 @@ impl LighterClient {
             market_id, order_index, nonce
         );
 
-        let (tx_type, tx_info) =
-            ffi::sign_cancel_order(market_id as i32, order_index, nonce)?;
+        let (tx_type, tx_info) = ffi::sign_cancel_order(market_id as i32, order_index, nonce)?;
 
         self.send_tx(tx_type, &tx_info).await?;
         Ok(())
@@ -741,12 +784,19 @@ impl LighterClient {
                 Ok(r) => {
                     // Retry once on server errors (502/503/504)
                     if r.status().is_server_error() {
-                        warn!("get_open_orders market {}: HTTP {}, retrying...", market_id, r.status());
+                        warn!(
+                            "get_open_orders market {}: HTTP {}, retrying...",
+                            market_id,
+                            r.status()
+                        );
                         tokio::time::sleep(std::time::Duration::from_secs(3)).await;
                         match self.client.get(&url).send().await {
                             Ok(r2) => r2,
                             Err(e) => {
-                                warn!("get_open_orders retry failed for market {}: {}", market_id, e);
+                                warn!(
+                                    "get_open_orders retry failed for market {}: {}",
+                                    market_id, e
+                                );
                                 continue;
                             }
                         }
@@ -755,7 +805,10 @@ impl LighterClient {
                     }
                 }
                 Err(e) => {
-                    warn!("get_open_orders request failed for market {}: {}", market_id, e);
+                    warn!(
+                        "get_open_orders request failed for market {}: {}",
+                        market_id, e
+                    );
                     continue;
                 }
             };
@@ -764,14 +817,22 @@ impl LighterClient {
             let body = resp.text().await.unwrap_or_default();
 
             if !status.is_success() {
-                warn!("get_open_orders market {}: HTTP {} — {}", market_id, status, &body[..body.len().min(200)]);
+                warn!(
+                    "get_open_orders market {}: HTTP {} — {}",
+                    market_id,
+                    status,
+                    &body[..body.len().min(200)]
+                );
                 continue;
             }
 
             let json: Value = match serde_json::from_str(&body) {
                 Ok(v) => v,
                 Err(e) => {
-                    warn!("get_open_orders market {}: JSON parse error: {}", market_id, e);
+                    warn!(
+                        "get_open_orders market {}: JSON parse error: {}",
+                        market_id, e
+                    );
                     continue;
                 }
             };
@@ -779,20 +840,33 @@ impl LighterClient {
             if let Some(order_arr) = json.get("orders").and_then(|o| o.as_array()) {
                 let market_name = super::symbols::symbol_of(market_id);
                 for o in order_arr {
-                    let is_ask = o["is_ask"].as_str()
-                        .or_else(|| o["is_ask"].as_bool().map(|b| if b { "1" } else { "0" }).or(Some("0")))
+                    let is_ask = o["is_ask"]
+                        .as_str()
+                        .or_else(|| {
+                            o["is_ask"]
+                                .as_bool()
+                                .map(|b| if b { "1" } else { "0" })
+                                .or(Some("0"))
+                        })
                         .unwrap_or("0");
-                    let side = if is_ask == "1" || is_ask == "true" { Side::Sell } else { Side::Buy };
+                    let side = if is_ask == "1" || is_ask == "true" {
+                        Side::Sell
+                    } else {
+                        Side::Buy
+                    };
 
-                    let price_val = o["price"].as_str()
+                    let price_val = o["price"]
+                        .as_str()
                         .and_then(|s| s.parse::<f64>().ok())
                         .or_else(|| o["price"].as_f64())
                         .unwrap_or(0.0);
-                    let remaining = o["remaining_base_amount"].as_str()
+                    let remaining = o["remaining_base_amount"]
+                        .as_str()
                         .and_then(|s| s.parse::<f64>().ok())
                         .or_else(|| o["remaining_base_amount"].as_f64())
                         .unwrap_or(0.0);
-                    let original = o["original_base_amount"].as_str()
+                    let original = o["original_base_amount"]
+                        .as_str()
                         .and_then(|s| s.parse::<f64>().ok())
                         .or_else(|| o["original_base_amount"].as_f64())
                         .unwrap_or(remaining);
@@ -804,7 +878,8 @@ impl LighterClient {
                     };
 
                     all_orders.push(Order {
-                        id: o["order_index"].as_str()
+                        id: o["order_index"]
+                            .as_str()
                             .unwrap_or(&o["order_index"].to_string())
                             .to_string(),
                         symbol: market_name.to_string(),

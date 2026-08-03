@@ -3,6 +3,7 @@ use chrono::{DateTime, Utc};
 use tracing::{debug, info};
 
 use crate::lighter::types::*;
+use crate::risk::profitability::{ProfitabilityGuard, SignalEconomics};
 use crate::strategy::Strategy;
 
 use super::margin::MarginTracker;
@@ -22,6 +23,10 @@ pub struct BacktestEngine {
     equity_curve: Vec<(DateTime<Utc>, f64)>,
     total_commission: f64,
     margin: MarginTracker,
+    /// 可选收益门槛：与实盘 `RiskManager::check_signal` 同口径，None = 历史行为（全放行）
+    profitability: Option<ProfitabilityGuard>,
+    /// 被收益门槛拦截的入场信号数（risk_reducing 永不拦截）
+    blocked_by_profitability: usize,
 }
 
 impl BacktestEngine {
@@ -36,6 +41,8 @@ impl BacktestEngine {
             equity_curve: Vec::new(),
             total_commission: 0.0,
             margin: MarginTracker::default(),
+            profitability: None,
+            blocked_by_profitability: 0,
         }
     }
 
@@ -50,6 +57,14 @@ impl BacktestEngine {
     #[allow(dead_code)]
     pub fn with_slippage(mut self, rate: f64) -> Self {
         self.slippage_rate = rate;
+        self
+    }
+
+    /// 启用收益门槛（与实盘 RiskManager 同口径）：入场信号必须净收益 > 门槛，
+    /// risk_reducing 信号永远放行。不调用 = 历史行为，全部放行。
+    #[allow(dead_code)]
+    pub fn with_profitability(mut self, guard: ProfitabilityGuard) -> Self {
+        self.profitability = Some(guard);
         self
     }
 
@@ -107,6 +122,25 @@ impl BacktestEngine {
             // 评估策略
             if let Some(signals) = strategy.evaluate(&snapshot).await? {
                 for signal in signals {
+                    // 收益门槛（与实盘 RiskManager::check_signal 同口径）：
+                    // 入场信号必须净收益 > min_net_edge；risk_reducing 永远放行。
+                    if let Some(guard) = &self.profitability {
+                        let economics = if signal.risk_reducing {
+                            SignalEconomics::exit()
+                        } else {
+                            SignalEconomics::entry(signal.expected_edge_bps)
+                        };
+                        let decision = guard.evaluate(economics);
+                        if !decision.allowed {
+                            self.blocked_by_profitability += 1;
+                            debug!(
+                                "收益门槛拦截(回测): {} {:?} reason={}, net={:?}bps",
+                                signal.symbol, signal.side, decision.reason, decision.net_edge_bps
+                            );
+                            continue;
+                        }
+                    }
+
                     // 模拟执行
                     let execution_price = self.apply_slippage(signal.price, signal.side);
                     let commission_per_qty = execution_price * self.commission_rate;
@@ -342,6 +376,7 @@ impl BacktestEngine {
             peak_position_grids: self.margin.peak_position_grids(),
             liq_count: self.margin.liq_count(),
             bars_over_soft_cap: self.margin.bars_over_soft_cap(),
+            blocked_by_profitability: self.blocked_by_profitability,
         })
     }
 }
@@ -374,3 +409,7 @@ mod engine_report_tests;
 #[cfg(test)]
 #[path = "engine_margin_tests.rs"]
 mod engine_margin_tests;
+
+#[cfg(test)]
+#[path = "engine_profitability_tests.rs"]
+mod engine_profitability_tests;

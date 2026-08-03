@@ -16,15 +16,23 @@
         custom:   { url: '',                                                     model: '' }
     };
 
-    // ── LocalStorage persistence ──
+    // ── Non-secret LocalStorage persistence ──
     var STORAGE_KEY = 'lighter-ai-settings';
+
+    function escapeHtml(value) {
+        return String(value == null ? '' : value)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    }
 
     function saveSettings() {
         var settings = {
             provider: document.getElementById('ai-provider').value,
             url: document.getElementById('ai-url').value,
             model: document.getElementById('ai-model').value,
-            key: document.getElementById('ai-key').value,
             goal: document.getElementById('ai-goal').value,
             maxTokens: document.getElementById('ai-max-tokens').value,
             opencodeModel: document.getElementById('opencode-model').value
@@ -40,10 +48,16 @@
             if (s.provider) document.getElementById('ai-provider').value = s.provider;
             if (s.url) document.getElementById('ai-url').value = s.url;
             if (s.model) document.getElementById('ai-model').value = s.model;
-            if (s.key) document.getElementById('ai-key').value = s.key;
             if (s.goal) document.getElementById('ai-goal').value = s.goal;
             if (s.maxTokens) document.getElementById('ai-max-tokens').value = s.maxTokens;
             if (s.opencodeModel) document.getElementById('opencode-model').value = s.opencodeModel;
+
+            // Remove credentials saved by older builds. API keys remain only
+            // in the input's in-memory value for the current page session.
+            if (Object.prototype.hasOwnProperty.call(s, 'key')) {
+                delete s.key;
+                localStorage.setItem(STORAGE_KEY, JSON.stringify(s));
+            }
         } catch(e) {}
     }
 
@@ -58,7 +72,7 @@
     }
 
     // Auto-save on any input change
-    ['ai-provider','ai-url','ai-model','ai-key','ai-goal','ai-max-tokens','opencode-model'].forEach(function(id) {
+    ['ai-provider','ai-url','ai-model','ai-goal','ai-max-tokens','opencode-model'].forEach(function(id) {
         var el = document.getElementById(id);
         if (el) el.addEventListener('change', saveSettings);
         if (el) el.addEventListener('input', saveSettings);
@@ -130,12 +144,12 @@
             } else if (d.choices && d.choices[0]) {
                 reply = (d.choices[0].message || {}).content || '';
             }
-            alert('✅ Connection OK!\nModel: ' + model + '\nResponse: ' + reply.substring(0, 100));
+            alert('Connection OK\nModel: ' + model + '\nResponse: ' + reply.substring(0, 100));
         })
         .catch(function(e) {
             btn.disabled = false;
             btn.textContent = '🔗 Test';
-            alert('❌ Connection failed:\n' + e.message);
+            alert('Connection failed:\n' + e.message);
         });
     };
 
@@ -162,7 +176,7 @@
         .then(function(r) { return r.json(); })
         .then(function(data) {
             btn.disabled = false;
-            btn.textContent = '▶ Run Backtest';
+            btn.textContent = 'Run Backtest';
             if (data.status === 'error' || data.error || data.message && data.status !== 'ok') {
                 showError(data.error || data.message);
                 return;
@@ -172,7 +186,7 @@
         })
         .catch(function(e) {
             btn.disabled = false;
-            btn.textContent = '▶ Run Backtest';
+            btn.textContent = 'Run Backtest';
             showError('Request failed: ' + e.message);
         });
     };
@@ -181,7 +195,7 @@
         document.getElementById('results-empty').style.display = 'none';
         var content = document.getElementById('results-content');
         content.style.display = 'block';
-        content.innerHTML = '<div class="result-card"><p class="negative" style="padding:12px">❌ ' + msg + '</p></div>';
+        content.innerHTML = '<div class="result-card"><p class="negative" style="padding:12px">Error: ' + escapeHtml(msg) + '</p></div>';
     }
 
     function renderResults(data) {
@@ -195,7 +209,7 @@
 
         var html = '<div class="result-card">' +
             '<div class="result-header">' +
-            '<div class="result-title">Backtest: ' + (data.strategy || 'grid') + ' on ' + (data.data_file || '-') + '</div>' +
+            '<div class="result-title">Backtest: ' + escapeHtml(data.strategy || 'grid') + ' on ' + escapeHtml(data.data_file || '-') + '</div>' +
             '<span class="result-badge ' + badgeClass + '">' + badgeText + '</span></div>' +
             '<div class="metrics-grid">' +
             metric('Total Return', fmtPct(totalReturn), totalReturn >= 0) +
@@ -223,8 +237,8 @@
                 var t = trades[i];
                 var pnlCls = (t.pnl || 0) >= 0 ? 'positive' : 'negative';
                 html += '<tr><td>' + (i+1) + '</td>' +
-                    '<td>' + (t.timestamp || '-') + '</td>' +
-                    '<td>' + (t.side || '-') + '</td>' +
+                    '<td>' + escapeHtml(t.timestamp || '-') + '</td>' +
+                    '<td>' + escapeHtml(t.side || '-') + '</td>' +
                     '<td>$' + Number(t.price||0).toFixed(2) + '</td>' +
                     '<td>' + Number(t.quantity||0).toFixed(6) + '</td>' +
                     '<td class="' + pnlCls + '">$' + Number(t.pnl||0).toFixed(2) + '</td></tr>';
@@ -239,8 +253,8 @@
         var currentStrategy = document.getElementById('bt-strategy').value;
         if (currentParams) {
             html += '<div style="margin-top:16px;display:flex;gap:8px;align-items:center">' +
-                '<button class="btn btn-ai" id="btn-apply-live" style="flex:1" onclick="applyToLive()">🚀 Apply to Live Trading</button>' +
-                '<div style="font-size:11px;color:var(--text-sub);flex:1">Applies <b>' + currentStrategy + '</b> with params: <code>' + currentParams + '</code> to your live bot</div>' +
+                '<button class="btn btn-ai" id="btn-apply-live" style="flex:1" onclick="applyToLive()">Apply to Live Trading</button>' +
+                '<div style="font-size:11px;color:var(--text-sub);flex:1">Applies <b>' + escapeHtml(currentStrategy) + '</b> with params: <code>' + escapeHtml(currentParams) + '</code> to your live bot</div>' +
                 '</div>';
         }
 
@@ -282,23 +296,23 @@
         .then(function(r) { return r.json(); })
         .then(function(d) {
             btn.disabled = false;
-            btn.textContent = '✅ Applied to Live!';
+            btn.textContent = 'Applied to Live';
             btn.style.background = 'var(--success)';
             var log = document.getElementById('ai-log');
             if (log) {
                 log.style.display = 'block';
-                log.textContent += '> ✅ Applied to live: ' + strategyName + ' with ' + paramsStr + '\n';
+                log.textContent += '> Applied to live: ' + strategyName + ' with ' + paramsStr + '\n';
                 log.scrollTop = log.scrollHeight;
             }
             setTimeout(function() {
-                btn.textContent = '🚀 Apply to Live Trading';
+                btn.textContent = 'Apply to Live Trading';
                 btn.style.background = '';
             }, 3000);
         })
         .catch(function(e) {
             btn.disabled = false;
-            btn.textContent = '❌ Failed — Try Again';
-            setTimeout(function() { btn.textContent = '🚀 Apply to Live Trading'; }, 3000);
+            btn.textContent = 'Failed - Try Again';
+            setTimeout(function() { btn.textContent = 'Apply to Live Trading'; }, 3000);
             alert('Failed to apply: ' + e.message);
         });
     };
@@ -328,8 +342,9 @@
         var maxV = Math.max.apply(null, vals) * 1.002;
         var range = maxV - minV || 1;
 
-        var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
-        ctx.strokeStyle = isDark ? '#1B254B' : '#E9EDF7';
+        var styles = getComputedStyle(document.documentElement);
+        var css = function(name, fallback) { return styles.getPropertyValue(name).trim() || fallback; };
+        ctx.strokeStyle = css('--border', '#D6D1C4');
         ctx.lineWidth = 1;
         for (var g = 0; g < 4; g++) {
             var gy = h * 0.05 + (h * 0.9 / 3) * g;
@@ -337,8 +352,8 @@
         }
 
         var isProfit = vals[vals.length - 1] >= vals[0];
-        var lineColor = isProfit ? '#26a65b' : '#ea3943';
-        var fillColor = isProfit ? 'rgba(38,166,91,0.1)' : 'rgba(234,57,67,0.1)';
+        var lineColor = isProfit ? css('--success', '#2F5D3A') : css('--danger', '#A14A3F');
+        var fillColor = isProfit ? css('--success-bg', 'rgba(47,93,58,0.12)') : css('--danger-bg', 'rgba(161,74,63,0.12)');
 
         ctx.beginPath();
         ctx.strokeStyle = lineColor;
@@ -353,8 +368,8 @@
         ctx.fillStyle = fillColor;
         ctx.fill();
 
-        ctx.fillStyle = isDark ? '#56607B' : '#A3AED0';
-        ctx.font = '10px sans-serif';
+        ctx.fillStyle = css('--text-muted', '#7A766C');
+        ctx.font = '10px ui-monospace, monospace';
         ctx.textAlign = 'right';
         ctx.fillText('$' + maxV.toFixed(0), w - 4, h * 0.05 + 12);
         ctx.fillText('$' + minV.toFixed(0), w - 4, h * 0.95);
@@ -445,7 +460,7 @@
         })
         .then(function(results) {
             btn.disabled = false;
-            btn.textContent = '🤖 AI Optimize Parameters';
+            btn.textContent = 'AI Optimize Parameters';
             if (results && results.optimized) {
                 addLog('AI Optimized: Return=' + (results.optimized.total_return_pct||0).toFixed(2) + '%, Sharpe=' + (results.optimized.sharpe_ratio||0).toFixed(2));
                 var improve = (results.optimized.total_return_pct||0) - (results.base.total_return_pct||0);
@@ -456,8 +471,8 @@
         })
         .catch(function(e) {
             btn.disabled = false;
-            btn.textContent = '🤖 AI Optimize Parameters';
-            addLog('❌ Error: ' + e.message);
+            btn.textContent = 'AI Optimize Parameters';
+            addLog('Error: ' + e.message);
         });
     };
 
@@ -557,7 +572,7 @@
             btn.disabled = false;
             btn.textContent = '⚡ OpenCode GLM5 Optimize + Backtest';
             if (data.status !== 'ok') {
-                log.textContent += '> ❌ ' + (data.message || data.error || 'OpenCode optimize failed') + '\n';
+                log.textContent += '> Error: ' + (data.message || data.error || 'OpenCode optimize failed') + '\n';
                 showError(data.message || data.error || 'OpenCode optimize failed');
                 return;
             }
@@ -574,7 +589,7 @@
         .catch(function(e) {
             btn.disabled = false;
             btn.textContent = '⚡ OpenCode GLM5 Optimize + Backtest';
-            log.textContent += '> ❌ ' + e.message + '\n';
+            log.textContent += '> Error: ' + e.message + '\n';
             showError('OpenCode request failed: ' + e.message);
         });
     };

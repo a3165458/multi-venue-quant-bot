@@ -47,6 +47,8 @@ pub struct BacktestResults {
     pub liq_count: usize,
     /// 持仓网格数 ≥ soft_cap 的K线数（需显式设置 soft_cap 才统计）
     pub bars_over_soft_cap: usize,
+    /// 被收益门槛（profitability gate）拦截的入场信号数
+    pub blocked_by_profitability: usize,
 }
 
 /// Inputs for result statistics (mirrors engine state at end of run).
@@ -64,6 +66,7 @@ pub(crate) struct ResultsCalcInput<'a> {
     pub peak_position_grids: f64,
     pub liq_count: usize,
     pub bars_over_soft_cap: usize,
+    pub blocked_by_profitability: usize,
 }
 
 pub(crate) fn calculate_results(input: &ResultsCalcInput<'_>) -> BacktestResults {
@@ -126,6 +129,7 @@ pub(crate) fn calculate_results(input: &ResultsCalcInput<'_>) -> BacktestResults
         peak_position_grids: input.peak_position_grids,
         liq_count: input.liq_count,
         bars_over_soft_cap: input.bars_over_soft_cap,
+        blocked_by_profitability: input.blocked_by_profitability,
     }
 }
 

@@ -1,25 +1,21 @@
 use anyhow::Result;
 use futures_util::{SinkExt, StreamExt};
-use tokio::sync::broadcast;
-use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
-use tracing::{debug, error, info, warn};
 use std::sync::Arc;
+use tokio::sync::broadcast;
 use tokio::sync::{Mutex, RwLock};
+use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
 use tokio_util::sync::CancellationToken;
+use tracing::{debug, error, info, warn};
 
 use super::types::*;
 
 type WsSink = futures_util::stream::SplitSink<
-    tokio_tungstenite::WebSocketStream<
-        tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>
-    >,
-    Message
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
+    Message,
 >;
 
 type WsStream = futures_util::stream::SplitStream<
-    tokio_tungstenite::WebSocketStream<
-        tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>
-    >
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
 >;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -54,7 +50,8 @@ impl LighterWebSocket {
     pub async fn connect(&self) -> Result<()> {
         info!("Connecting WebSocket: {}", self.ws_url);
 
-        let (ws_stream, _) = connect_async(&self.ws_url).await
+        let (ws_stream, _) = connect_async(&self.ws_url)
+            .await
             .map_err(|e| anyhow::anyhow!("WebSocket connection failed: {}", e))?;
 
         let (write, read) = ws_stream.split();
@@ -176,7 +173,10 @@ impl LighterWebSocket {
             }
         }
 
-        info!("Subscribed to market data: {} (market_id={})", symbol, market_id);
+        info!(
+            "Subscribed to market data: {} (market_id={})",
+            symbol, market_id
+        );
         Ok(())
     }
 
@@ -222,7 +222,8 @@ impl LighterWebSocket {
                     "type": "subscribe",
                     "channel": format!("{}/{}", channel, market_id),
                 });
-                ws.send(Message::Text(sub.to_string())).await
+                ws.send(Message::Text(sub.to_string()))
+                    .await
                     .map_err(|e| anyhow::anyhow!("Subscription send failed: {}", e))?;
             }
             Ok(())
@@ -252,7 +253,8 @@ impl LighterWebSocket {
     async fn send_message(&self, msg: &str) -> Result<()> {
         let mut sender = self.sender.write().await;
         if let Some(ref mut ws) = *sender {
-            ws.send(Message::Text(msg.to_string())).await
+            ws.send(Message::Text(msg.to_string()))
+                .await
                 .map_err(|e| anyhow::anyhow!("Failed to send WebSocket message: {}", e))?;
             Ok(())
         } else {
@@ -302,7 +304,10 @@ impl LighterWebSocket {
         let mut attempt = 0u32;
         loop {
             attempt += 1;
-            warn!("🔄 WebSocket reconnect attempt {} (wait {}s)...", attempt, delay);
+            warn!(
+                "🔄 WebSocket reconnect attempt {} (wait {}s)...",
+                attempt, delay
+            );
             tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
 
             match connect_async(ws_url).await {
@@ -339,7 +344,11 @@ impl LighterWebSocket {
                         }
                     }
 
-                    info!("✅ WebSocket reconnected on attempt {} (re-subscribed {} channels)", attempt, subscriptions.len());
+                    info!(
+                        "✅ WebSocket reconnected on attempt {} (re-subscribed {} channels)",
+                        attempt,
+                        subscriptions.len()
+                    );
                     return Ok(new_read);
                 }
                 Err(e) => {
@@ -356,7 +365,10 @@ impl LighterWebSocket {
         let value: serde_json::Value = serde_json::from_str(text)?;
 
         let channel = value.get("channel").and_then(|c| c.as_str()).unwrap_or("");
-        let msg_type = value.get("type").and_then(|t| t.as_str()).unwrap_or("unknown");
+        let msg_type = value
+            .get("type")
+            .and_then(|t| t.as_str())
+            .unwrap_or("unknown");
 
         // Order book update: channel="order_book:0", type="update/order_book"
         if channel.starts_with("order_book:") && msg_type.contains("order_book") {
@@ -373,7 +385,10 @@ impl LighterWebSocket {
                             .filter_map(|lvl| {
                                 let price: f64 = lvl["price"].as_str()?.parse().ok()?;
                                 let qty: f64 = lvl["size"].as_str()?.parse().ok()?;
-                                Some(PriceLevel { price, quantity: qty })
+                                Some(PriceLevel {
+                                    price,
+                                    quantity: qty,
+                                })
                             })
                             .collect()
                     })
@@ -418,14 +433,11 @@ impl LighterWebSocket {
                         .and_then(|s| s.parse::<i64>().ok())
                         .or_else(|| t["timestamp"].as_i64())
                         .unwrap_or(0);
-                    let dt = chrono::DateTime::from_timestamp(ts, 0)
-                        .unwrap_or_else(chrono::Utc::now);
+                    let dt =
+                        chrono::DateTime::from_timestamp(ts, 0).unwrap_or_else(chrono::Utc::now);
 
                     let trade = Trade {
-                        id: t["trade_index"]
-                            .as_str()
-                            .unwrap_or("0")
-                            .to_string(),
+                        id: t["trade_index"].as_str().unwrap_or("0").to_string(),
                         symbol,
                         market_id,
                         price,
@@ -451,14 +463,18 @@ impl LighterWebSocket {
         }
 
         if msg_type == "error" {
-            let err_msg = value.get("message")
+            let err_msg = value
+                .get("message")
                 .and_then(|m| m.as_str())
                 .unwrap_or("Unknown WS error")
                 .to_string();
             return Ok(Some(WsMessage::Error(err_msg)));
         }
 
-        debug!("Unknown WebSocket message type: {} channel: {}", msg_type, channel);
+        debug!(
+            "Unknown WebSocket message type: {} channel: {}",
+            msg_type, channel
+        );
         Ok(None)
     }
 }

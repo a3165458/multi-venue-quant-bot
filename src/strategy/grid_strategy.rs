@@ -667,11 +667,7 @@ pub(crate) mod tests {
 
         let mut snap = snapshot("BTC", 1_700_000_100, 98.5);
         snap.positions.insert("BTC".to_string(), -0.1);
-        let signals = strategy
-            .evaluate(&snap)
-            .await
-            .unwrap()
-            .expect("buy signal");
+        let signals = strategy.evaluate(&snap).await.unwrap().expect("buy signal");
 
         assert!(signals[0].quantity > 0.1);
         assert!(

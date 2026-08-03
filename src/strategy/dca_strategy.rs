@@ -4,8 +4,8 @@ use chrono::{Duration, Utc};
 use std::sync::Mutex;
 use tracing::{debug, info};
 
-use crate::lighter::types::*;
 use super::Strategy;
+use crate::lighter::types::*;
 
 /// DCA (Dollar-Cost Averaging) Strategy
 ///
@@ -74,7 +74,9 @@ impl Strategy for DcaStrategy {
             // Check interval-based buy
             let interval_buy = match state.last_buy_time {
                 None => true, // First ever → buy
-                Some(last) => now.signed_duration_since(last) >= Duration::seconds(self.buy_interval_secs),
+                Some(last) => {
+                    now.signed_duration_since(last) >= Duration::seconds(self.buy_interval_secs)
+                }
             };
 
             // Check dip buy: price dropped below avg by dip_threshold
@@ -83,15 +85,23 @@ impl Strategy for DcaStrategy {
             } else {
                 0.0
             };
-            let dip_buy = self.dip_threshold > 0.0 && dip_pct >= self.dip_threshold && !state.dip_bought;
+            let dip_buy =
+                self.dip_threshold > 0.0 && dip_pct >= self.dip_threshold && !state.dip_bought;
 
             if interval_buy || dip_buy {
                 let reason = if dip_buy {
-                    format!("DCA Dip Buy: price {:.2} is {:.1}% below avg {:.2}",
-                        mid_price, dip_pct * 100.0, state.avg_price)
+                    format!(
+                        "DCA Dip Buy: price {:.2} is {:.1}% below avg {:.2}",
+                        mid_price,
+                        dip_pct * 100.0,
+                        state.avg_price
+                    )
                 } else {
-                    format!("DCA Interval Buy: {:.2} (every {}h)",
-                        mid_price, self.buy_interval_secs / 3600)
+                    format!(
+                        "DCA Interval Buy: {:.2} (every {}h)",
+                        mid_price,
+                        self.buy_interval_secs / 3600
+                    )
                 };
 
                 info!("{} on {}", reason, symbol);
@@ -121,9 +131,17 @@ impl Strategy for DcaStrategy {
                 state.dip_bought = false;
             }
 
-            debug!("{} DCA: price={:.2}, avg={:.2}, dip={:.2}%, next_buy_in={}s",
-                symbol, mid_price, state.avg_price, dip_pct * 100.0,
-                state.last_buy_time.map(|t| self.buy_interval_secs - now.signed_duration_since(t).num_seconds()).unwrap_or(0));
+            debug!(
+                "{} DCA: price={:.2}, avg={:.2}, dip={:.2}%, next_buy_in={}s",
+                symbol,
+                mid_price,
+                state.avg_price,
+                dip_pct * 100.0,
+                state
+                    .last_buy_time
+                    .map(|t| self.buy_interval_secs - now.signed_duration_since(t).num_seconds())
+                    .unwrap_or(0)
+            );
         }
 
         if signals.is_empty() {
@@ -161,8 +179,14 @@ mod tests {
             OrderBook {
                 symbol: symbol.to_string(),
                 market_id: 1,
-                bids: vec![PriceLevel { price: price - 0.5, quantity: 1.0 }],
-                asks: vec![PriceLevel { price: price + 0.5, quantity: 1.0 }],
+                bids: vec![PriceLevel {
+                    price: price - 0.5,
+                    quantity: 1.0,
+                }],
+                asks: vec![PriceLevel {
+                    price: price + 0.5,
+                    quantity: 1.0,
+                }],
                 timestamp: Utc.timestamp_opt(ts, 0).unwrap(),
             },
         );
@@ -172,7 +196,10 @@ mod tests {
     #[tokio::test]
     async fn test_dca_first_buy() {
         let strategy = DcaStrategy::new(4.0, 10.0, 2.0);
-        let result = strategy.evaluate(&snapshot("BTC", 1_700_000_000, 50000.0)).await.unwrap();
+        let result = strategy
+            .evaluate(&snapshot("BTC", 1_700_000_000, 50000.0))
+            .await
+            .unwrap();
         assert!(result.is_some());
         let signals = result.unwrap();
         assert_eq!(signals.len(), 1);
@@ -184,28 +211,46 @@ mod tests {
     #[tokio::test]
     async fn test_dca_interval_throttle() {
         let strategy = DcaStrategy::new(1.0, 10.0, 0.0); // 1h interval, no dip
-        // First buy
-        let r1 = strategy.evaluate(&snapshot("BTC", 1_700_000_000, 50000.0)).await.unwrap();
+                                                         // First buy
+        let r1 = strategy
+            .evaluate(&snapshot("BTC", 1_700_000_000, 50000.0))
+            .await
+            .unwrap();
         assert!(r1.is_some());
         // 30 min later - should NOT buy
-        let r2 = strategy.evaluate(&snapshot("BTC", 1_700_001_800, 50000.0)).await.unwrap();
+        let r2 = strategy
+            .evaluate(&snapshot("BTC", 1_700_001_800, 50000.0))
+            .await
+            .unwrap();
         assert!(r2.is_none());
         // 61 min later - should buy
-        let r3 = strategy.evaluate(&snapshot("BTC", 1_700_003_660, 50000.0)).await.unwrap();
+        let r3 = strategy
+            .evaluate(&snapshot("BTC", 1_700_003_660, 50000.0))
+            .await
+            .unwrap();
         assert!(r3.is_some());
     }
 
     #[tokio::test]
     async fn test_dca_dip_buy() {
         let strategy = DcaStrategy::new(24.0, 10.0, 3.0); // 24h interval, 3% dip
-        // First buy at 50000
-        strategy.evaluate(&snapshot("BTC", 1_700_000_000, 50000.0)).await.unwrap();
+                                                          // First buy at 50000
+        strategy
+            .evaluate(&snapshot("BTC", 1_700_000_000, 50000.0))
+            .await
+            .unwrap();
         // Feed many prices around 50000 to build avg
         for i in 1..20 {
-            strategy.evaluate(&snapshot("BTC", 1_700_000_000 + i * 60, 50000.0)).await.unwrap();
+            strategy
+                .evaluate(&snapshot("BTC", 1_700_000_000 + i * 60, 50000.0))
+                .await
+                .unwrap();
         }
         // Price drops 4% (48000) → should trigger dip buy even though interval hasn't elapsed
-        let r = strategy.evaluate(&snapshot("BTC", 1_700_001_200, 48000.0)).await.unwrap();
+        let r = strategy
+            .evaluate(&snapshot("BTC", 1_700_001_200, 48000.0))
+            .await
+            .unwrap();
         assert!(r.is_some());
     }
 }

@@ -21,6 +21,9 @@
     const fmtPct = v => (v >= 0 ? '+' : '') + v.toFixed(2) + '%';
     const pnlArrow = v => v > 0.001 ? '▲ ' : v < -0.001 ? '▼ ' : '— ';
     const pnlClass = v => v >= 0 ? 'c-up' : 'c-down';
+    const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, char => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+    })[char]);
     const tradeAction = t => t.action || t.close_type || t.trade_type || 'Order';
     const isCloseAction = action => /Close|Stop|Emergency|Liquidat/i.test(action || '');
     const isTerminalCloseAction = action => /Full Close|Stop|Emergency|Liquidat/i.test(action || '');
@@ -60,8 +63,23 @@
             noTrades: 'No trades yet', noHistory: 'No trade history',
             searchPlaceholder: 'Search...', searchByAsset: 'Search by asset, side...',
             connecting: 'Connecting...', liveTrading: 'Live Trading', disconnected: 'Disconnected',
-            connectionLost: '⚡ Connection lost. Reconnecting...',
-            confirmCancel: 'Cancel ALL open orders? This cannot be undone.',
+            connectionLost: 'Connection lost. Reconnecting...',
+            activateStrategy: 'Activate Strategy', stopLoss: 'Stop Loss (%)', takeProfit: 'Take Profit (%)',
+            loopKicker: 'Two control loops · WS main + 10s refresh', theLoop: 'The Loop',
+            ordersKicker: 'Every cell is a resting order · live from /ws',
+            totalReturn: 'Total return · since inception', lastPush: 'Last push',
+            ordersPlaced: 'Orders placed', fillsCapped: 'Fills (last 200)',
+            legendPush: 'on every /ws state frame', legendRisk: 'drawdown / daily-loss figures change',
+            legendOrder: 'open-order count changes', legendFill: 'trade_history gains a record',
+            drawdownLimits: 'Drawdown limits', refreshLoop: 'Live · 10s refresh loop',
+            legendDot: 'one lap = one /ws frame (3s)', tapeIdle: 'Waiting for position data', sinceFill: 'Since last fill', railEmpty: 'No events this session',
+            brandKicker: 'WS in \u00b7 orders out \u00b7 two control loops', today: 'today',
+            initial: 'Initial', headroom: 'Headroom', headroomCap: 'Lowest remaining margin',
+            riskKicker: 'How much room is left',
+            equityFootL: 'Every point is a /api/pnl snapshot', equityFootR: 'Range set on the return card',
+            swarmFootL: 'Nearest to market is inverted', swarmFootR: 'Fill bar = filled / quantity',
+            railKicker: 'Real events only \u00b7 newest first', eventLog: 'Event Log', thisWeek: 'This week \u00b7 realised',
+            confirmCancel: 'Cancel ALL open orders? This cannot be undone.', navMenu: 'Menu',
         },
         cn: {
             dashboard: '仪表盘', strategies: '策略', portfolio: '投资组合',
@@ -96,8 +114,23 @@
             noTrades: '暂无交易', noHistory: '暂无交易历史',
             searchPlaceholder: '搜索...', searchByAsset: '按资产、方向搜索...',
             connecting: '连接中...', liveTrading: '实盘交易中', disconnected: '已断开',
-            connectionLost: '⚡ 连接断开，正在重连...',
-            confirmCancel: '取消所有挂单？此操作不可撤销。',
+            connectionLost: '连接断开，正在重连...',
+            activateStrategy: '启用策略', stopLoss: '止损 (%)', takeProfit: '止盈 (%)',
+            loopKicker: '两条控制回路 · WS 主循环 + 10s 刷新', theLoop: '控制回路',
+            ordersKicker: '每一格都是一个挂单 · 实时来自 /ws',
+            totalReturn: '累计收益率 · 自建仓起', lastPush: '最近推送',
+            ordersPlaced: '下单次数', fillsCapped: '成交（最近 200 条）',
+            legendPush: '每收到一帧 /ws state 推送', legendRisk: '回撤 / 日亏数值发生变化',
+            legendOrder: '挂单数发生变化', legendFill: 'trade_history 新增记录',
+            drawdownLimits: '回撤上限', refreshLoop: '实时 · 10s 刷新回路',
+            legendDot: '跑一圈 = 一帧 /ws 推送（3s）', tapeIdle: '等待持仓数据', sinceFill: '距上次成交', railEmpty: '本次会话暂无事件',
+            brandKicker: 'WS 进 \u00b7 订单出 \u00b7 两条控制回路', today: '今日',
+            initial: '起始', headroom: '余量', headroomCap: '更紧的那条上限还剩多少',
+            riskKicker: '还剩多少空间',
+            equityFootL: '每个点都是一次 /api/pnl 快照', equityFootR: '区间在收益卡上切换',
+            swarmFootL: '离市价最近的一档是反相卡', swarmFootR: '进度条 = 已成交 / 委托量',
+            railKicker: '只记真实事件 \u00b7 最新在上', eventLog: '事件流', thisWeek: '本周 \u00b7 已实现',
+            confirmCancel: '取消所有挂单？此操作不可撤销。', navMenu: '菜单',
         }
     };
 
@@ -122,6 +155,9 @@
         // Update WS offline text
         const wsOff = $('ws-offline');
         if (wsOff) wsOff.textContent = t('connectionLost');
+        // 旁路面板有一批 JS 生成的文案（NO OPEN ORDERS / % FILLED …），
+        // 它们不在 DOM 里带 data-i18n，只能靠这里推一次当前语言过去。
+        try { if (window.__panels && window.__panels.lang) window.__panels.lang(currentLang); } catch (e) {}
     }
 
     function toggleLang() {
@@ -160,10 +196,41 @@
     if ($('btn-theme')) $('btn-theme').addEventListener('click', toggleTheme);
     if ($('btn-theme-settings')) $('btn-theme-settings').addEventListener('click', toggleTheme);
 
+    // 图表配色一律从 CSS 变量读。之前主题色在 CSS 和 JS 里各写了一份，
+    // 换主题只改 CSS 会让图表留在旧配色上 —— 这个 helper 就是为了消掉那份副本。
+    function cssVar(name, fallback) {
+        const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+        return v || fallback;
+    }
+    function chartPalette() {
+        return {
+            grid: cssVar('--chart-grid', '#E3E1D8'),
+            tick: cssVar('--chart-text', '#A09E93'),
+            ink: cssVar('--primary', '#12120F'),
+            onInk: cssVar('--on-primary', '#FFFFFF'),
+            up: cssVar('--success', '#1B7F3B'),
+            down: cssVar('--danger', '#C0392B'),
+            fg: cssVar('--text-main', '#12120F'),
+            bg: cssVar('--bg-card', '#FFFFFF'),
+            dim: cssVar('--primary-dim', 'rgba(18,18,15,0.07)'),
+        };
+    }
+
     function updateChartTheme() {
-        const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
-        const gridColor = isDark ? '#1B254B' : '#E9EDF7';
-        const tickColor = isDark ? '#56607B' : '#A3AED0';
+        const p = chartPalette();
+        const gridColor = p.grid;
+        const tickColor = p.tick;
+        // 线条/柱子的颜色也要跟着主题走，否则暗色下墨黑线画在黑底上直接消失
+        if (equityChart) {
+            const ds = equityChart.data.datasets[0];
+            ds.borderColor = p.ink;
+            ds.pointHoverBackgroundColor = p.ink;
+        }
+        if (revenueChart) {
+            const bars = revenueChart.data.datasets[0];
+            const vals = bars.data || [];
+            bars.backgroundColor = vals.map(v => v >= 0 ? p.up : p.down);
+        }
         [equityChart, revenueChart].forEach(c => {
             if (!c) return;
             if (c.options.scales.y) {
@@ -205,9 +272,11 @@
         }
         list.innerHTML = notifications.slice(0, 20).map(n => {
             const iconClass = n.type === 'trade' ? 'trade' : n.type === 'warn' ? 'warn' : n.type === 'error' ? 'err' : 'trade';
-            const iconChar = n.type === 'trade' ? '💹' : n.type === 'warn' ? '⚠️' : n.type === 'error' ? '❌' : '📌';
+            // 单色字形而不是彩色 emoji：.notif-icon 已经用 CSS 给了配色，
+            // 彩色 emoji 会跟主题打架，而且各系统字形不一致。
+            const iconChar = n.type === 'trade' ? '\u25b2' : n.type === 'warn' ? '!' : n.type === 'error' ? '\u00d7' : '\u00b7';
             const ago = timeAgo(n.time);
-            return `<div class="notif-item"><div class="notif-icon ${iconClass}">${iconChar}</div><div class="notif-text"><div class="notif-msg">${n.message}</div><div class="notif-time">${ago}</div></div></div>`;
+            return `<div class="notif-item"><div class="notif-icon ${iconClass}">${iconChar}</div><div class="notif-text"><div class="notif-msg">${escapeHtml(n.message)}</div><div class="notif-time">${ago}</div></div></div>`;
         }).join('');
     }
 
@@ -253,10 +322,36 @@
             if (target) target.classList.add('active');
             $('current-page-title').innerText = this.innerText.trim();
             activePage = page;
+            closeMobileNav();
             if (page === 'dashboard') setTimeout(initCharts, 100);
             if (page === 'history') { renderHistory(); renderPositionSummary(); }
         });
     });
+
+    const navToggle = $('btn-nav-toggle');
+    const navBackdrop = $('mobile-nav-backdrop');
+
+    function closeMobileNav() {
+        document.body.classList.remove('nav-open');
+        if (navToggle) navToggle.setAttribute('aria-expanded', 'false');
+    }
+
+    if (navToggle) {
+        navToggle.addEventListener('click', () => {
+            const open = document.body.classList.toggle('nav-open');
+            navToggle.setAttribute('aria-expanded', String(open));
+            if (open) document.querySelector('#primary-navigation .nav-item')?.focus();
+        });
+    }
+    if (navBackdrop) navBackdrop.addEventListener('click', closeMobileNav);
+    document.addEventListener('keydown', event => {
+        if (event.key === 'Escape') {
+            const wasOpen = document.body.classList.contains('nav-open');
+            closeMobileNav();
+            if (wasOpen && navToggle) navToggle.focus();
+        }
+    });
+    window.matchMedia('(min-width: 769px)').addEventListener('change', closeMobileNav);
 
     // ── Bottom Tabs ──
     const btmTabs = $('btm-tabs');
@@ -435,6 +530,9 @@
             case 'open_orders': updateOrdersPanel(msg.data); break;
             case 'risk': updateRisk(msg.data); break;
         }
+        // hero / THE LOOP / 挂单栅格的只读旁路，定义在 index.html 末尾的 <script> 里。
+        // 放在 switch 之后，保证即使旁路抛错也不影响上面的主渲染路径。
+        try { if (window.__panels) window.__panels.on(msg); } catch (e) { console.error('panels:', e); }
     }
 
     // ── Data Loading ──
@@ -643,7 +741,7 @@
         }
         const html = data.map(p => {
             const pnl = p.unrealized_pnl || 0;
-            return `<tr><td>${p.symbol}</td><td><span class="badge ${p.side==='Buy'?'badge-up':'badge-down'}">${p.side}</span></td><td>${p.size}</td><td>$${parseFloat(p.entry_price).toFixed(2)}</td><td>$${(p.mark_price||0).toFixed(2)}</td><td class="td-r ${pnlClass(pnl)}">${fmtPnl(pnl)}</td></tr>`;
+            return `<tr><td>${escapeHtml(p.symbol)}</td><td><span class="badge ${p.side==='Buy'?'badge-up':'badge-down'}">${escapeHtml(p.side)}</span></td><td>${escapeHtml(p.size)}</td><td>$${parseFloat(p.entry_price).toFixed(2)}</td><td>$${(p.mark_price||0).toFixed(2)}</td><td class="td-r ${pnlClass(pnl)}">${fmtPnl(pnl)}</td></tr>`;
         }).join('');
         tb.innerHTML = html;
         if (pftb) pftb.innerHTML = html;
@@ -670,7 +768,7 @@
                 const fill = o.filled_quantity || 0;
                 const total = o.quantity || 1;
                 const fillPct = (fill / total * 100).toFixed(0);
-                return `<tr><td style="font-family:monospace;font-size:11px;">${String(o.id).slice(-6)}</td><td>${o.symbol||'BTC'}</td><td><span class="badge ${o.side==='Buy'?'badge-up':'badge-down'}">${o.side}</span></td><td>$${parseFloat(o.price).toFixed(2)}</td><td>${total}</td><td>${fill} (${fillPct}%)</td><td><span class="badge badge-info">${o.status||'Open'}</span></td></tr>`;
+                return `<tr><td style="font-family:monospace;font-size:11px;">${escapeHtml(String(o.id).slice(-6))}</td><td>${escapeHtml(o.symbol || 'BTC')}</td><td><span class="badge ${o.side==='Buy'?'badge-up':'badge-down'}">${escapeHtml(o.side)}</span></td><td>$${parseFloat(o.price).toFixed(2)}</td><td>${escapeHtml(total)}</td><td>${escapeHtml(fill)} (${fillPct}%)</td><td><span class="badge badge-info">${escapeHtml(o.status || 'Open')}</span></td></tr>`;
             }).join('');
             tb.innerHTML = html;
             if (pftb) pftb.innerHTML = html;
@@ -711,12 +809,12 @@
             const action = tradeAction(t);
             const isClose = isCloseAction(action);
             const actionBadge = isClose
-                ? `<span class="badge ${pnl >= 0 ? 'badge-up' : 'badge-down'}">${action}</span>`
-                : `<span class="badge badge-neutral">${action}</span>`;
+                ? `<span class="badge ${pnl >= 0 ? 'badge-up' : 'badge-down'}">${escapeHtml(action)}</span>`
+                : `<span class="badge badge-neutral">${escapeHtml(action)}</span>`;
             const pnlCell = isClose
                 ? `<td class="td-r ${pnlClass(pnl)}">${fmtPnl(pnl)}</td>`
                 : `<td class="td-r" style="color:var(--text-muted)">—</td>`;
-            return `<tr><td>${ts}</td><td>${t.symbol||t.market}</td><td>${actionBadge}</td><td><span class="badge ${t.side==='Buy'?'badge-up':'badge-down'}">${t.side}</span></td><td>$${parseFloat(t.price).toFixed(2)}</td><td>${parseFloat(t.quantity).toFixed(6)}</td>${pnlCell}</tr>`;
+            return `<tr><td>${ts}</td><td>${escapeHtml(t.symbol || t.market)}</td><td>${actionBadge}</td><td><span class="badge ${t.side==='Buy'?'badge-up':'badge-down'}">${escapeHtml(t.side)}</span></td><td>$${parseFloat(t.price).toFixed(2)}</td><td>${parseFloat(t.quantity).toFixed(6)}</td>${pnlCell}</tr>`;
         }).join('');
     }
 
@@ -768,12 +866,12 @@
             const action = tradeAction(t);
             const isClose = isCloseAction(action);
             const actionBadge = isClose
-                ? `<span class="badge ${pnl >= 0 ? 'badge-up' : 'badge-down'}">${action}</span>`
-                : `<span class="badge badge-neutral">${action}</span>`;
+                ? `<span class="badge ${pnl >= 0 ? 'badge-up' : 'badge-down'}">${escapeHtml(action)}</span>`
+                : `<span class="badge badge-neutral">${escapeHtml(action)}</span>`;
             const pnlCell = isClose
                 ? `<td class="td-r ${pnlClass(pnl)}">${fmtPnl(pnl)}</td>`
                 : `<td class="td-r" style="color:var(--text-muted)">—</td>`;
-            return `<tr><td>${ts}</td><td>${t.symbol||t.market}</td><td>${actionBadge}</td><td><span class="badge ${t.side==='Buy'?'badge-up':'badge-down'}">${t.side}</span></td><td>$${parseFloat(t.price).toFixed(2)}</td><td>${parseFloat(t.quantity).toFixed(6)}</td>${pnlCell}</tr>`;
+            return `<tr><td>${ts}</td><td>${escapeHtml(t.symbol || t.market)}</td><td>${actionBadge}</td><td><span class="badge ${t.side==='Buy'?'badge-up':'badge-down'}">${escapeHtml(t.side)}</span></td><td>$${parseFloat(t.price).toFixed(2)}</td><td>${parseFloat(t.quantity).toFixed(6)}</td>${pnlCell}</tr>`;
         }).join('');
     }
 
@@ -821,7 +919,7 @@
             totalPnl += g.totalPnl;
             totalCount += g.count;
             totalDuration += g.durationSum;
-            return `<tr><td><b>${asset}</b></td><td>${g.count}</td><td>${fmtDuration(g.durationSum / Math.max(g.count, 1))}</td><td class="td-r ${pnlClass(g.totalPnl)}">${fmtPnl(g.totalPnl)}</td></tr>`;
+            return `<tr><td><b>${escapeHtml(asset)}</b></td><td>${g.count}</td><td>${fmtDuration(g.durationSum / Math.max(g.count, 1))}</td><td class="td-r ${pnlClass(g.totalPnl)}">${fmtPnl(g.totalPnl)}</td></tr>`;
         });
         rows.push(`<tr style="border-top:2px solid var(--border);font-weight:600;"><td>Total</td><td>${totalCount}</td><td>${fmtDuration(totalDuration / Math.max(totalCount, 1))}</td><td class="td-r ${pnlClass(totalPnl)}">${fmtPnl(totalPnl)}</td></tr>`);
         tb.innerHTML = rows.join('');
@@ -855,7 +953,7 @@
             const pct = (Math.abs(val) / maxAbs * 48).toFixed(1);
             const isPos = val >= 0;
             const shortDate = date.slice(5);
-            return `<div class="pnl-bar-row"><span class="pnl-bar-date">${shortDate}</span><div class="pnl-bar-track"><div class="pnl-bar-center"></div><div class="pnl-bar-fill ${isPos?'pos':'neg'}" style="width:${pct}%;${isPos?'':'right:auto;left:calc(50% - '+pct+'%);'}"></div></div><span class="pnl-bar-val ${pnlClass(val)}">${fmtPnl(val)}</span></div>`;
+            return `<div class="pnl-bar-row"><span class="pnl-bar-date">${escapeHtml(shortDate)}</span><div class="pnl-bar-track"><div class="pnl-bar-center"></div><div class="pnl-bar-fill ${isPos?'pos':'neg'}" style="width:${pct}%;${isPos?'':'right:auto;left:calc(50% - '+pct+'%);'}"></div></div><span class="pnl-bar-val ${pnlClass(val)}">${fmtPnl(val)}</span></div>`;
         }).join('');
     }
 
@@ -867,16 +965,19 @@
         if (logLines.length > 200) logLines.shift();
         const box = $('log-box');
         if (!box) return;
-        box.innerHTML = logLines.slice(-60).map(l => `<div class="log-line"><span class="log-ts">[${l.ts}]</span> <span class="log-${l.level}">${l.msg}</span></div>`).join('');
+        box.innerHTML = logLines.slice(-60).map(l => {
+            const safeLevel = ['i', 'w', 'e', 't'].includes(l.level) ? l.level : 'i';
+            return `<div class="log-line"><span class="log-ts">[${l.ts}]</span> <span class="log-${safeLevel}">${escapeHtml(l.msg)}</span></div>`;
+        }).join('');
         box.scrollTop = box.scrollHeight;
     }
 
     // ── Charts ──
     function initCharts() {
-        const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
-        const gridColor = isDark ? '#1B254B' : '#E9EDF7';
-        const tickColor = isDark ? '#56607B' : '#A3AED0';
-        const primaryColor = isDark ? '#7551FF' : '#4318FF';
+        const pal = chartPalette();
+        const gridColor = pal.grid;
+        const tickColor = pal.tick;
+        const primaryColor = pal.ink;
         const visibleEquity = getVisibleEquityData();
         updateEquityRangeButtons();
 
@@ -903,8 +1004,9 @@
                         const { ctx: c, chartArea } = chart;
                         if (!chartArea) return null;
                         const g = c.createLinearGradient(0, chartArea.top, 0, chartArea.bottom);
-                        g.addColorStop(0, isDark ? 'rgba(117,81,255,0.25)' : 'rgba(67,24,255,0.15)');
-                        g.addColorStop(1, isDark ? 'rgba(117,81,255,0.01)' : 'rgba(67,24,255,0.01)');
+                        // --primary-dim 本身就是带 alpha 的墨色，两个主题下都已经调好
+                        g.addColorStop(0, chartPalette().dim);
+                        g.addColorStop(1, 'transparent');
                         return g;
                     },
                     tension: 0.4,
@@ -919,9 +1021,8 @@
                 plugins: {
                     legend: { display: false },
                     tooltip: {
-                        backgroundColor: isDark ? '#1B254B' : '#2B3674',
-                        titleColor: '#fff', bodyColor: '#fff',
-                        padding: 10, cornerRadius: 8,
+                        backgroundColor: pal.ink, titleColor: pal.onInk, bodyColor: pal.onInk,
+                        padding: 9, cornerRadius: 6,
                         displayColors: false,
                         callbacks: { label: ctx => '$' + ctx.parsed.y.toFixed(2) }
                     }
@@ -940,16 +1041,15 @@
             type: 'bar',
             data: {
                 labels: ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'],
-                datasets: [{ label: 'P&L', data: [0,0,0,0,0,0,0], backgroundColor: primaryColor, borderRadius: 6 }]
+                datasets: [{ label: 'P&L', data: [0,0,0,0,0,0,0], backgroundColor: primaryColor, borderRadius: 3 }]
             },
             options: {
                 responsive: true, maintainAspectRatio: false,
                 plugins: {
                     legend: { display: false },
                     tooltip: {
-                        backgroundColor: isDark ? '#1B254B' : '#2B3674',
-                        titleColor: '#fff', bodyColor: '#fff',
-                        padding: 10, cornerRadius: 8,
+                        backgroundColor: pal.ink, titleColor: pal.onInk, bodyColor: pal.onInk,
+                        padding: 9, cornerRadius: 6,
                         callbacks: { label: ctx => fmtPnl(ctx.parsed.y) }
                     }
                 },
@@ -993,7 +1093,9 @@
             values[i] = pnlMap[key] || 0;
         }
         revenueChart.data.datasets[0].data = values;
-        revenueChart.data.datasets[0].backgroundColor = values.map(v => v >= 0 ? (document.documentElement.getAttribute('data-theme') === 'dark' ? '#7551FF' : '#4318FF') : 'var(--danger)');
+        // Chart.js 不解析 CSS 变量，原来负值传 'var(--danger)' 会被当成无效色画成透明
+        const revPal = chartPalette();
+        revenueChart.data.datasets[0].backgroundColor = values.map(v => v >= 0 ? revPal.up : revPal.down);
         revenueChart.update();
         renderPnlHistory(pnlMap);
     }

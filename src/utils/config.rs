@@ -137,9 +137,7 @@ pub fn load_config(path: &str) -> Result<AppConfig> {
         .build()
         .context("加载配置文件失败")?;
 
-    let config: AppConfig = settings
-        .try_deserialize()
-        .context("解析配置失败")?;
+    let config: AppConfig = settings.try_deserialize().context("解析配置失败")?;
 
     Ok(config)
 }

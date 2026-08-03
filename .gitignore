@@ -47,3 +47,15 @@ ecosystem.dashboard.config.js
 
 # 启动脚本 (含本地路径)
 start.sh
+
+# 本地浏览器与 UI 验收产物（可能包含账户状态）
+.playwright-mcp/
+/qa-*.png
+/lighter-*.png
+/ai-coolfix.png
+/current-dark-full.png
+/微信图片_*.png
+
+# 本地运维说明（包含部署环境细节）
+/CLAUDE.md
+/DESIGN.md

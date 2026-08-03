@@ -45,10 +45,13 @@ type SignCreateOrderFn = unsafe extern "C" fn(
 #[allow(dead_code)]
 struct SignerLib {
     _lib: Library,
-    create_client: unsafe extern "C" fn(*mut c_char, *mut c_char, c_int, c_int, c_longlong) -> *mut c_char,
+    create_client:
+        unsafe extern "C" fn(*mut c_char, *mut c_char, c_int, c_int, c_longlong) -> *mut c_char,
     sign_create_order: SignCreateOrderFn,
-    sign_cancel_order: unsafe extern "C" fn(c_int, c_longlong, c_longlong, c_int, c_longlong) -> SignedTxResponse,
-    sign_cancel_all_orders: unsafe extern "C" fn(c_int, c_longlong, c_longlong, c_int, c_longlong) -> SignedTxResponse,
+    sign_cancel_order:
+        unsafe extern "C" fn(c_int, c_longlong, c_longlong, c_int, c_longlong) -> SignedTxResponse,
+    sign_cancel_all_orders:
+        unsafe extern "C" fn(c_int, c_longlong, c_longlong, c_int, c_longlong) -> SignedTxResponse,
     create_auth_token: unsafe extern "C" fn(c_longlong, c_int, c_longlong) -> StrOrErr,
     free_fn: unsafe extern "C" fn(*mut c_void),
     api_key_index: i32,
@@ -94,27 +97,49 @@ pub fn init(
     info!("Loading lighter-signer from: {:?}", lib_path);
 
     unsafe {
-        let lib = Library::new(&lib_path)
-            .map_err(|e| LighterError::FfiError(format!("Failed to load {}: {}", lib_path.display(), e)))?;
+        let lib = Library::new(&lib_path).map_err(|e| {
+            LighterError::FfiError(format!("Failed to load {}: {}", lib_path.display(), e))
+        })?;
 
-        let create_client: Symbol<unsafe extern "C" fn(*mut c_char, *mut c_char, c_int, c_int, c_longlong) -> *mut c_char> =
-            lib.get(b"CreateClient")
-                .map_err(|e| LighterError::FfiError(format!("Symbol CreateClient not found: {}", e)))?;
+        let create_client: Symbol<
+            unsafe extern "C" fn(*mut c_char, *mut c_char, c_int, c_int, c_longlong) -> *mut c_char,
+        > = lib
+            .get(b"CreateClient")
+            .map_err(|e| LighterError::FfiError(format!("Symbol CreateClient not found: {}", e)))?;
         let sign_create_order: Symbol<SignCreateOrderFn> =
-            lib.get(b"SignCreateOrder")
-                .map_err(|e| LighterError::FfiError(format!("Symbol SignCreateOrder not found: {}", e)))?;
-        let sign_cancel_order: Symbol<unsafe extern "C" fn(c_int, c_longlong, c_longlong, c_int, c_longlong) -> SignedTxResponse> =
-            lib.get(b"SignCancelOrder")
-                .map_err(|e| LighterError::FfiError(format!("Symbol SignCancelOrder not found: {}", e)))?;
-        let sign_cancel_all_orders: Symbol<unsafe extern "C" fn(c_int, c_longlong, c_longlong, c_int, c_longlong) -> SignedTxResponse> =
-            lib.get(b"SignCancelAllOrders")
-                .map_err(|e| LighterError::FfiError(format!("Symbol SignCancelAllOrders not found: {}", e)))?;
-        let create_auth_token_fn: Symbol<unsafe extern "C" fn(c_longlong, c_int, c_longlong) -> StrOrErr> =
-            lib.get(b"CreateAuthToken")
-                .map_err(|e| LighterError::FfiError(format!("Symbol CreateAuthToken not found: {}", e)))?;
-        let free_fn: Symbol<unsafe extern "C" fn(*mut c_void)> =
-            lib.get(b"Free")
-                .map_err(|e| LighterError::FfiError(format!("Symbol Free not found: {}", e)))?;
+            lib.get(b"SignCreateOrder").map_err(|e| {
+                LighterError::FfiError(format!("Symbol SignCreateOrder not found: {}", e))
+            })?;
+        let sign_cancel_order: Symbol<
+            unsafe extern "C" fn(
+                c_int,
+                c_longlong,
+                c_longlong,
+                c_int,
+                c_longlong,
+            ) -> SignedTxResponse,
+        > = lib.get(b"SignCancelOrder").map_err(|e| {
+            LighterError::FfiError(format!("Symbol SignCancelOrder not found: {}", e))
+        })?;
+        let sign_cancel_all_orders: Symbol<
+            unsafe extern "C" fn(
+                c_int,
+                c_longlong,
+                c_longlong,
+                c_int,
+                c_longlong,
+            ) -> SignedTxResponse,
+        > = lib.get(b"SignCancelAllOrders").map_err(|e| {
+            LighterError::FfiError(format!("Symbol SignCancelAllOrders not found: {}", e))
+        })?;
+        let create_auth_token_fn: Symbol<
+            unsafe extern "C" fn(c_longlong, c_int, c_longlong) -> StrOrErr,
+        > = lib.get(b"CreateAuthToken").map_err(|e| {
+            LighterError::FfiError(format!("Symbol CreateAuthToken not found: {}", e))
+        })?;
+        let free_fn: Symbol<unsafe extern "C" fn(*mut c_void)> = lib
+            .get(b"Free")
+            .map_err(|e| LighterError::FfiError(format!("Symbol Free not found: {}", e)))?;
 
         let signer = SignerLib {
             create_client: *create_client,
@@ -142,11 +167,16 @@ pub fn init(
             let err_str = CStr::from_ptr(result).to_string_lossy().into_owned();
             (signer.free_fn)(result as *mut c_void);
             if !err_str.is_empty() {
-                return Err(LighterError::FfiError(format!("CreateClient failed: {}", err_str)));
+                return Err(LighterError::FfiError(format!(
+                    "CreateClient failed: {}",
+                    err_str
+                )));
             }
         }
 
-        SIGNER.set(signer).map_err(|_| LighterError::FfiError("Signer already initialized".into()))?;
+        SIGNER
+            .set(signer)
+            .map_err(|_| LighterError::FfiError("Signer already initialized".into()))?;
     }
 
     info!("Lighter signer initialized successfully");
@@ -154,7 +184,9 @@ pub fn init(
 }
 
 fn get_signer() -> Result<&'static SignerLib, LighterError> {
-    SIGNER.get().ok_or_else(|| LighterError::FfiError("Signer not initialized. Call ffi::init() first.".into()))
+    SIGNER.get().ok_or_else(|| {
+        LighterError::FfiError("Signer not initialized. Call ffi::init() first.".into())
+    })
 }
 
 unsafe fn read_and_free(signer: &SignerLib, ptr: *mut c_char) -> Option<String> {
@@ -163,7 +195,11 @@ unsafe fn read_and_free(signer: &SignerLib, ptr: *mut c_char) -> Option<String> 
     }
     let s = CStr::from_ptr(ptr).to_string_lossy().into_owned();
     (signer.free_fn)(ptr as *mut c_void);
-    if s.is_empty() { None } else { Some(s) }
+    if s.is_empty() {
+        None
+    } else {
+        Some(s)
+    }
 }
 
 /// Sign a create-order transaction.
@@ -210,8 +246,9 @@ pub fn sign_create_order(
             return Err(LighterError::FfiError(format!("SignCreateOrder: {}", err)));
         }
 
-        let tx_info = read_and_free(signer, resp.tx_info)
-            .ok_or_else(|| LighterError::FfiError("SignCreateOrder returned null tx_info".into()))?;
+        let tx_info = read_and_free(signer, resp.tx_info).ok_or_else(|| {
+            LighterError::FfiError("SignCreateOrder returned null tx_info".into())
+        })?;
         let _ = read_and_free(signer, resp.tx_hash);
         let _ = read_and_free(signer, resp.message_to_sign);
 
@@ -241,8 +278,9 @@ pub fn sign_cancel_order(
             return Err(LighterError::FfiError(format!("SignCancelOrder: {}", err)));
         }
 
-        let tx_info = read_and_free(signer, resp.tx_info)
-            .ok_or_else(|| LighterError::FfiError("SignCancelOrder returned null tx_info".into()))?;
+        let tx_info = read_and_free(signer, resp.tx_info).ok_or_else(|| {
+            LighterError::FfiError("SignCancelOrder returned null tx_info".into())
+        })?;
         let _ = read_and_free(signer, resp.tx_hash);
         let _ = read_and_free(signer, resp.message_to_sign);
 
@@ -253,9 +291,7 @@ pub fn sign_cancel_order(
 /// Sign a cancel-all-orders transaction.
 /// Returns (tx_type, tx_info_hex).
 #[allow(dead_code)]
-pub fn sign_cancel_all_orders(
-    nonce: i64,
-) -> Result<(u8, String), LighterError> {
+pub fn sign_cancel_all_orders(nonce: i64) -> Result<(u8, String), LighterError> {
     let signer = get_signer()?;
 
     unsafe {
@@ -269,11 +305,15 @@ pub fn sign_cancel_all_orders(
         );
 
         if let Some(err) = read_and_free(signer, resp.err) {
-            return Err(LighterError::FfiError(format!("SignCancelAllOrders: {}", err)));
+            return Err(LighterError::FfiError(format!(
+                "SignCancelAllOrders: {}",
+                err
+            )));
         }
 
-        let tx_info = read_and_free(signer, resp.tx_info)
-            .ok_or_else(|| LighterError::FfiError("SignCancelAllOrders returned null tx_info".into()))?;
+        let tx_info = read_and_free(signer, resp.tx_info).ok_or_else(|| {
+            LighterError::FfiError("SignCancelAllOrders returned null tx_info".into())
+        })?;
         let _ = read_and_free(signer, resp.tx_hash);
         let _ = read_and_free(signer, resp.message_to_sign);
 

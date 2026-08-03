@@ -9,14 +9,14 @@ use axum::{
     Router,
 };
 use futures::{SinkExt, StreamExt};
+use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use std::sync::Arc;
-use tokio::sync::RwLock;
 use tokio::process::Command;
+use tokio::sync::RwLock;
 use tokio::time::{timeout, Duration};
 use tower_http::cors::CorsLayer;
 use tracing::{info, warn};
-use serde::{Serialize, Deserialize};
 
 const PNL_STATE_FILE: &str = "data/pnl_state.json";
 
@@ -155,6 +155,7 @@ pub struct DashboardState {
     pub open_orders_list: Vec<serde_json::Value>,
     pub positions: Vec<serde_json::Value>,
     pub trade_history: Vec<serde_json::Value>,
+    pub event_history: Vec<super::event_log::DashboardEvent>,
     pub risk_status: Option<serde_json::Value>,
     // PnL tracking
     pub daily_realized_pnl: f64,
@@ -169,14 +170,17 @@ pub struct DashboardState {
     // Per-day PnL tracking (persisted)
     pub daily_pnl_map: std::collections::HashMap<String, f64>,
     // Trading controls (runtime)
-    pub active_markets: Vec<u32>,           // Markets currently being traded
-    pub trading_paused: bool,               // Pause all trading signals
-    pub cancel_all_requested: bool,         // Request to cancel all open orders
+    pub active_markets: Vec<u32>,   // Markets currently being traded
+    pub trading_paused: bool,       // Pause all trading signals
+    pub cancel_all_requested: bool, // Request to cancel all open orders
     pub available_markets: Vec<(u32, String)>, // All known markets: (id, symbol)
     // Risk config (runtime-editable from dashboard)
-    pub risk_config: serde_json::Value,               // Cached risk config for display
+    pub risk_config: serde_json::Value, // Cached risk config for display
     pub risk_update_requested: Option<serde_json::Value>, // Pending risk update
-    pub leverage_limit: f64,                          // Runtime leverage limit (used by main loop)
+    pub leverage_limit: f64,            // Runtime leverage limit (used by main loop)
+    /// symbol -> 最新盘口中间价。由主循环每个 tick 从 `snapshot.order_books` 注入。
+    /// 独立于 positions：空仓时 positions 里没有任何价格，面板就没有行情可显示。
+    pub last_prices: std::collections::HashMap<String, f64>,
 }
 
 impl DashboardState {
@@ -223,8 +227,13 @@ impl DashboardState {
         let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
         self.daily_realized_pnl = data.daily_pnl_map.get(&today).copied().unwrap_or(0.0);
         self.daily_pnl_map = data.daily_pnl_map.clone();
-        info!("📂 Restored PnL: total={:.4}, daily={:.4}, peak={:.2}, trades={}",
-            self.total_realized_pnl, self.daily_realized_pnl, self.peak_equity, self.trade_history.len());
+        info!(
+            "📂 Restored PnL: total={:.4}, daily={:.4}, peak={:.2}, trades={}",
+            self.total_realized_pnl,
+            self.daily_realized_pnl,
+            self.peak_equity,
+            self.trade_history.len()
+        );
     }
 }
 
@@ -237,6 +246,9 @@ pub async fn start(host: &str, port: u16) -> Result<()> {
 }
 
 pub async fn start_with_state(host: &str, port: u16, state: SharedDashboardState) -> Result<()> {
+    super::event_log::restore_event_history(&state).await;
+    super::event_log::spawn_event_monitor(state.clone());
+
     let app = Router::new()
         .route("/", get(index_handler))
         .route("/app.js", get(js_handler))
@@ -247,11 +259,15 @@ pub async fn start_with_state(host: &str, port: u16, state: SharedDashboardState
         .route("/api/status", get(status_handler))
         .route("/api/positions", get(positions_handler))
         .route("/api/trades", get(trades_handler))
+        .route("/api/events", get(events_handler))
         .route("/api/pnl", get(pnl_handler))
         .route("/api/strategy", get(strategy_get_handler))
         .route("/api/strategy", post(strategy_update_handler))
         .route("/api/backtest", post(backtest_handler))
-        .route("/api/backtest/opencode-optimize", post(opencode_optimize_handler))
+        .route(
+            "/api/backtest/opencode-optimize",
+            post(opencode_optimize_handler),
+        )
         .route("/api/trading/markets", get(markets_get_handler))
         .route("/api/trading/markets", post(markets_update_handler))
         .route("/api/trading/pause", post(trading_pause_handler))
@@ -332,6 +348,7 @@ async fn handle_ws_connection(mut socket: WebSocket, state: SharedDashboardState
                     } else { 0.0 },
                     "trading_paused": ds.trading_paused,
                     "active_markets": ds.active_markets,
+                    "last_prices": ds.last_prices,
                 }
             });
             let positions_msg = serde_json::json!({
@@ -352,18 +369,29 @@ async fn handle_ws_connection(mut socket: WebSocket, state: SharedDashboardState
                 "type": "recent_trades",
                 "data": ds.trade_history.iter().rev().take(20).collect::<Vec<_>>()
             });
+            let events_msg = serde_json::json!({
+                "type": "events",
+                "data": ds.event_history.iter().rev().collect::<Vec<_>>()
+            });
             let orders_msg = serde_json::json!({
                 "type": "open_orders",
                 "data": ds.open_orders_list
             });
             drop(ds);
 
-            if ws_sender.send(Message::Text(status_msg.to_string())).await.is_err() {
+            if ws_sender
+                .send(Message::Text(status_msg.to_string()))
+                .await
+                .is_err()
+            {
                 break;
             }
-            let _ = ws_sender.send(Message::Text(positions_msg.to_string())).await;
+            let _ = ws_sender
+                .send(Message::Text(positions_msg.to_string()))
+                .await;
             let _ = ws_sender.send(Message::Text(risk_msg.to_string())).await;
             let _ = ws_sender.send(Message::Text(trades_msg.to_string())).await;
+            let _ = ws_sender.send(Message::Text(events_msg.to_string())).await;
             let _ = ws_sender.send(Message::Text(orders_msg.to_string())).await;
         }
     });
@@ -402,6 +430,7 @@ async fn status_handler(State(state): State<SharedDashboardState>) -> impl IntoR
         "total_pnl": ds.unrealized_pnl,
         "daily_realized_pnl": ds.daily_realized_pnl,
         "total_realized_pnl": ds.total_realized_pnl,
+        "last_prices": ds.last_prices,
     }))
 }
 
@@ -416,6 +445,13 @@ async fn trades_handler(State(state): State<SharedDashboardState>) -> impl IntoR
     let ds = state.read().await;
     axum::Json(serde_json::json!({
         "trades": ds.trade_history
+    }))
+}
+
+async fn events_handler(State(state): State<SharedDashboardState>) -> impl IntoResponse {
+    let ds = state.read().await;
+    axum::Json(serde_json::json!({
+        "events": ds.event_history.iter().rev().collect::<Vec<_>>()
     }))
 }
 
@@ -465,14 +501,18 @@ async fn strategy_update_handler(
         for (k, v) in params {
             ds.strategy_params.insert(
                 k.clone(),
-                v.as_str().map(|s| s.to_string())
+                v.as_str()
+                    .map(|s| s.to_string())
                     .or_else(|| v.as_f64().map(|n| n.to_string()))
                     .or_else(|| v.as_i64().map(|n| n.to_string()))
                     .unwrap_or_default(),
             );
         }
         ds.strategy_config_changed = true;
-        info!("Strategy params updated from dashboard: {:?}", ds.strategy_params);
+        info!(
+            "Strategy params updated from dashboard: {:?}",
+            ds.strategy_params
+        );
     }
     PersistentStrategyConfig::save(&ds);
     axum::Json(serde_json::json!({
@@ -483,13 +523,17 @@ async fn strategy_update_handler(
     }))
 }
 
-async fn backtest_handler(
-    axum::Json(body): axum::Json<serde_json::Value>,
-) -> impl IntoResponse {
-    let strategy = body.get("strategy").and_then(|s| s.as_str()).unwrap_or("grid");
+async fn backtest_handler(axum::Json(body): axum::Json<serde_json::Value>) -> impl IntoResponse {
+    let strategy = body
+        .get("strategy")
+        .and_then(|s| s.as_str())
+        .unwrap_or("grid");
     let params = body.get("params").and_then(|s| s.as_str()).unwrap_or("");
     let data_file = body.get("data_file").and_then(|s| s.as_str()).unwrap_or("");
-    let capital = body.get("capital").and_then(|c| c.as_f64()).unwrap_or(125.0);
+    let capital = body
+        .get("capital")
+        .and_then(|c| c.as_f64())
+        .unwrap_or(125.0);
     let start = body.get("start").and_then(|s| s.as_str()).unwrap_or("");
     let end = body.get("end").and_then(|s| s.as_str()).unwrap_or("");
 
@@ -522,11 +566,18 @@ async fn run_backtest_result(
     let candle_count = historical_data.len();
     let bt_strategy = crate::strategy::create_strategy_with_params(
         strategy,
-        if params.is_empty() { None } else { Some(params) },
-    ).map_err(|e| anyhow::anyhow!("Invalid strategy: {}", e))?;
+        if params.is_empty() {
+            None
+        } else {
+            Some(params)
+        },
+    )
+    .map_err(|e| anyhow::anyhow!("Invalid strategy: {}", e))?;
 
     let mut engine = crate::backtest::engine::BacktestEngine::new(capital, historical_data);
-    let results = engine.run(bt_strategy).await
+    let results = engine
+        .run(bt_strategy)
+        .await
         .map_err(|e| anyhow::anyhow!("Backtest failed: {}", e))?;
 
     Ok(serde_json::json!({
@@ -594,27 +645,56 @@ fn parse_suggested_params(text: &str) -> Option<String> {
         }
     }
     let compact = text.replace(' ', "");
-    let gc = compact.split("grid_count=").nth(1)?.split([',', '\n']).next()?;
-    let inv = compact.split("investment=").nth(1)?.split([',', '\n']).next()?;
-    let dev = compact.split("deviation=").nth(1)?.split([',', '\n']).next()?;
+    let gc = compact
+        .split("grid_count=")
+        .nth(1)?
+        .split([',', '\n'])
+        .next()?;
+    let inv = compact
+        .split("investment=")
+        .nth(1)?
+        .split([',', '\n'])
+        .next()?;
+    let dev = compact
+        .split("deviation=")
+        .nth(1)?
+        .split([',', '\n'])
+        .next()?;
     Some(format!("grid_count={gc},investment={inv},deviation={dev}"))
 }
 
 async fn opencode_optimize_handler(
     axum::Json(body): axum::Json<serde_json::Value>,
 ) -> impl IntoResponse {
-    let strategy = body.get("strategy").and_then(|s| s.as_str()).unwrap_or("grid");
-    let params = body.get("params").and_then(|s| s.as_str()).unwrap_or("grid_count=10,investment=8,deviation=0.012");
+    let strategy = body
+        .get("strategy")
+        .and_then(|s| s.as_str())
+        .unwrap_or("grid");
+    let params = body
+        .get("params")
+        .and_then(|s| s.as_str())
+        .unwrap_or("grid_count=10,investment=8,deviation=0.012");
     let data_file = body.get("data_file").and_then(|s| s.as_str()).unwrap_or("");
-    let capital = body.get("capital").and_then(|c| c.as_f64()).unwrap_or(125.0);
+    let capital = body
+        .get("capital")
+        .and_then(|c| c.as_f64())
+        .unwrap_or(125.0);
     let start = body.get("start").and_then(|s| s.as_str()).unwrap_or("");
     let end = body.get("end").and_then(|s| s.as_str()).unwrap_or("");
-    let goal = body.get("goal").and_then(|s| s.as_str()).unwrap_or("sharpe");
-    let model = body.get("opencode_model").and_then(|s| s.as_str()).unwrap_or("opencode-go/glm-5");
+    let goal = body
+        .get("goal")
+        .and_then(|s| s.as_str())
+        .unwrap_or("sharpe");
+    let model = body
+        .get("opencode_model")
+        .and_then(|s| s.as_str())
+        .unwrap_or("opencode-go/glm-5");
 
     let base = match run_backtest_result(strategy, params, data_file, capital, start, end).await {
         Ok(result) => result,
-        Err(e) => return axum::Json(serde_json::json!({"status": "error", "message": e.to_string()})),
+        Err(e) => {
+            return axum::Json(serde_json::json!({"status": "error", "message": e.to_string()}))
+        }
     };
 
     let prompt = build_opencode_prompt(&base, params, goal);
@@ -623,11 +703,15 @@ async fn opencode_optimize_handler(
         Command::new("opencode")
             .arg("run")
             .arg("--pure")
-            .arg("-m").arg(model)
-            .arg("--dir").arg(".")
+            .arg("-m")
+            .arg(model)
+            .arg("--dir")
+            .arg(".")
             .arg(prompt)
-            .output()
-    ).await {
+            .output(),
+    )
+    .await
+    {
         Ok(Ok(output)) => output,
         Ok(Err(e)) => {
             return axum::Json(serde_json::json!({
@@ -645,7 +729,11 @@ async fn opencode_optimize_handler(
 
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-    let combined = if stdout.trim().is_empty() { stderr.clone() } else { format!("{stdout}\n{stderr}") };
+    let combined = if stdout.trim().is_empty() {
+        stderr.clone()
+    } else {
+        format!("{stdout}\n{stderr}")
+    };
     let suggested = match parse_suggested_params(&combined) {
         Some(value) => value,
         None => {
@@ -653,7 +741,7 @@ async fn opencode_optimize_handler(
             return axum::Json(serde_json::json!({
                 "status": "error",
                 "message": format!("OpenCode did not return parsable parameters. Output: {}", preview)
-            }))
+            }));
         }
     };
 
@@ -708,7 +796,8 @@ async fn markets_update_handler(
 ) -> axum::Json<serde_json::Value> {
     let mut ds = state.write().await;
     if let Some(markets) = body.get("markets").and_then(|v| v.as_array()) {
-        let new_markets: Vec<u32> = markets.iter()
+        let new_markets: Vec<u32> = markets
+            .iter()
             .filter_map(|v| v.as_u64().map(|n| n as u32))
             .collect();
         info!("📊 Trading markets updated: {:?}", new_markets);
@@ -783,8 +872,14 @@ async fn risk_config_update_handler(
     // Store the update request for main loop to pick up
     ds.risk_update_requested = Some(body.clone());
     // Update cached config
-    let fields = ["max_drawdown_pct", "daily_loss_limit_pct", "max_leverage",
-                   "position_stop_loss_pct", "position_take_profit_pct", "leverage_limit"];
+    let fields = [
+        "max_drawdown_pct",
+        "daily_loss_limit_pct",
+        "max_leverage",
+        "position_stop_loss_pct",
+        "position_take_profit_pct",
+        "leverage_limit",
+    ];
     for field in &fields {
         if let Some(v) = body.get(*field) {
             ds.risk_config[field] = v.clone();
