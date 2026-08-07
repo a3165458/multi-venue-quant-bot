@@ -387,3 +387,33 @@ fn ai_lab_layout_keeps_agent_primary_and_responsive_rules_authoritative() {
         "responsive rules must come after base rules so they are not overridden"
     );
 }
+
+#[test]
+fn ai_lab_runs_a_structured_strategy_research_mission() {
+    const DASHBOARD_AI_HTML: &str = include_str!("ui/ai.html");
+    const QUANT_AGENT_JS: &str = include_str!("ui/quant_agent.js");
+
+    for control in [
+        r#"id="strategy-mission""#,
+        r#"id="mission-goal""#,
+        r#"id="mission-risk""#,
+        r#"id="mission-universe""#,
+        r#"id="mission-run""#,
+        r#"id="mission-stages""#,
+        r#"id="strategy-candidates""#,
+    ] {
+        assert!(DASHBOARD_AI_HTML.contains(control), "missing {control}");
+    }
+
+    assert!(QUANT_AGENT_JS.contains("name: 'research_strategies'"));
+    assert!(QUANT_AGENT_JS.contains("function scoreStrategyCandidate"));
+    assert!(QUANT_AGENT_JS.contains("async function startStrategyMission"));
+    assert!(QUANT_AGENT_JS.contains("fetch('/api/status')"));
+    assert!(QUANT_AGENT_JS.contains("fetch('/api/positions')"));
+    assert!(QUANT_AGENT_JS.contains("toolSweep"));
+    assert!(
+        !QUANT_AGENT_JS.contains("startStrategyMission")
+            || !QUANT_AGENT_JS.contains("startStrategyMission();\n        toolApplyLive"),
+        "research mission must never auto-apply a live strategy"
+    );
+}
