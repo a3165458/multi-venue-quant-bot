@@ -14,6 +14,7 @@
     var COMPACT_KEEP_RECENT = 12;     // 压缩后保留最近消息条数（不含 system）
     var lastEstTokens = 0;
     var lastVerifiedBacktest = null;
+    var activeRequestController = null;
 
     var TOOLS = [
         {
@@ -103,7 +104,9 @@
                         data_file: { type: 'string' },
                         start: { type: 'string' },
                         end: { type: 'string' },
-                        capital: { type: 'number' }
+                        capital: { type: 'number' },
+                        strategies: { type: 'array', items: { type: 'string', enum: ['grid', 'dca', 'trend'] } },
+                        goal: { type: 'string', enum: ['balanced', 'sharpe', 'return', 'drawdown'] }
                     },
                     additionalProperties: false
                 }
@@ -308,10 +311,10 @@
                 + (result.optimized_params || '—');
         }
         if (name === 'compare_strategies' && result) {
-            var g = result.grid || {};
-            var t = result.trend || {};
-            return 'Grid ' + Number(g.total_return_pct || 0).toFixed(1)
-                + '% / Trend ' + Number(t.total_return_pct || 0).toFixed(1) + '%';
+            var rows = result.ranked || [];
+            return rows.map(function (row) {
+                return row.strategy + ' ' + Number(row.metrics && row.metrics.total_return_pct || 0).toFixed(2) + '%';
+            }).join(' / ') || '策略对比完成';
         }
         if (name === 'list_datasets' && result) {
             var n = (result.datasets && result.datasets.length) || 0;
@@ -495,7 +498,7 @@
     }
 
     async function toolListDatasets() {
-        var r = await fetch('/api/backtest/datasets');
+        var r = await fetchWithTimeout('/api/backtest/datasets', {}, 15000, '数据集读取');
         var j = await r.json();
         return j;
     }
@@ -510,11 +513,11 @@
             capital: args.capital != null ? args.capital : ws.capital,
             params: args.params != null ? args.params : ws.params
         };
-        var r = await fetch('/api/backtest', {
+        var r = await fetchWithTimeout('/api/backtest', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(body)
-        });
+        }, 120000, '回测');
         var j = await r.json();
         if (j && j.status !== 'error') {
             lastVerifiedBacktest = compactBacktest(j);
@@ -536,11 +539,11 @@
             mode: args.mode || 'quick',
             params: args.params != null ? args.params : ws.params
         };
-        var r = await fetch('/api/backtest/optimize', {
+        var r = await fetchWithTimeout('/api/backtest/optimize', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(body)
-        });
+        }, body.mode === 'full' ? 240000 : 120000, '参数扫描');
         var j = await r.json();
         if (j && j.optimized) {
             lastVerifiedBacktest = compactBacktest(j.optimized);
@@ -565,18 +568,35 @@
     async function toolCompare(args) {
         var ws = workspace();
         var capital = args.capital != null ? args.capital : ws.capital;
-        var base = {
-            data_file: args.data_file || ws.data_file,
-            start: args.start || ws.start,
-            end: args.end || ws.end,
-            capital: capital
+        var requested = Array.isArray(args.strategies) && args.strategies.length
+            ? args.strategies : ['grid', 'trend'];
+        var strategies = requested.filter(function (name, index) {
+            return ['grid', 'dca', 'trend'].indexOf(name) >= 0 && requested.indexOf(name) === index;
+        });
+        var goal = args.goal || 'balanced';
+        var comparison = {};
+        for (var i = 0; i < strategies.length; i++) {
+            if (abortFlag) throw new Error('strategy comparison stopped');
+            appendText('system', '策略对比 ' + (i + 1) + '/' + strategies.length + ' · 正在扫描 ' + strategies[i] + '…', 'step-ai');
+            var sweep = await toolSweep({
+                strategy: strategies[i], data_file: args.data_file || ws.data_file,
+                start: args.start || ws.start, end: args.end || ws.end,
+                capital: capital, goal: goal, mode: 'quick', params: ''
+            });
+            comparison[strategies[i]] = sweep.optimized || { status: 'error', message: sweep.message };
+        }
+        var ranked = strategies.map(function (strategy) {
+            var metrics = comparison[strategy] || {};
+            var score = scoreStrategyCandidate({ optimized: metrics }, goal, 'balanced');
+            return { strategy: strategy, metrics: metrics, eligible: score.eligible, score: score.score, reason: score.reason };
+        }).sort(function (a, b) { return b.score - a.score; });
+        return {
+            status: 'ok', strategies: strategies, goal: goal,
+            comparison: comparison,
+            recommended: ranked.find(function (row) { return row.eligible; }) || null,
+            ranked: ranked,
+            live_applied: false
         };
-        var gridParams = 'grid_count=10,investment=' + Math.min(15, capital * 0.15).toFixed(0) + ',deviation=0.012';
-        var trendParams = 'fast_ma=14,slow_ma=50,stop_loss=0.05,take_profit=0.06,trailing_stop=0,notional='
-            + Math.max(10, capital * 0.5).toFixed(2);
-        var grid = await toolRunBacktest(Object.assign({ strategy: 'grid', params: gridParams }, base));
-        var trend = await toolRunBacktest(Object.assign({ strategy: 'trend', params: trendParams }, base));
-        return { grid: grid, trend: trend };
     }
 
     function scoreStrategyCandidate(result, goal, risk) {
@@ -669,6 +689,7 @@
         setMissionStage('backtest');
         for (var i = 0; i < strategies.length; i++) {
             if (abortFlag) throw new Error('strategy mission stopped');
+            appendText('system', '研究回测 ' + (i + 1) + '/' + strategies.length + ' · ' + strategies[i], 'step-ai');
             var result = await toolSweep({
                 strategy: strategies[i], data_file: ws.data_file, start: ws.start, end: ws.end,
                 capital: ws.capital, goal: goal, mode: 'quick', params: ''
@@ -1069,6 +1090,27 @@
         return callOpenAICompat(cfg, messages, opts);
     }
 
+    async function fetchWithTimeout(url, options, timeoutMs, label) {
+        var controller = new AbortController();
+        activeRequestController = controller;
+        options = Object.assign({}, options || {}, { signal: controller.signal });
+        var timedOut = false;
+        var timer = setTimeout(function () { timedOut = true; controller.abort(); }, timeoutMs);
+        try {
+            return await fetch(url, options);
+        } catch (e) {
+            if (e && e.name === 'AbortError') {
+                throw new Error(timedOut
+                    ? (label || '请求') + '超时（' + Math.round(timeoutMs / 1000) + ' 秒）'
+                    : (label || '请求') + '已停止');
+            }
+            throw e;
+        } finally {
+            clearTimeout(timer);
+            if (activeRequestController === controller) activeRequestController = null;
+        }
+    }
+
     async function callOpenAICompat(cfg, messages, opts) {
         opts = opts || {};
         // max_tokens = 本轮允许的最大「输出」token，不是累计账单
@@ -1086,7 +1128,7 @@
         var headers = { 'Content-Type': 'application/json' };
         if (cfg.key) headers.Authorization = 'Bearer ' + cfg.key;
 
-        var r = await fetch(cfg.url, { method: 'POST', headers: headers, body: JSON.stringify(body) });
+        var r = await fetchWithTimeout(cfg.url, { method: 'POST', headers: headers, body: JSON.stringify(body) }, 45000, '模型请求');
         var text = await r.text();
         if (!r.ok) {
             // Fallback without tools if provider rejects tools schema
@@ -1119,7 +1161,7 @@
         };
         var headers = { 'Content-Type': 'application/json' };
         if (cfg.key) headers.Authorization = 'Bearer ' + cfg.key;
-        var r = await fetch(cfg.url, { method: 'POST', headers: headers, body: JSON.stringify(body) });
+        var r = await fetchWithTimeout(cfg.url, { method: 'POST', headers: headers, body: JSON.stringify(body) }, 45000, '模型请求');
         var text = await r.text();
         if (!r.ok) throw new Error('HTTP ' + r.status + ': ' + text.slice(0, 400));
         var d = JSON.parse(text);
@@ -1173,7 +1215,7 @@
                 };
             });
         }
-        var r = await fetch(cfg.url, {
+        var r = await fetchWithTimeout(cfg.url, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -1182,7 +1224,7 @@
                 'anthropic-dangerous-direct-browser-access': 'true'
             },
             body: JSON.stringify(body)
-        });
+        }, 45000, '模型请求');
         var text = await r.text();
         if (!r.ok) throw new Error('HTTP ' + r.status + ': ' + text.slice(0, 400));
         var d = JSON.parse(text);
@@ -1200,6 +1242,11 @@
                 arguments: safeParseArgs(tc.function.arguments)
             };
         });
+        if (!toolCalls.length && msg.content) {
+            var parsedText = parseTextToolProtocol(msg.content);
+            parsedText.raw = msg;
+            return parsedText;
+        }
         return { role: 'assistant', content: msg.content || '', tool_calls: toolCalls, raw: msg };
     }
 
@@ -1216,25 +1263,8 @@
     }
 
     function parseTextToolProtocol(content) {
-        var toolCalls = [];
-        var lines = String(content).split(/\r?\n/);
-        var finalText = content;
-        lines.forEach(function (line, idx) {
-            var m = line.match(/^\s*TOOL_CALL\s+(\{.*\})\s*$/);
-            if (m) {
-                try {
-                    var obj = JSON.parse(m[1]);
-                    toolCalls.push({
-                        id: 'text_' + idx,
-                        name: obj.name,
-                        arguments: obj.arguments || {}
-                    });
-                } catch (e) { /* ignore */ }
-            }
-            var f = line.match(/^\s*FINAL\s+([\s\S]*)$/);
-            if (f) finalText = f[1];
-        });
-        return { role: 'assistant', content: toolCalls.length ? content : finalText, tool_calls: toolCalls };
+        if (!window.QuantAgentProtocol) return { role: 'assistant', content: String(content || ''), tool_calls: [] };
+        return window.QuantAgentProtocol.parseToolProtocol(content);
     }
 
     function safeParseArgs(s) {
@@ -1282,6 +1312,7 @@
         }
 
         var research = looksLikeResearchTask(userText);
+        var executedToolCalls = Object.create(null);
         setBusy(true);
         history.push({ role: 'user', content: userText });
 
@@ -1357,7 +1388,15 @@
                     for (var i = 0; i < reply.tool_calls.length; i++) {
                         if (abortFlag) break;
                         var tc = reply.tool_calls[i];
-                        var exec = await executeTool(tc.name, tc.arguments || {});
+                        var callKey = tc.name + ':' + JSON.stringify(tc.arguments || {});
+                        var exec;
+                        if (executedToolCalls[callKey]) {
+                            exec = { ok: false, result: { status: 'error', message: 'duplicate identical tool call blocked; use the previous result' } };
+                            appendTool(tc.name, tc.arguments || {}, exec.result, false);
+                        } else {
+                            executedToolCalls[callKey] = true;
+                            exec = await executeTool(tc.name, tc.arguments || {});
+                        }
                         history.push({
                             role: 'tool',
                             tool_call_id: tc.id,
@@ -1402,7 +1441,10 @@
             });
         }
         if (stop) {
-            stop.addEventListener('click', function () { abortFlag = true; });
+            stop.addEventListener('click', function () {
+                abortFlag = true;
+                if (activeRequestController) activeRequestController.abort();
+            });
         }
         if (compactBtn) {
             compactBtn.addEventListener('click', function () {
@@ -1435,7 +1477,10 @@
 
     window.QuantAgent = {
         run: agentLoop,
-        stop: function () { abortFlag = true; },
+        stop: function () {
+            abortFlag = true;
+            if (activeRequestController) activeRequestController.abort();
+        },
         compact: function () { return compactHistory(true); },
         contextMeter: updateContextMeter,
         tools: TOOLS,

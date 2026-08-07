@@ -343,6 +343,10 @@ pub async fn start_with_state(host: &str, port: u16, state: SharedDashboardState
         .route("/ai", get(ai_page_handler))
         .route("/ai.js", get(ai_js_handler))
         .route("/quant_agent.js", get(quant_agent_js_handler))
+        .route(
+            "/quant_agent_protocol.js",
+            get(quant_agent_protocol_js_handler),
+        )
         .route("/health", get(health_handler))
         .route("/ws", get(ws_handler))
         .route("/api/status", get(status_handler))
@@ -1707,6 +1711,13 @@ async fn quant_agent_js_handler() -> impl IntoResponse {
     (
         [(axum::http::header::CONTENT_TYPE, "application/javascript")],
         include_str!("ui/quant_agent.js"),
+    )
+}
+
+async fn quant_agent_protocol_js_handler() -> impl IntoResponse {
+    (
+        [(axum::http::header::CONTENT_TYPE, "application/javascript")],
+        include_str!("ui/quant_agent_protocol.js"),
     )
 }
 
