@@ -379,6 +379,8 @@ async fn run_live_trading(config_path: &str) -> Result<()> {
         peak_equity: equity,
         equity_history: vec![(Utc::now().timestamp(), equity)],
         pnl_history: vec![(Utc::now().timestamp(), 0.0)],
+        total_volume: 0.0,
+        total_closed_trades: 0,
         strategy_params: {
             let mut m = std::collections::HashMap::new();
             m.insert(
@@ -432,6 +434,7 @@ async fn run_live_trading(config_path: &str) -> Result<()> {
         risk_update_requested: None,
         leverage_limit: 3.0,
         last_prices: std::collections::HashMap::new(),
+        quant_agent: dashboard::quant_agent::AgentLedger::load(),
     }));
 
     // Restore persistent PnL data from disk
@@ -1184,14 +1187,11 @@ async fn run_live_trading(config_path: &str) -> Result<()> {
                             );
                         }
 
-                        // Record close events in trade history
+                        // Record close events in trade history (lifetime volume/close
+                        // counters + shared ring-buffer limit live in push_trade).
                         let has_close_events = !close_events.is_empty();
                         for evt in close_events {
-                            ds.trade_history.push(evt);
-                        }
-                        let len = ds.trade_history.len();
-                        if len > 200 {
-                            ds.trade_history.drain(..len - 200);
+                            ds.push_trade(evt);
                         }
 
                         if realized_pnl_this_cycle.abs() > 0.0001 || has_close_events {
@@ -1711,7 +1711,10 @@ async fn run_live_trading(config_path: &str) -> Result<()> {
                                     "Open"
                                 }
                             };
-                            ds.trade_history.push(serde_json::json!({
+                            // Shared path with close events: updates lifetime volume
+                            // and trims to TRADE_HISTORY_LIMIT (was inconsistently 100 here).
+                            // Disk flush happens on close events / periodic equity save.
+                            ds.push_trade(serde_json::json!({
                                 "timestamp": signal.timestamp.to_rfc3339(),
                                 "symbol": signal.symbol,
                                 "market_id": signal.market_id,
@@ -1722,11 +1725,6 @@ async fn run_live_trading(config_path: &str) -> Result<()> {
                                 "action": action,
                                 "reason": signal.reason,
                             }));
-                            // Keep only last 100 trades
-                            let len = ds.trade_history.len();
-                            if len > 100 {
-                                ds.trade_history.drain(..len - 100);
-                            }
                         }
                         Err(e) => {
                             error!("❌ Order failed: {}", e);

@@ -225,6 +225,17 @@ impl BacktestEngine {
                                     "开仓: {:?} {} @ {:.2}",
                                     signal.side, signal.symbol, execution_price
                                 );
+                            } else {
+                                // Common when trend notional >> backtest capital: strategy
+                                // already advanced internal state but fill never happens.
+                                debug!(
+                                    "开仓跳过(资金不足): {} {:?} notional≈{:.2} cost={:.2} capital={:.2}",
+                                    signal.symbol,
+                                    signal.side,
+                                    cost,
+                                    cost + commission,
+                                    self.capital
+                                );
                             }
                         }
                     }

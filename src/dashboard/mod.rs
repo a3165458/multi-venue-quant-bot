@@ -1,4 +1,5 @@
 pub mod event_log;
+pub mod quant_agent;
 pub mod server;
 
 #[cfg(test)]

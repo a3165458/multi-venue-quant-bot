@@ -406,28 +406,40 @@ aside { display:none; }               /* 侧栏已并入头部卡 */
   font-family:var(--font-mono); font-size:10.5px; text-transform:uppercase; letter-spacing:0.12em;
 }
 
-/* ══ 事件流 ══ */
-.rail { display:flex; flex-direction:column; gap:6px; max-height:238px; overflow-y:auto; scrollbar-width:none; }
+/* ══ 事件流 ══
+   原来每行是一个独立圆角胶囊，文字只占左边一半、右边永远空着，38px 行高只放一行短文本。
+   改成四栏网格：时间 / 类型 / 详情(1fr 撑满) / 右对齐相对时间，行间用发丝线分隔。 */
+.rail { display:flex; flex-direction:column; overflow-y:auto; scrollbar-width:none; min-height:0; }
 .event-stream-section { display:flex; flex-direction:column; min-height:0; }
-.event-stream-section > .sec-body { flex:1; min-height:270px; }
-.event-stream-section .rail { position:absolute; inset:16px; min-height:0; max-height:none; }
-.event-stream-section .rail-chip {
-  flex:1 0 auto; min-height:38px; align-items:center;
-  background:var(--bg-card); border-color:var(--border-strong);
-}
+.event-stream-section > .sec-body { flex:1; min-height:270px; padding:0; }
+.event-stream-section .rail { position:absolute; inset:0; max-height:none; }
 .rail::-webkit-scrollbar { display:none; }
-.rail-empty { font-family:var(--font-mono); font-size:10px; text-transform:uppercase; letter-spacing:0.12em; color:var(--text-muted); padding:6px 0; }
-.rail-chip {
-  display:flex; align-items:baseline; gap:9px; flex-shrink:0;
-  padding:7px 11px; border:1px solid var(--border); border-radius:var(--radius-sm);
-  background:var(--bg-strip); font-family:var(--font-mono); font-size:11px;
-  font-variant-numeric:tabular-nums; animation:railIn 0.45s cubic-bezier(0.16,1,0.3,1);
+.rail-empty {
+  font-family:var(--font-mono); font-size:10px; text-transform:uppercase;
+  letter-spacing:0.12em; color:var(--text-muted); padding:18px 16px;
 }
-@keyframes railIn { from { opacity:0; transform:translateY(-10px); } to { opacity:1; transform:none; } }
-.rail-chip .rail-t { color:var(--text-muted); font-size:10px; flex-shrink:0; }
-.rail-chip .rail-k { font-weight:700; letter-spacing:0.08em; flex-shrink:0; }
-.rail-chip > span:last-child { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.rail-chip.risk .rail-k { color:var(--warning); }
+.rail-chip {
+  display:grid; grid-template-columns:auto auto 1fr auto; align-items:baseline;
+  gap:0 12px; padding:8px 16px; border-bottom:1px solid var(--border);
+  font-family:var(--font-mono); font-size:11.5px; font-variant-numeric:tabular-nums;
+  animation:railIn 0.4s cubic-bezier(0.16,1,0.3,1); flex-shrink:0;
+}
+.rail-chip:last-child { border-bottom:none; }
+.rail-chip:hover { background:var(--bg-strip); }
+@keyframes railIn { from { opacity:0; transform:translateY(-8px); } to { opacity:1; transform:none; } }
+.rail-chip .rail-t { color:var(--text-muted); font-size:10.5px; }
+.rail-chip .rail-k {
+  font-weight:700; letter-spacing:0.09em; font-size:10px;
+  min-width:52px;                       /* 四种标签对齐，详情列起点一致 */
+}
+.rail-chip .rail-d { color:var(--text-main); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.rail-chip .rail-age { color:var(--text-muted); font-size:10px; text-align:right; white-space:nowrap; }
+.rail-chip .rail-n {              /* 连续重复事件折叠后的计数 */
+  color:var(--text-muted); font-size:10px; margin-left:6px;
+}
+.rail-chip.risk  .rail-k { color:var(--warning); }
+.rail-chip.fill  .rail-k { color:var(--success); }
+.rail-chip.order .rail-k { color:var(--text-main); }
 
 /* ══ 成交闪现 ══ */
 .toasts { position:fixed; bottom:20px; right:20px; z-index:900; display:flex; flex-direction:column-reverse; gap:8px; pointer-events:none; }
@@ -1100,6 +1112,65 @@ tr:hover td { background:var(--bg-card-hover); }
 
   <!-- ═══ SETTINGS PAGE ═══ -->
   <div id="page-settings" class="page">
+    <!-- ═══ 环境变量 ═══
+         这些值在**进程启动时**读入，面板改的是磁盘上的 .env，必须重启才生效。
+         LIGHTER_SECRET_KEY 是只写的：后端 GET 永远不回明文，只回"已配置/长度/后4位"。 -->
+    <div class="sec" style="margin-bottom:12px;">
+      <div class="sec-head">
+        <div>
+          <div class="kicker" data-i18n="envKicker">READ AT PROCESS START · RESTART REQUIRED</div>
+          <div class="sec-title" data-i18n="envTitle">ENVIRONMENT</div>
+        </div>
+        <span class="pill" id="env-path">.env</span>
+      </div>
+      <div class="sec-body">
+        <div class="note" style="margin-bottom:14px;">
+          <b data-i18n="envWarnTag">SECURITY</b>
+          <span data-i18n="envWarn">This panel has no authentication and the live process binds 0.0.0.0. Anyone who can reach this port can edit these values. The secret key is write-only — it is never sent back to the browser.</span>
+        </div>
+        <div class="settings-grid" style="margin-bottom:0;">
+          <div class="card" style="border:none;padding:0;">
+            <div class="form-group">
+              <label class="form-label">LIGHTER_ACCOUNT_INDEX</label>
+              <input type="text" class="form-input" id="env-account-index" placeholder="—">
+            </div>
+            <div class="form-group">
+              <label class="form-label">LIGHTER_API_KEY_INDEX</label>
+              <input type="text" class="form-input" id="env-api-key-index" placeholder="—">
+            </div>
+            <div class="form-group">
+              <label class="form-label">RUST_LOG</label>
+              <input type="text" class="form-input" id="env-rust-log" placeholder="info">
+            </div>
+            <div class="form-group">
+              <label class="form-label">TOKIO_WORKER_THREADS</label>
+              <input type="text" class="form-input" id="env-worker-threads" placeholder="—">
+            </div>
+          </div>
+          <div class="card" style="border:none;padding:0;">
+            <div class="form-group">
+              <label class="form-label">LIGHTER_SECRET_KEY <span data-i18n="writeOnly">(write-only)</span></label>
+              <div class="info-row" style="padding:9px 0;border-bottom:none;">
+                <span class="info-k" data-i18n="currentValue">current</span>
+                <span class="info-v" id="env-secret-status">—</span>
+              </div>
+              <input type="password" class="form-input" id="env-secret-key" autocomplete="new-password"
+                     placeholder="留空 = 不修改 / leave blank to keep">
+              <div class="note" style="margin-top:8px;">
+                <span data-i18n="secretHint">Exchange API private key, not the wallet L1 key. Leaving this blank keeps the existing value.</span>
+              </div>
+            </div>
+            <button class="btn btn-primary" id="btn-save-env" style="width:100%;" data-i18n="saveEnv">Save to .env</button>
+            <div class="cfg-msg" id="env-msg"></div>
+          </div>
+        </div>
+      </div>
+      <div class="sec-foot">
+        <div data-i18n="envFootL">CHANGES LAND IN .ENV ON DISK</div>
+        <div data-i18n="envFootR">RESTART THE BOT TO APPLY</div>
+      </div>
+    </div>
+
     <div class="settings-grid">
       <div class="card">
         <div class="card-header"><div class="card-title" data-i18n="systemStatus">System Status</div></div>
@@ -1218,6 +1289,13 @@ tr:hover td { background:var(--bg-card-hover); }
   STR.en.riskTag = 'RISK';   STR.cn.riskTag = '风控';
   STR.en.stateTag = 'STATE'; STR.cn.stateTag = '状态';
   STR.en.ddCap = 'DRAWDOWN'; STR.cn.ddCap = '回撤';
+  STR.en.notSet = 'NOT SET';        STR.cn.notSet = '未配置';
+  STR.en.isSet = 'CONFIGURED';      STR.cn.isSet = '已配置';
+  STR.en.loadFailed = 'LOAD FAILED';STR.cn.loadFailed = '读取失败';
+  STR.en.saving = 'Saving...';      STR.cn.saving = '保存中...';
+  STR.en.savedRestart = 'Saved \u2014 restart the bot to apply';
+  STR.cn.savedRestart = '已保存 \u2014 需重启机器人才生效';
+  STR.en.nothingToSave = 'Nothing changed'; STR.cn.nothingToSave = '没有改动';
   STR.en.dlCap = 'DAILY';    STR.cn.dlCap = '日亏';
   STR.en.railEmpty = 'NO PERSISTED EVENTS'; STR.cn.railEmpty = '暂无持久化事件';
 
@@ -1335,19 +1413,42 @@ tr:hover td { background:var(--bg-card-hover); }
     if (kind === 'fill') return s('fillTag');
     return s('stateTag');
   }
+  /* 相对时间。注意**不要**叫 ago —— 下面已有一个同名函数（"最近推送多久"），
+     同作用域重名会被后定义的覆盖，而那个只输出秒，事件流里几小时前的条目会显示成 "7200s"。 */
+  function eventAge(ms) {
+    var d = Math.max(0, Date.now() - ms) / 1000;
+    if (d < 60) return Math.floor(d) + 's';
+    if (d < 3600) return Math.floor(d / 60) + 'm';
+    if (d < 86400) return Math.floor(d / 3600) + 'h';
+    return Math.floor(d / 86400) + 'd';
+  }
+  /* 把**连续**且同类同详情的事件折叠成一条 + ×N。
+     只折叠相邻项，不跨越中间插入的其它事件，所以时间顺序不会被打乱。 */
+  function collapse(list) {
+    var out = [];
+    for (var i = 0; i < list.length; i++) {
+      var e = list[i], last = out[out.length - 1];
+      if (last && last.kind === e.kind && last.detail === e.detail) { last.n++; continue; }
+      out.push({ kind: e.kind, detail: e.detail, timestamp_ms: e.timestamp_ms, n: 1 });
+    }
+    return out;
+  }
   function renderEvents(events) {
     var el = $('rail'); if (!el) return;
     lastEventList = Array.isArray(events) ? events.slice(0, 200) : [];
     if (!lastEventList.length) {
       el.innerHTML = '<div class="rail-empty" data-i18n="railEmpty">' + s('railEmpty') + '</div>';
+      txt('swarm-latest', '');
       return;
     }
-    el.innerHTML = lastEventList.map(function (event) {
+    el.innerHTML = collapse(lastEventList).map(function (event) {
       var kind = String(event.kind || 'state').toLowerCase();
       return '<div class="rail-chip ' + esc(kind) + '">' +
         '<span class="rail-t">' + clock(event.timestamp_ms) + '</span>' +
         '<span class="rail-k">' + esc(eventLabel(kind)) + '</span>' +
-        '<span>' + esc(event.detail) + '</span></div>';
+        '<span class="rail-d">' + esc(event.detail) +
+          (event.n > 1 ? '<span class="rail-n">\u00d7' + event.n + '</span>' : '') + '</span>' +
+        '<span class="rail-age">' + eventAge(event.timestamp_ms) + '</span></div>';
     }).join('');
     var latest = lastEventList[0];
     txt('swarm-latest', clock(latest.timestamp_ms) + '  ' + eventLabel(latest.kind) + '  ' + latest.detail);
@@ -1726,6 +1827,53 @@ tr:hover td { background:var(--bg-card-hover); }
     }
     txt('fb-conn', alive ? s('conn') : s('disconn'));
   }, 1000);
+
+  /* ── 环境变量设置 ──
+     GET 只回公开键 + 密钥的"已配置/长度/后4位"；密钥输入框留空表示不修改，
+     所以后端把空字符串当"跳过"，避免掩码占位符被写回去把密钥清空。 */
+  var ENV_FIELDS = {
+    'env-account-index': 'LIGHTER_ACCOUNT_INDEX',
+    'env-api-key-index': 'LIGHTER_API_KEY_INDEX',
+    'env-rust-log': 'RUST_LOG',
+    'env-worker-threads': 'TOKIO_WORKER_THREADS'
+  };
+  function loadEnv() {
+    fetch('/api/env').then(function (r) { return r.json(); }).then(function (d) {
+      Object.keys(ENV_FIELDS).forEach(function (id) {
+        var el = $(id); if (el) el.value = (d.public && d.public[ENV_FIELDS[id]]) || '';
+      });
+      txt('env-path', d.env_path || '.env');
+      var sec = d.secrets && d.secrets.LIGHTER_SECRET_KEY;
+      txt('env-secret-status', !sec || !sec.configured
+        ? s('notSet')
+        : s('isSet') + ' · ' + sec.length + ' · \u2022\u2022\u2022\u2022' + sec.tail);
+    }).catch(function () { txt('env-secret-status', s('loadFailed')); });
+  }
+  var envBtn = $('btn-save-env');
+  if (envBtn) envBtn.addEventListener('click', function () {
+    var payload = {};
+    Object.keys(ENV_FIELDS).forEach(function (id) {
+      var el = $(id); if (el && el.value.trim()) payload[ENV_FIELDS[id]] = el.value.trim();
+    });
+    var sk = $('env-secret-key');
+    if (sk && sk.value.trim()) payload.LIGHTER_SECRET_KEY = sk.value.trim();
+    if (!Object.keys(payload).length) { txt('env-msg', s('nothingToSave')); return; }
+    txt('env-msg', s('saving'));
+    fetch('/api/env', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload) })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (d.status === 'ok') {
+          if (sk) sk.value = '';                       // 别把密钥留在 DOM 里
+          txt('env-msg', s('savedRestart'));
+          loadEnv();
+        } else {
+          txt('env-msg', (d.message || 'error'));
+        }
+      })
+      .catch(function (e) { txt('env-msg', String(e)); });
+  });
+  loadEnv();
 
   window.__panels.lang(localStorage.getItem('lighter-lang') || 'en');
   loadPersistentEvents();

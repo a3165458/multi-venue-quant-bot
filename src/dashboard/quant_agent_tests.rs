@@ -17,6 +17,7 @@ fn quant_agent_has_deterministic_policy_and_persistent_audit() {
     assert!(POLICY.contains("max_notional_pct"));
     assert!(POLICY.contains("approval_phrase"));
     assert!(POLICY.contains("quant_agent_audit.json"));
+    assert!(SERVER.contains("server verification backtest failed"));
 }
 
 #[test]

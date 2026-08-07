@@ -78,7 +78,13 @@
             riskKicker: 'How much room is left',
             equityFootL: 'Every point is a /api/pnl snapshot', equityFootR: 'Range set on the return card',
             swarmFootL: 'Nearest to market is inverted', swarmFootR: 'Fill bar = filled / quantity',
-            railKicker: 'Real events only \u00b7 newest first', eventLog: 'Event Log', thisWeek: 'This week \u00b7 realised',
+            railKicker: 'Real events only \u00b7 newest first',
+            envKicker: 'Read at process start \u00b7 restart required', envTitle: 'Environment',
+            envWarnTag: 'Security',
+            envWarn: 'This panel has no authentication and the live process binds 0.0.0.0. Anyone who can reach this port can edit these values. The secret key is write-only \u2014 it is never sent back to the browser.',
+            writeOnly: '(write-only)', currentValue: 'current',
+            secretHint: 'Exchange API private key, not the wallet L1 key. Leaving this blank keeps the existing value.',
+            saveEnv: 'Save to .env', envFootL: 'Changes land in .env on disk', envFootR: 'Restart the bot to apply', eventLog: 'Event Log', thisWeek: 'This week \u00b7 realised',
             confirmCancel: 'Cancel ALL open orders? This cannot be undone.', navMenu: 'Menu',
         },
         cn: {
@@ -129,7 +135,13 @@
             riskKicker: '还剩多少空间',
             equityFootL: '每个点都是一次 /api/pnl 快照', equityFootR: '区间在收益卡上切换',
             swarmFootL: '离市价最近的一档是反相卡', swarmFootR: '进度条 = 已成交 / 委托量',
-            railKicker: '只记真实事件 \u00b7 最新在上', eventLog: '事件流', thisWeek: '本周 \u00b7 已实现',
+            railKicker: '只记真实事件 \u00b7 最新在上',
+            envKicker: '进程启动时读入 \u00b7 需重启生效', envTitle: '环境变量',
+            envWarnTag: '安全',
+            envWarn: '本面板没有任何鉴权，且实盘进程绑定在 0.0.0.0。能访问该端口的任何人都能改这些值。密钥是只写的 \u2014 后端永远不会把明文回给浏览器。',
+            writeOnly: '（只写）', currentValue: '当前',
+            secretHint: '这是交易所 API 私钥，不是钱包 L1 私钥。留空表示保持原值不变。',
+            saveEnv: '保存到 .env', envFootL: '改动写入磁盘上的 .env', envFootR: '重启机器人后生效', eventLog: '事件流', thisWeek: '本周 \u00b7 已实现',
             confirmCancel: '取消所有挂单？此操作不可撤销。', navMenu: '菜单',
         }
     };
@@ -549,9 +561,12 @@
             if (data.trades) {
                 allTrades = data.trades;
                 renderHistory();
-                computeHistoryStats();
                 renderPositionSummary();
             }
+            // History stats must use server lifetime counters — summing the
+            // retained trade buffer under-reports after ring-buffer trims and
+            // diverged from total_realized_pnl (e.g. -$0.74 vs +$17.27).
+            applyServerHistoryStats(data);
             if (data.total_realized_pnl !== undefined) {
                 const el = $('mc-total');
                 if (el) { el.textContent = fmtPnl(data.total_realized_pnl); el.className = 'value ' + pnlClass(data.total_realized_pnl); }
@@ -681,6 +696,9 @@
         const total = d.total_realized_pnl || 0;
         setPnl('mc-total', total);
         if ($('sp-pnl')) { $('sp-pnl').textContent = fmtPnl(total); $('sp-pnl').className = 'info-v ' + pnlClass(total); }
+
+        // Keep History-page cards in sync with the same lifetime counters.
+        applyServerHistoryStats(d);
 
         setVal('s-orders', d.open_orders || 0);
         setVal('s-orders-label', (d.open_orders || 0) + ' open orders');
@@ -875,7 +893,39 @@
         }).join('');
     }
 
+    // Apply authoritative stats from /api/pnl. Volume and closed-trade count
+    // are lifetime totals on the server; avg duration still comes from the
+    // retained close events (older duration_secs are not stored separately).
+    function applyServerHistoryStats(data) {
+        if (!data) return;
+        if (data.total_realized_pnl !== undefined) {
+            setPnl('hc-pnl', data.total_realized_pnl);
+        }
+        const closed = data.total_closed_trades;
+        if (closed !== undefined && closed !== null) {
+            setVal('hc-closed-trades', closed);
+        }
+        const vol = data.total_volume;
+        if (vol !== undefined && vol !== null) {
+            setVal('hc-volume', '$' + Number(vol).toFixed(0));
+        }
+        // Visible-buffer length for "recent fills"; total_trades if present.
+        if (data.total_trades !== undefined) {
+            setVal('sp-trades', data.total_trades);
+        } else if (data.trade_history_len !== undefined) {
+            setVal('sp-trades', data.trade_history_len);
+        } else if (allTrades.length) {
+            setVal('sp-trades', allTrades.length);
+        }
+        const closeStats = buildCloseTradeStats();
+        const avgDurationSecs = closeStats.length
+            ? closeStats.reduce((sum, t) => sum + (t.duration_secs || 0), 0) / closeStats.length
+            : 0;
+        setVal('hc-duration', fmtDuration(avgDurationSecs));
+    }
+
     function computeHistoryStats() {
+        // Fallback when only the local buffer is available (e.g. WS-only path).
         if (!allTrades.length) return;
         let totalPnl = 0, closeTrades = 0, vol = 0;
         allTrades.forEach(t => {

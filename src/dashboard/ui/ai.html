@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en" data-theme="light">
+<html lang="zh-CN" data-theme="light">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -97,10 +97,14 @@
 }
 
 *,*::before,*::after { margin:0; padding:0; box-sizing:border-box; }
+html { height:100%; }
 body {
   font-family:'DM Sans',-apple-system,sans-serif; background:var(--bg-body);
-  color:var(--text-main); min-height:100vh; -webkit-font-smoothing:antialiased;
-  transition:background 0.25s, color 0.25s;
+  color:var(--text-main); height:100%; min-height:100%; overflow:hidden;
+  -webkit-font-smoothing:antialiased; transition:background 0.25s, color 0.25s;
+}
+@media (max-width:900px) {
+  html, body { height:auto; min-height:100%; overflow:auto; }
 }
 ::-webkit-scrollbar { width:6px; height:6px; }
 ::-webkit-scrollbar-track { background:var(--scrollbar-track); }
@@ -112,12 +116,18 @@ body {
   font-family:var(--font-mono); font-size:10px; font-weight:500;
   text-transform:uppercase; letter-spacing:0.13em; color:var(--text-muted); line-height:1.5;
 }
-main, .layout-wrap { max-width:1240px; margin:0 auto; padding:16px 16px 24px; }
+/* 整页锁在视口内：对话再长也不把 document 撑高 */
+main, .layout-wrap {
+  max-width:1480px; margin:0 auto; padding:12px 16px 12px;
+  height:100vh; max-height:100vh; box-sizing:border-box;
+  display:flex; flex-direction:column; overflow:hidden;
+}
+.layout-wrap > .topbar { flex-shrink:0; margin-bottom:12px; }
 
 /* ── 头部卡（与主面板同一份结构）── */
 .topbar {
   background:var(--bg-card); border:1px solid var(--border);
-  border-radius:var(--radius-lg); margin-bottom:12px; overflow:hidden;
+  border-radius:var(--radius-lg); margin-bottom:0; overflow:hidden;
 }
 .tb-main { display:flex; align-items:center; gap:14px; padding:14px 16px; }
 .logo { display:flex; align-items:center; gap:13px; min-width:0; }
@@ -161,9 +171,280 @@ main, .layout-wrap { max-width:1240px; margin:0 auto; padding:16px 16px 24px; }
 .theme-btn:hover { border-color:var(--border-strong); color:var(--text-main); }
 .theme-btn svg { width:15px; height:15px; }
 
-/* ── 布局 ── */
-.layout { display:grid; grid-template-columns:376px 1fr; gap:12px; align-items:start; }
-@media (max-width:980px) { .layout { grid-template-columns:1fr; } }
+/* ── 布局：左配置 · 中 Agent 对话 · 右工具轨 ──
+   关键点：三栏同高锁在视口内；只有栏内滚动，document 不随对话变长。 */
+.layout {
+  flex:1; min-height:0; /* 吃掉 layout-wrap 剩余高度 */
+  display:grid; grid-template-columns:320px minmax(0,1fr) 280px; gap:12px; align-items:stretch;
+  overflow:hidden;
+}
+/* 左栏：配置表单自己滚 */
+.layout > div:first-child {
+  min-height:0; max-height:100%; overflow-x:hidden; overflow-y:auto;
+  padding-right:2px; scrollbar-width:thin;
+}
+@media (max-width:1200px) {
+  .layout { grid-template-columns:300px minmax(0,1fr); }
+  .agent-rail { display:none; }
+}
+@media (max-width:900px) {
+  /* 窄屏允许整页滚，避免挤死 */
+  main, .layout-wrap { height:auto; max-height:none; overflow:visible; }
+  .layout { grid-template-columns:1fr; overflow:visible; height:auto; }
+  .layout > div:first-child { max-height:none; overflow:visible; }
+  .agent-workspace { height:min(70vh, 640px) !important; max-height:70vh !important; }
+}
+
+/* ── Quant Agent 对话区：固定高度，消息区内滚 ── */
+.agent-workspace {
+  background:var(--bg-card); border:1px solid var(--border); border-radius:var(--radius-lg);
+  display:flex; flex-direction:column;
+  height:100%; max-height:100%; min-height:0;
+  overflow:hidden; /* 关键：禁止把外层撑开 */
+}
+.agent-workspace > .panel-title { margin:0; flex-shrink:0; }
+.agent-chat {
+  flex:1 1 auto; min-height:0; /* flex 子项可收缩，否则 overflow 无效 */
+  overflow-x:hidden; overflow-y:auto;
+  padding:14px 16px; background:var(--bg-body);
+  scrollbar-width:thin;
+  overscroll-behavior:contain;
+}
+.agent-chat-empty {
+  color:var(--text-muted); font-family:var(--font-mono); font-size:11px; letter-spacing:0.08em;
+  text-transform:uppercase; padding:40px 12px; text-align:center; line-height:1.6;
+}
+.agent-msg { margin-bottom:12px; max-width:100%; }
+.agent-msg-meta {
+  font-family:var(--font-mono); font-size:10px; color:var(--text-muted);
+  letter-spacing:0.08em; text-transform:uppercase; margin-bottom:4px;
+}
+.agent-msg-body {
+  background:var(--bg-card); border:1px solid var(--border); border-radius:var(--radius-md);
+  padding:10px 12px; font-size:13.5px; line-height:1.55; color:var(--text-main);
+  max-height:min(42vh, 420px); overflow-y:auto; /* 单条超长消息也内滚，不撑栏 */
+  scrollbar-width:thin;
+}
+.agent-msg-user .agent-msg-body { background:var(--bg-strip); border-color:var(--border-strong); }
+.agent-msg-assistant .agent-msg-body { border-color:var(--border); }
+.agent-msg-system .agent-msg-body {
+  background:transparent; border-style:dashed; color:var(--text-sub); font-size:12px;
+  max-height:none; /* 简短系统行无需限制 */
+}
+.agent-msg-tool .agent-msg-body { max-height:min(36vh, 320px); padding:8px; }
+.agent-pre { margin:0; white-space:pre-wrap; word-break:break-word; font-family:inherit; font-size:inherit; }
+.agent-chips {
+  display:flex; flex-wrap:wrap; gap:8px; padding:10px 14px;
+  border-top:1px solid var(--border); background:var(--bg-strip);
+  flex-shrink:0; max-height:88px; overflow-y:auto;
+}
+.agent-chip {
+  border:1px solid var(--border-strong); background:var(--bg-card); color:var(--text-main);
+  border-radius:99px; padding:6px 12px; font-size:12px; cursor:pointer; font-family:var(--font-mono);
+}
+.agent-chip:hover { border-color:var(--primary); }
+.agent-ctx-bar {
+  display:flex; align-items:center; gap:10px; flex-shrink:0;
+  padding:8px 14px; border-top:1px solid var(--border); background:var(--bg-strip);
+  font-family:var(--font-mono); font-size:10.5px; color:var(--text-sub);
+}
+.agent-ctx-label {
+  letter-spacing:0.1em; text-transform:uppercase; color:var(--text-muted); flex-shrink:0;
+}
+.agent-ctx-track {
+  flex:1; height:6px; border-radius:99px; background:var(--border); overflow:hidden; min-width:60px;
+}
+.agent-ctx-fill {
+  height:100%; width:0%; border-radius:99px; background:var(--success); transition:width 0.25s ease, background 0.25s;
+}
+.agent-ctx-fill.warn { background:var(--warning); }
+.agent-ctx-fill.hot { background:var(--danger); }
+.agent-ctx-text { flex-shrink:0; font-variant-numeric:tabular-nums; white-space:nowrap; }
+.agent-ctx-btn {
+  flex-shrink:0; border:1px solid var(--border-strong); background:var(--bg-card); color:var(--text-main);
+  border-radius:99px; padding:4px 10px; font-family:var(--font-mono); font-size:10.5px;
+  font-weight:700; letter-spacing:0.06em; text-transform:uppercase; cursor:pointer;
+}
+.agent-ctx-btn:hover { border-color:var(--primary); }
+.agent-ctx-btn:disabled { opacity:0.45; cursor:not-allowed; }
+.agent-composer {
+  display:flex; gap:8px; padding:12px 14px; border-top:1px solid var(--border);
+  background:var(--bg-card); align-items:flex-end; flex-shrink:0;
+}
+.agent-composer textarea {
+  flex:1; min-height:56px; max-height:120px; resize:vertical; border:1px solid var(--border-strong);
+  border-radius:var(--radius-sm); padding:10px 12px; font-size:13.5px; background:var(--bg-input); color:var(--text-main);
+  font-family:inherit;
+}
+.agent-composer textarea:focus { outline:none; border-color:var(--primary); background:var(--bg-card); }
+.agent-composer .btn { width:auto; min-width:96px; }
+/* ── 右侧工具/结果轨（精修）── */
+.agent-rail {
+  background:var(--bg-card); border:1px solid var(--border); border-radius:var(--radius-lg);
+  display:flex; flex-direction:column; overflow:hidden;
+  height:100%; max-height:100%; min-height:0;
+}
+.agent-rail > .panel-title {
+  margin:0; flex-shrink:0;
+  font-size:13px; letter-spacing:0.06em;
+}
+.agent-rail-body {
+  flex:1; min-height:0; overflow:hidden;
+  display:flex; flex-direction:column; gap:0; padding:0;
+}
+.rail-block {
+  display:flex; flex-direction:column; min-height:0;
+  border-bottom:1px solid var(--border);
+}
+.rail-block:last-child { border-bottom:none; flex:1.15; }
+.rail-block.tools { flex:0.95; }
+.rail-block-head {
+  flex-shrink:0; display:flex; align-items:center; justify-content:space-between;
+  padding:10px 14px 8px; background:var(--bg-strip);
+}
+.rail-block-head .rail-k {
+  font-family:var(--font-mono); font-size:10px; font-weight:600;
+  letter-spacing:0.12em; text-transform:uppercase; color:var(--text-muted);
+}
+.rail-block-head .rail-count {
+  font-family:var(--font-mono); font-size:10px; color:var(--text-sub);
+  background:var(--bg-card); border:1px solid var(--border); border-radius:99px;
+  padding:2px 8px;
+}
+.rail-block-body {
+  flex:1; min-height:0; overflow-y:auto; padding:10px 12px 12px;
+  scrollbar-width:thin; overscroll-behavior:contain;
+}
+
+/* 工具时间线 */
+.tool-timeline { display:flex; flex-direction:column; gap:8px; min-height:48px; }
+.tool-timeline:empty::before {
+  content:attr(data-empty);
+  display:block; padding:28px 8px; text-align:center;
+  font-family:var(--font-mono); font-size:10.5px; letter-spacing:0.08em;
+  text-transform:uppercase; color:var(--text-muted); line-height:1.55;
+}
+.tool-hit {
+  display:grid; grid-template-columns:auto 1fr auto; gap:8px 10px;
+  align-items:start; padding:10px 11px;
+  border:1px solid var(--border); border-radius:12px;
+  background:var(--bg-body); transition:border-color 0.15s, background 0.15s;
+}
+.tool-hit:hover { background:var(--bg-card); border-color:var(--border-strong); }
+.tool-hit.ok { border-left:3px solid var(--success); }
+.tool-hit.err { border-left:3px solid var(--danger); }
+.tool-hit .th-icon {
+  width:28px; height:28px; border-radius:8px; display:flex; align-items:center; justify-content:center;
+  font-size:13px; background:var(--bg-strip); border:1px solid var(--border); flex-shrink:0;
+}
+.tool-hit.ok .th-icon { background:var(--success-bg); border-color:transparent; }
+.tool-hit.err .th-icon { background:var(--danger-bg); border-color:transparent; }
+.tool-hit .th-main { min-width:0; }
+.tool-hit .th-name {
+  font-family:var(--font-mono); font-size:11.5px; font-weight:700;
+  letter-spacing:0.02em; color:var(--text-main);
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+}
+.tool-hit .th-sum {
+  margin-top:3px; font-size:11.5px; color:var(--text-sub); line-height:1.4;
+  display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden;
+}
+.tool-hit .th-meta {
+  font-family:var(--font-mono); font-size:10px; color:var(--text-muted);
+  white-space:nowrap; text-align:right;
+}
+.tool-hit .th-badge {
+  display:inline-block; margin-top:4px; font-family:var(--font-mono); font-size:9.5px;
+  font-weight:600; letter-spacing:0.08em; text-transform:uppercase;
+  padding:2px 7px; border-radius:99px;
+}
+.tool-hit.ok .th-badge { background:var(--success-bg); color:var(--success); }
+.tool-hit.err .th-badge { background:var(--danger-bg); color:var(--danger); }
+.tool-hit details { grid-column:1 / -1; margin-top:2px; }
+.tool-hit details summary {
+  cursor:pointer; font-family:var(--font-mono); font-size:10px; color:var(--text-muted);
+  letter-spacing:0.06em; text-transform:uppercase; list-style:none; user-select:none;
+}
+.tool-hit details summary::-webkit-details-marker { display:none; }
+.tool-hit details summary:hover { color:var(--text-main); }
+.tool-hit .th-json {
+  margin-top:6px; padding:8px 9px; border-radius:8px; background:var(--bg-card);
+  border:1px solid var(--border); font-family:var(--font-mono); font-size:10.5px;
+  color:var(--text-sub); max-height:120px; overflow:auto; white-space:pre-wrap; word-break:break-word;
+}
+
+/* 结果卡 */
+.rail-result-empty {
+  padding:32px 12px; text-align:center;
+  font-family:var(--font-mono); font-size:10.5px; letter-spacing:0.1em;
+  text-transform:uppercase; color:var(--text-muted); line-height:1.55;
+}
+.rail-result-card {
+  border:1px solid var(--border); border-radius:14px; overflow:hidden;
+  background:var(--bg-body);
+}
+.rail-result-card .rr-top {
+  display:flex; align-items:flex-start; justify-content:space-between; gap:10px;
+  padding:12px 13px 10px; background:var(--bg-card); border-bottom:1px solid var(--border);
+}
+.rail-result-card .rr-title {
+  font-size:13px; font-weight:700; letter-spacing:-0.01em; color:var(--text-main);
+  line-height:1.3; word-break:break-word;
+}
+.rail-result-card .rr-sub {
+  margin-top:4px; font-family:var(--font-mono); font-size:10.5px; color:var(--text-muted);
+  line-height:1.4; word-break:break-all;
+}
+.rail-result-card .rr-badge {
+  flex-shrink:0; font-family:var(--font-mono); font-size:10px; font-weight:700;
+  letter-spacing:0.08em; text-transform:uppercase; padding:4px 9px; border-radius:99px;
+}
+.rr-badge.up { background:var(--success-bg); color:var(--success); }
+.rr-badge.down { background:var(--danger-bg); color:var(--danger); }
+.rail-result-card .rr-grid {
+  display:grid; grid-template-columns:1fr 1fr; gap:1px; background:var(--border);
+}
+.rail-result-card .rr-cell {
+  background:var(--bg-card); padding:12px 10px; text-align:center;
+}
+.rail-result-card .rr-val {
+  font-size:18px; font-weight:700; font-variant-numeric:tabular-nums;
+  letter-spacing:-0.02em; line-height:1.15;
+}
+.rail-result-card .rr-lab {
+  margin-top:4px; font-family:var(--font-mono); font-size:9.5px;
+  letter-spacing:0.1em; text-transform:uppercase; color:var(--text-muted);
+}
+.rail-result-card .rr-params {
+  padding:10px 12px; border-top:1px solid var(--border); background:var(--bg-strip);
+  font-family:var(--font-mono); font-size:10.5px; color:var(--text-sub);
+  word-break:break-all; line-height:1.45;
+}
+
+/* 对话里的工具卡也统一风格 */
+.tool-card {
+  border-radius:12px; border:1px solid var(--border); background:var(--bg-strip);
+  padding:0; overflow:hidden;
+}
+.tool-card.ok { border-color:var(--border); border-left:3px solid var(--success); }
+.tool-card.err { border-color:var(--border); border-left:3px solid var(--danger); }
+.tool-card .tool-name {
+  font-family:var(--font-mono); font-size:11px; font-weight:700;
+  padding:9px 11px 0; letter-spacing:0.03em;
+}
+.tool-card .tool-args {
+  padding:4px 11px 0; font-size:10.5px; color:var(--text-sub);
+}
+.tool-card .tool-args code { word-break:break-all; font-size:10.5px; }
+.tool-card .tool-out {
+  margin:8px 11px 11px; padding:8px 9px; max-height:120px; overflow:auto;
+  font-size:10.5px; font-family:var(--font-mono); color:var(--text-sub);
+  white-space:pre-wrap; background:var(--bg-card); border:1px solid var(--border); border-radius:8px;
+}
+
+/* 左侧配置卡在滚动容器里，最后一张别被裁切 */
+.layout > div:first-child > .panel:last-child,
+.layout > div:first-child > .ai-section:last-child { margin-bottom:4px; }
 
 /* ── 区块卡（= 主面板的 .sec：头部条 + 主体）── */
 .panel, .ai-section {
@@ -207,16 +488,79 @@ main, .layout-wrap { max-width:1240px; margin:0 auto; padding:16px 16px 24px; }
 .btn:disabled { opacity:0.45; cursor:not-allowed; }
 
 /* ── 结果区 ── */
+.results-panel { position:sticky; top:12px; max-height:calc(100vh - 120px); display:flex; flex-direction:column; min-height:420px; }
+.results-panel > .panel-title { flex-shrink:0; }
+.results-scroll { flex:1; min-height:0; overflow-y:auto; padding-bottom:4px; }
 .results-empty {
-  display:flex; align-items:center; justify-content:center; height:300px;
+  display:flex; flex-direction:column; align-items:center; justify-content:center; min-height:280px; gap:10px;
   color:var(--text-muted); font-family:var(--font-mono); font-size:10.5px;
-  text-transform:uppercase; letter-spacing:0.12em;
+  text-transform:uppercase; letter-spacing:0.12em; text-align:center; padding:24px 12px;
 }
+.results-empty .empty-hint { text-transform:none; letter-spacing:0; font-size:12px; color:var(--text-sub); max-width:320px; line-height:1.5; font-family:var(--font-sans, inherit); }
 .result-card { background:var(--bg-strip); border:1px solid var(--border); border-radius:var(--radius-md); padding:16px; margin-bottom:12px; }
 .result-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:14px; }
 .result-title { font-size:14px; font-weight:700; letter-spacing:-0.01em; }
 .result-badge { padding:3px 9px; border-radius:99px; font-family:var(--font-mono); font-size:10px; font-weight:600; letter-spacing:0.08em; text-transform:uppercase; }
 .badge-profit { background:var(--success-bg); color:var(--success); }
+
+/* ── 右侧：AI 过程 / 思考流 ── */
+.right-section { margin-bottom:14px; }
+.right-section-head {
+  display:flex; align-items:center; justify-content:space-between; gap:8px;
+  margin-bottom:8px; font-family:var(--font-mono); font-size:10px; font-weight:600;
+  text-transform:uppercase; letter-spacing:0.12em; color:var(--text-muted);
+}
+.right-section-head .sec-live {
+  display:inline-flex; align-items:center; gap:5px; color:var(--success);
+}
+.right-section-head .sec-live::before {
+  content:''; width:6px; height:6px; border-radius:50%; background:var(--success);
+  box-shadow:0 0 0 3px var(--success-bg); animation:livePulse 1.4s ease-in-out infinite;
+}
+@keyframes livePulse { 50% { opacity:0.45; } }
+.process-stream {
+  background:var(--bg-strip); border:1px solid var(--border); border-radius:var(--radius-md);
+  padding:10px 0; max-height:220px; overflow-y:auto; font-family:var(--font-mono);
+  font-size:11.5px; line-height:1.45;
+}
+.process-stream:empty::after {
+  content:attr(data-empty); display:block; padding:18px 14px; color:var(--text-muted);
+  font-size:10.5px; text-transform:uppercase; letter-spacing:0.1em;
+}
+.process-row {
+  display:grid; grid-template-columns:auto 1fr; gap:8px 10px; padding:6px 14px;
+  border-bottom:1px solid var(--border); align-items:start;
+}
+.process-row:last-child { border-bottom:none; }
+.process-row .pt { color:var(--text-muted); font-size:10px; white-space:nowrap; padding-top:1px; }
+.process-row .pm { color:var(--text-main); word-break:break-word; white-space:pre-wrap; }
+.process-row.step-warn .pm { color:var(--warning); }
+.process-row.step-err .pm { color:var(--danger); }
+.process-row.step-ok .pm { color:var(--success); }
+.process-row.step-ai .pm { color:var(--text-main); }
+.think-card {
+  background:var(--bg-strip); border:1px solid var(--border); border-radius:var(--radius-md);
+  padding:0; overflow:hidden;
+}
+.think-meta {
+  display:flex; flex-wrap:wrap; gap:6px 12px; padding:10px 14px; border-bottom:1px solid var(--border);
+  font-family:var(--font-mono); font-size:10.5px; color:var(--text-sub);
+}
+.think-meta b { color:var(--text-main); font-weight:600; }
+.think-params {
+  padding:10px 14px; border-bottom:1px solid var(--border); font-family:var(--font-mono);
+  font-size:12px; font-weight:600; color:var(--text-main); background:var(--bg-card);
+}
+.think-body {
+  padding:12px 14px; font-size:13px; line-height:1.55; color:var(--text-main);
+  white-space:pre-wrap; word-break:break-word; max-height:280px; overflow-y:auto;
+}
+.think-empty { padding:16px 14px; color:var(--text-muted); font-family:var(--font-mono); font-size:10.5px; letter-spacing:0.1em; text-transform:uppercase; }
+.prompt-preview {
+  margin-top:8px; padding:10px 12px; border-radius:var(--radius-sm); border:1px dashed var(--border-strong);
+  background:var(--bg-card); font-family:var(--font-mono); font-size:10.5px; color:var(--text-sub);
+  white-space:pre-wrap; max-height:120px; overflow-y:auto; display:none;
+}
 .badge-loss { background:var(--danger-bg); color:var(--danger); }
 .metrics-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:1px; margin-bottom:12px; background:var(--border); border:1px solid var(--border); border-radius:var(--radius-sm); overflow:hidden; }
 @media (max-width:600px) { .metrics-grid { grid-template-columns:repeat(2,1fr); } }
@@ -245,6 +589,28 @@ tr:hover td { background:var(--bg-card-hover); }
   padding:10px 12px; font-family:var(--font-mono); font-size:10.5px;
   max-height:150px; overflow-y:auto; color:var(--text-sub); margin-top:10px;
 }
+/* 实盘写入的人工确认卡：模型只能请求，放行必须人点 */
+.agent-approval {
+  border:2px solid var(--danger); border-radius:var(--radius-md);
+  background:var(--danger-bg); padding:14px 16px; margin:10px 0;
+}
+.agent-approval.approved { border-color:var(--success); background:var(--success-bg); }
+.agent-approval.denied   { opacity:0.55; }
+.approval-head {
+  font-family:var(--font-mono); font-size:10.5px; font-weight:700;
+  text-transform:uppercase; letter-spacing:0.12em; color:var(--danger); margin-bottom:9px;
+}
+.agent-approval.approved .approval-head { color:var(--success); }
+.approval-body { font-size:13.5px; line-height:1.6; }
+.approval-params {
+  font-family:var(--font-mono); font-size:11.5px; margin-top:4px;
+  word-break:break-all; color:var(--text-sub);
+}
+.approval-warn { font-size:12px; color:var(--text-sub); margin-top:6px; }
+.approval-actions { display:flex; gap:8px; margin-top:12px; }
+.approval-actions .btn { width:auto; flex:1; }
+.agent-approval button:disabled { opacity:0.5; cursor:not-allowed; }
+
 .note { font-family:var(--font-mono); font-size:10px; line-height:1.65; color:var(--text-muted); margin-bottom:8px; }
 .note b { color:var(--text-sub); font-weight:600; letter-spacing:0.11em; margin-right:5px; }
 .note code { background:var(--bg-strip); padding:1px 4px; border-radius:3px; }
@@ -264,23 +630,24 @@ tr:hover td { background:var(--bg-card-hover); }
     <div class="logo">
       <div class="logo-icon"><i data-lucide="zap"></i></div>
       <div>
-        <span class="kicker">BACKTEST IN · PARAMETERS OUT · NO LIVE ORDERS</span>
-        <div class="brand-title">Lighter Bot<em> · strategy lab</em></div>
+        <span class="kicker" data-i18n="brandKicker">QUANT AGENT · 工具调用 · 真回测闭环</span>
+        <div class="brand-title">Lighter Bot<em data-i18n="brandEm"> · quant agent</em></div>
       </div>
     </div>
     <div class="tb-right">
-      <span class="pill"><span class="ai-badge">AI</span> STRATEGY LAB</span>
-      <span class="pill">SANDBOX</span>
+      <span class="pill"><span class="ai-badge">AGENT</span> <span data-i18n="pillLab">Quant Bot</span></span>
+      <span class="pill" data-i18n="pillSandbox">沙箱</span>
     </div>
   </div>
   <div class="tb-nav">
-    <a href="/" class="nav-link"><i data-lucide="layout-dashboard"></i> Dashboard</a>
-    <a href="/#strategies" class="nav-link"><i data-lucide="trending-up"></i> Strategies</a>
-    <a href="/#portfolio" class="nav-link"><i data-lucide="wallet"></i> Portfolio</a>
-    <a href="/#history" class="nav-link"><i data-lucide="clock"></i> History</a>
-    <a href="/#settings" class="nav-link"><i data-lucide="settings"></i> Settings</a>
-    <span class="nav-item active"><i data-lucide="sparkles"></i> AI Lab</span>
+    <a href="/" class="nav-link"><i data-lucide="layout-dashboard"></i> <span data-i18n="navDashboard">总览</span></a>
+    <a href="/#strategies" class="nav-link"><i data-lucide="trending-up"></i> <span data-i18n="navStrategies">策略</span></a>
+    <a href="/#portfolio" class="nav-link"><i data-lucide="wallet"></i> <span data-i18n="navPortfolio">资产</span></a>
+    <a href="/#history" class="nav-link"><i data-lucide="clock"></i> <span data-i18n="navHistory">历史</span></a>
+    <a href="/#settings" class="nav-link"><i data-lucide="settings"></i> <span data-i18n="navSettings">设置</span></a>
+    <span class="nav-item active"><i data-lucide="sparkles"></i> <span data-i18n="navAiLab">AI 实验室</span></span>
     <span class="nav-spacer"></span>
+    <button class="theme-btn" id="ai-lang-btn" title="切换语言 / Switch language" style="font-family:var(--font-mono);font-size:12px;font-weight:700;min-width:36px;"><span id="ai-lang-label">中</span></button>
     <button class="theme-btn" id="ai-theme-btn" title="Toggle theme"><i data-lucide="moon" id="ai-theme-icon"></i></button>
   </div>
 </div>
@@ -288,112 +655,181 @@ tr:hover td { background:var(--bg-card-hover); }
 <div class="layout">
   <div>
     <div class="panel">
-      <div class="panel-title"><i data-lucide="file-text" style="width:16px;height:16px;"></i> Backtest Configuration</div>
+      <div class="panel-title"><i data-lucide="file-text" style="width:16px;height:16px;"></i> <span data-i18n="btConfig">回测配置</span></div>
       <div class="form-group">
-        <label class="form-label">Strategy</label>
+        <label class="form-label" data-i18n="strategy">策略</label>
         <select class="form-select" id="bt-strategy">
-          <option value="grid">Grid Trading</option>
-          <option value="trend">Trend Following</option>
-          <option value="dca">DCA (Dollar-Cost Averaging)</option>
+          <option value="grid" data-i18n="optGrid">网格交易</option>
+          <option value="trend" data-i18n="optTrend">趋势跟踪</option>
+          <option value="dca" data-i18n="optDca">定投 (DCA)</option>
         </select>
       </div>
       <div class="form-group">
-        <label class="form-label">Data File</label>
+        <label class="form-label" data-i18n="dataFile">数据文件</label>
         <select class="form-select" id="bt-data">
-          <option value="BTC-synthetic-30d-1h.csv">BTC Synthetic 30d 1H</option>
-          <option value="ETH-synthetic-30d-1h.csv">ETH Synthetic 30d 1H</option>
-          <option value="BTC-15m-20260329-20260329.csv">BTC Real 15m (Mar 29)</option>
+          <!-- options filled from /api/backtest/datasets (real candle ranges) -->
+          <option value="">Loading datasets…</option>
         </select>
+        <div style="margin-top:6px;font-size:11px;color:var(--text-sub)" id="bt-data-hint" data-i18n="dataFileHint">日期会随所选数据文件自动对齐到该文件真实起止。</div>
       </div>
       <div class="form-row">
         <div class="form-group">
-          <label class="form-label">Start Date</label>
-          <input type="date" class="form-input" id="bt-start" value="2026-02-28">
+          <label class="form-label" data-i18n="startDate">开始日期</label>
+          <input type="date" class="form-input" id="bt-start" value="">
         </div>
         <div class="form-group">
-          <label class="form-label">End Date</label>
-          <input type="date" class="form-input" id="bt-end" value="2026-03-30">
+          <label class="form-label" data-i18n="endDate">结束日期</label>
+          <input type="date" class="form-input" id="bt-end" value="">
         </div>
       </div>
       <div class="form-group">
-        <label class="form-label">Initial Capital ($)</label>
+        <label class="form-label" data-i18n="initialCapital">初始资金 ($)</label>
         <input type="number" class="form-input" id="bt-capital" value="125" min="10" step="10">
       </div>
       <div class="form-group">
-        <label class="form-label">Strategy Parameters</label>
+        <label class="form-label" data-i18n="strategyParams">策略参数</label>
         <input type="text" class="form-input" id="bt-params" placeholder="grid_count=10,investment=8,deviation=0.012">
       </div>
-      <button class="btn btn-primary" id="btn-run-backtest" onclick="runBacktest()">Run Backtest</button>
+      <button class="btn btn-primary" id="btn-run-backtest" onclick="runBacktest()" data-i18n="runBacktest">运行回测</button>
     </div>
 
     <div class="ai-section">
-      <div class="panel-title"><i data-lucide="sparkles" style="width:16px;height:16px;"></i> AI Strategy Advisor</div>
+      <div class="panel-title"><i data-lucide="bot" style="width:16px;height:16px;"></i> <span data-i18n="aiAdvisor">Agent 大脑（你的 API）</span></div>
       <div class="form-group">
-        <label class="form-label">AI Provider (Preset)</label>
+        <label class="form-label" data-i18n="aiProvider">AI 提供商（预设）</label>
         <select class="form-select" id="ai-provider">
           <option value="openai">OpenAI</option>
           <option value="zhipu">ZhiPu (智谱)</option>
           <option value="deepseek">DeepSeek</option>
           <option value="claude">Claude (Anthropic)</option>
           <option value="groq">Groq</option>
-          <option value="ollama">Ollama (Local)</option>
+          <option value="ollama">Ollama (本地)</option>
           <option value="dadunode">Dadunode</option>
-          <option value="custom">Custom / Other</option>
+          <option value="custom" data-i18n="optCustom">自定义 / 其他</option>
         </select>
       </div>
       <div class="form-group">
-        <label class="form-label">API Base URL</label>
+        <label class="form-label" data-i18n="apiBaseUrl">API 地址</label>
         <input type="text" class="form-input" id="ai-url" placeholder="https://dadunode.com:8443/v1/chat/completions" value="https://dadunode.com:8443/v1/chat/completions">
       </div>
       <div class="form-group">
-        <label class="form-label">Model ID</label>
+        <label class="form-label" data-i18n="modelId">模型 ID</label>
         <input type="text" class="form-input" id="ai-model" placeholder="gpt-4o">
       </div>
       <div class="form-group">
-        <label class="form-label">API Key</label>
+        <label class="form-label" data-i18n="apiKey">API 密钥</label>
         <div style="position:relative">
           <input type="password" class="form-input" id="ai-key" placeholder="sk-..." style="padding-right:40px">
           <button type="button" id="toggle-key-vis" style="position:absolute;right:10px;top:50%;transform:translateY(-50%);background:none;border:none;color:var(--text-sub);cursor:pointer;padding:4px;" title="Show/hide key">
             <i data-lucide="eye" style="width:16px;height:16px;"></i>
           </button>
         </div>
-        <div style="margin-top:6px;font-size:11px;color:var(--text-sub)">Kept only for this page session; never saved to browser storage.</div>
+        <div style="margin-top:6px;font-size:11px;color:var(--text-sub)" data-i18n="apiKeyHint">保存在本浏览器；Agent 用它调模型。交易服只跑回测工具，收不到密钥。</div>
       </div>
       <div class="form-group">
-        <label class="form-label">Optimization Goal</label>
+        <label class="form-label" data-i18n="optGoal">默认优化目标</label>
         <select class="form-select" id="ai-goal">
-          <option value="sharpe">Maximize Sharpe Ratio</option>
-          <option value="return">Maximize Return</option>
-          <option value="drawdown">Minimize Max Drawdown</option>
-          <option value="balanced">Balanced (Return + Risk)</option>
+          <option value="sharpe" data-i18n="goalSharpe">最大化夏普比率</option>
+          <option value="return" data-i18n="goalReturn">最大化收益</option>
+          <option value="drawdown" data-i18n="goalDrawdown">最小化最大回撤</option>
+          <option value="balanced" data-i18n="goalBalanced">收益与风险平衡</option>
         </select>
       </div>
       <div class="form-group">
-        <label class="form-label">Max Tokens</label>
-        <input type="number" class="form-input" id="ai-max-tokens" value="800" min="100" max="4096" step="100">
+        <label class="form-label">对话上下文上限（context window）</label>
+        <input type="number" class="form-input" id="ai-context-window" value="1000000" min="32000" max="2000000" step="1000">
+        <div style="margin-top:6px;font-size:11px;color:var(--text-sub)">单会话可用上下文，默认 <b>100 万</b> token。接近阈值会自动 compact，也可手动压缩。</div>
       </div>
-        <div style="display:flex;gap:8px;margin-bottom:10px">
-          <button class="btn btn-ai" id="btn-ai-optimize" onclick="aiOptimize()" style="flex:1">AI Optimize Parameters</button>
-          <button class="btn" id="btn-ai-test" onclick="aiTestConnection()" style="flex:0 0 auto;background:var(--bg-input);color:var(--text-main);border:1px solid var(--border);width:120px" title="Test API connection">Test</button>
-        </div>
-        <div class="form-group" style="margin-top:12px;">
-          <label class="form-label">OpenCode Model (Local CLI)</label>
-          <input type="text" class="form-input" id="opencode-model" value="opencode-go/glm-5" placeholder="provider/model, e.g. opencode-go/glm-5">
-        </div>
-        <button class="btn btn-ai" id="btn-opencode-optimize" onclick="runOpenCodeBacktest()" style="width:100%;margin-bottom:10px">OpenCode GLM5 Optimize + Backtest</button>
-        <div class="note"><b>NOTE</b> Settings auto-saved to browser. API Key stays local — never sent to our server.</div>
-        <div class="note"><b>OPENCODE</b> This mode uses the locally installed <code>opencode</code> CLI from the backend to suggest parameters, then reruns the return backtest automatically.</div>
-        <div class="log-area" id="ai-log" style="display:none"></div>
+      <div class="form-group">
+        <label class="form-label">单次输出上限 max_tokens</label>
+        <input type="number" class="form-input" id="ai-max-tokens" value="32768" min="256" max="131072" step="256">
+        <div style="margin-top:6px;font-size:11px;color:var(--text-sub)">模型<strong>每一轮回复</strong>的最大输出；不等于上下文总量。</div>
       </div>
+      <div style="display:flex;gap:8px;margin-bottom:8px">
+        <button class="btn" id="btn-ai-test" onclick="aiTestConnection()" style="flex:1;background:var(--bg-input);color:var(--text-main);border:1px solid var(--border);" data-i18n="btnTest">测试连接</button>
+      </div>
+      <div class="note"><b>AGENT</b> 中间对话框才是主界面：用自然语言下达任务，Agent 会自己调工具做回测/扫描/对比。</div>
+      <div class="log-area" id="ai-log" style="display:none" aria-hidden="true"></div>
+      <!-- keep hidden for legacy scripts -->
+      <input type="hidden" id="ai-rounds" value="3">
+      <input type="hidden" id="ai-candidates" value="3">
+      <input type="hidden" id="bt-mode" value="quick">
+      <button type="button" id="btn-ai-optimize" style="display:none" onclick="aiOptimize()"></button>
+      <button type="button" id="btn-sweep-optimize" style="display:none" onclick="runParamSweep()"></button>
+      <button type="button" id="btn-opencode-optimize" style="display:none" onclick="runOpenCodeBacktest()"></button>
+      <input type="hidden" id="opencode-model" value="">
+    </div>
   </div>
 
-  <div class="panel" id="results-panel">
-    <div class="panel-title"><i data-lucide="bar-chart-3" style="width:16px;height:16px;"></i> Results</div>
-    <div class="results-empty" id="results-empty">
-      Run a backtest or AI optimization to see results here
+  <!-- 中：Quant Agent 对话工作台 -->
+  <div class="agent-workspace" id="agent-workspace">
+    <div class="panel-title"><i data-lucide="bot" style="width:16px;height:16px;"></i> <span>Quant Bot Agent</span>
+      <span class="sec-live" id="process-live" style="display:none;margin-left:auto;">RUNNING</span>
     </div>
-    <div id="results-content" style="display:none"></div>
+    <div class="agent-chat" id="agent-chat">
+      <div class="agent-chat-empty" id="agent-chat-empty">
+        Quant Agent 待命中<br>
+        用下方输入框下达任务，例如：「在最新 BTC 数据上帮我找更好的网格参数」
+      </div>
+    </div>
+    <div class="agent-chips">
+      <button type="button" class="agent-chip" data-agent-prompt="你是 quant agent。请先 list_datasets，选最新 BTC 主网数据，对 grid 做 run_param_sweep(mode=quick,goal=return)，再对 top3 参数各跑一次 run_backtest，最后用中文总结最优参数、收益、成交与风险。">优化网格（真回测）</button>
+      <button type="button" class="agent-chip" data-agent-prompt="对比 grid 与 trend：用 compare_strategies 在当前数据窗口跑对照，再解释哪种更适合这段行情，并给出可应用的参数。">网格 vs 趋势</button>
+      <button type="button" class="agent-chip" data-agent-prompt="检查当前 workspace，若是趋势策略请确保 notional &lt; capital，然后 run_backtest。如果 0 成交，自动修正 notional 并重跑，解释原因。">诊断 0 成交</button>
+      <button type="button" class="agent-chip" data-agent-prompt="作为 quant agent，制定 3 步实验计划并执行：1) 摸底扫参 2) 针对最优邻域再回测 3) 输出是否建议 apply_to_live（先不要上线，只给建议）。">完整研究流程</button>
+    </div>
+    <div class="agent-ctx-bar">
+      <span class="agent-ctx-label">上下文</span>
+      <div class="agent-ctx-track" title="估算占用 / 上限"><div class="agent-ctx-fill" id="agent-ctx-fill"></div></div>
+      <span class="agent-ctx-text" id="agent-ctx-text">— / 1,000,000</span>
+      <button type="button" class="agent-ctx-btn" id="agent-compact" title="压缩旧对话，保留系统提示与最近消息">Compact</button>
+    </div>
+    <div class="agent-composer">
+      <textarea id="agent-input" placeholder="给 Quant Agent 下指令…（Ctrl/⌘ + Enter 发送）&#10;例：用我的模型在 7 月 BTC 数据上优化趋势策略，notional 不要超过资金 50%"></textarea>
+      <button type="button" class="btn" id="agent-stop" style="display:none;background:var(--danger-bg);color:var(--danger);border:1px solid var(--danger);">停止</button>
+      <button type="button" class="btn btn-primary" id="agent-send">发送</button>
+    </div>
   </div>
+
+  <!-- 右：工具轨 + 最近结果 -->
+  <div class="agent-rail" id="results-panel">
+    <div class="panel-title"><i data-lucide="activity" style="width:15px;height:15px;"></i> <span>活动</span></div>
+    <div class="agent-rail-body">
+      <section class="rail-block tools">
+        <div class="rail-block-head">
+          <span class="rail-k">工具调用</span>
+          <span class="rail-count" id="tool-hit-count">0</span>
+        </div>
+        <div class="rail-block-body">
+          <div class="tool-timeline" id="agent-tool-rail" data-empty="Agent 调用工具后会出现在这里"></div>
+        </div>
+      </section>
+      <section class="rail-block results">
+        <div class="rail-block-head">
+          <span class="rail-k">最近回测</span>
+          <span class="rail-count" id="result-status-pill">—</span>
+        </div>
+        <div class="rail-block-body">
+          <div class="rail-result-empty" id="results-empty">跑完回测后，关键指标会显示在这里</div>
+          <div id="results-content" style="display:none"></div>
+        </div>
+      </section>
+      <section class="rail-block governance">
+        <div class="rail-block-head"><span class="rail-k">Agent 风控</span><span class="rail-count">LIVE GATE</span></div>
+        <div class="rail-block-body">
+          <div class="rail-result-empty" id="agent-policy-status">正在读取后端策略…</div>
+          <div id="agent-audit-list" style="margin-top:8px"></div>
+        </div>
+      </section>
+      <!-- legacy hooks -->
+      <div id="process-stream" style="display:none"></div>
+      <div id="think-empty" style="display:none"></div>
+      <div id="think-content" style="display:none"><div id="think-meta"></div><div id="think-params"></div><div id="think-body"></div></div>
+      <div id="prompt-preview" style="display:none"></div>
+      <button type="button" id="btn-toggle-prompt" style="display:none"></button>
+    </div>
+  </div>
+
 </div>
 
 <script>
@@ -413,6 +849,7 @@ tr:hover td { background:var(--bg-card-hover); }
 })();
 </script>
 <script src="/ai.js"></script>
+<script src="/quant_agent.js"></script>
 <script>lucide.createIcons();</script>
 </div>
 </body>

@@ -40,17 +40,19 @@ fn event_stream_fills_its_desktop_card_and_stays_bounded_on_narrow_screens() {
     let body_rule = css_rule(".event-stream-section > .sec-body {");
     assert!(body_rule.contains("flex:1"));
     assert!(body_rule.contains("min-height:270px"));
+    // Full-bleed log rows: padding lives on each chip, not on the rail inset.
+    assert!(body_rule.contains("padding:0"));
 
     let rail_rule = css_rule(".event-stream-section .rail {");
     assert!(rail_rule.contains("position:absolute"));
-    assert!(rail_rule.contains("inset:16px"));
+    assert!(rail_rule.contains("inset:0"));
     assert!(rail_rule.contains("max-height:none"));
-    assert!(rail_rule.contains("min-height:0"));
 
-    let chip_rule = css_rule(".event-stream-section .rail-chip {");
-    assert!(chip_rule.contains("flex:1 0 auto"));
-    assert!(chip_rule.contains("min-height:38px"));
-    assert!(chip_rule.contains("background:var(--bg-card)"));
+    // Four-column log rows (time / kind / detail / age) fill the card width.
+    let chip_rule = css_rule(".rail-chip {");
+    assert!(chip_rule.contains("display:grid"));
+    assert!(chip_rule.contains("grid-template-columns:auto auto 1fr auto"));
+    assert!(chip_rule.contains("padding:8px 16px"));
 
     assert!(
         DASHBOARD_HTML.contains(
@@ -179,29 +181,184 @@ fn dynamic_market_order_and_fill_strings_are_escaped_before_inner_html_rendering
 }
 
 #[test]
-fn ai_api_key_is_never_persisted_in_browser_storage() {
+fn ai_api_key_is_persisted_in_browser_local_storage() {
+    // Product decision: users asked to keep the key across refreshes.
+    // Stored only in browser localStorage (not on the trading server).
     assert!(
-        DASHBOARD_AI_JS.contains("delete s.key"),
-        "older stored keys must be scrubbed"
+        DASHBOARD_AI_JS.contains("key: document.getElementById('ai-key').value"),
+        "API key must be serialized into localStorage settings"
     );
     assert!(
-        !DASHBOARD_AI_JS.contains("key: document.getElementById('ai-key').value"),
-        "the API key must not be serialized into localStorage"
+        DASHBOARD_AI_JS.contains("document.getElementById('ai-key').value = s.key"),
+        "API key must be restored from localStorage"
     );
     assert!(
-        !DASHBOARD_AI_JS.contains("document.getElementById('ai-key').value = s.key"),
-        "the API key must not be restored from localStorage"
+        DASHBOARD_AI_JS.contains("'ai-key'") || DASHBOARD_AI_JS.contains("\"ai-key\""),
+        "API-key input must trigger settings persistence"
+    );
+}
+
+#[test]
+fn ai_lab_loads_datasets_and_aligns_dates() {
+    assert!(
+        DASHBOARD_AI_JS.contains("/api/backtest/datasets"),
+        "AI Lab must load dataset catalog from the server"
     );
     assert!(
-        !DASHBOARD_AI_JS.contains("'ai-model','ai-key','ai-goal'"),
-        "API-key input events must not trigger settings persistence"
+        DASHBOARD_AI_JS.contains("function applyDatasetDates")
+            || DASHBOARD_AI_JS.contains("applyDatasetDates("),
+        "selecting a dataset must realign start/end dates"
+    );
+}
+
+#[test]
+fn ai_lab_is_tool_using_quant_agent() {
+    const DASHBOARD_AI_HTML: &str = include_str!("ui/ai.html");
+    const QUANT_AGENT_JS: &str = include_str!("ui/quant_agent.js");
+    assert!(
+        DASHBOARD_AI_HTML.contains(r#"id="agent-chat""#),
+        "AI Lab must expose an agent chat surface"
+    );
+    assert!(
+        DASHBOARD_AI_HTML.contains("quant_agent.js"),
+        "AI Lab must load the quant agent script"
+    );
+    assert!(
+        QUANT_AGENT_JS.contains("run_backtest") && QUANT_AGENT_JS.contains("run_param_sweep"),
+        "agent must expose real backtest tools"
+    );
+    assert!(
+        QUANT_AGENT_JS.contains("tool_calls") || QUANT_AGENT_JS.contains("TOOLS"),
+        "agent must use tool-calling protocol"
+    );
+    assert!(
+        QUANT_AGENT_JS.contains("agentLoop") || QUANT_AGENT_JS.contains("function agentLoop"),
+        "agent multi-step loop required"
     );
 }
 
 #[test]
 fn ai_backtest_html_escapes_dynamic_text() {
-    assert!(DASHBOARD_AI_JS.contains("escapeHtml(msg)"));
-    assert!(DASHBOARD_AI_JS.contains("escapeHtml(data.strategy || 'grid')"));
-    assert!(DASHBOARD_AI_JS.contains("escapeHtml(data.data_file || '-')"));
+    assert!(
+        DASHBOARD_AI_JS.contains("escapeHtml(t('errPrefix') + msg)")
+            || DASHBOARD_AI_JS.contains("escapeHtml(msg)"),
+        "error messages must be HTML-escaped"
+    );
+    // Title is built then escaped as one string (strategy + data file).
+    assert!(DASHBOARD_AI_JS.contains("escapeHtml(t('backtestOn')"));
     assert!(DASHBOARD_AI_JS.contains("escapeHtml(currentParams)"));
+    assert!(DASHBOARD_AI_JS.contains("escapeHtml(currentStrategy)"));
+}
+
+#[test]
+fn ai_optimize_sends_start_end_not_start_date_aliases() {
+    // Regression: AI path used start_date/end_date while /api/backtest only
+    // read start/end → silent empty metrics shown as 0% return.
+    assert!(
+        DASHBOARD_AI_JS.contains("start: document.getElementById('bt-start').value"),
+        "AI optimize payload must use start"
+    );
+    assert!(
+        DASHBOARD_AI_JS.contains("end: document.getElementById('bt-end').value"),
+        "AI optimize payload must use end"
+    );
+    assert!(
+        !DASHBOARD_AI_JS.contains("start_date: document.getElementById('bt-start').value"),
+        "AI optimize must not send the broken start_date field"
+    );
+    assert!(
+        DASHBOARD_AI_JS.contains("function runServerBacktest")
+            || DASHBOARD_AI_JS.contains("runServerBacktest")
+            || DASHBOARD_AI_JS.contains("function assertBacktestOk"),
+        "failed backtests must abort the AI loop instead of faking 0%"
+    );
+}
+
+#[test]
+fn ai_lab_clamps_max_tokens_to_safe_completion_range() {
+    assert!(
+        DASHBOARD_AI_JS.contains("function clampMaxTokens"),
+        "max_tokens must be clamped before API calls"
+    );
+    assert!(
+        DASHBOARD_AI_JS.contains("MAX_TOKENS_MAX = 131072")
+            || DASHBOARD_AI_JS.contains("MAX_TOKENS_MAX=131072"),
+        "completion ceiling allows long-context model outputs"
+    );
+    assert!(
+        DASHBOARD_AI_JS.contains("readMaxTokensFromUi"),
+        "UI reader must normalize max_tokens"
+    );
+}
+
+#[test]
+fn quant_agent_supports_million_context_and_compact() {
+    const QUANT_AGENT_JS: &str = include_str!("ui/quant_agent.js");
+    const DASHBOARD_AI_HTML: &str = include_str!("ui/ai.html");
+    assert!(
+        QUANT_AGENT_JS.contains("DEFAULT_CONTEXT_WINDOW = 1000000")
+            || QUANT_AGENT_JS.contains("1000000"),
+        "agent default context should be 1M tokens"
+    );
+    assert!(
+        QUANT_AGENT_JS.contains("function compactHistory")
+            || QUANT_AGENT_JS.contains("compactHistory"),
+        "agent must support history compact"
+    );
+    assert!(
+        DASHBOARD_AI_HTML.contains(r#"id="ai-context-window""#),
+        "UI must expose context window setting"
+    );
+    assert!(
+        DASHBOARD_AI_HTML.contains(r#"id="agent-compact""#),
+        "UI must expose manual Compact control"
+    );
+}
+
+#[test]
+fn ai_lab_right_panel_streams_process_and_thinking() {
+    const DASHBOARD_AI_HTML: &str = include_str!("ui/ai.html");
+    assert!(
+        DASHBOARD_AI_HTML.contains(r#"id="process-stream""#),
+        "right panel needs a live process stream"
+    );
+    assert!(
+        DASHBOARD_AI_HTML.contains(r#"id="think-body""#),
+        "right panel needs an AI thinking body"
+    );
+    assert!(
+        DASHBOARD_AI_JS.contains("function addProcess")
+            || DASHBOARD_AI_JS.contains("function renderThought"),
+        "AI Lab must render process + thought into the right panel"
+    );
+}
+
+#[test]
+fn ai_lab_shares_dashboard_language_and_has_chinese_copy() {
+    const DASHBOARD_AI_HTML: &str = include_str!("ui/ai.html");
+    assert!(
+        DASHBOARD_AI_JS.contains("lighter-lang"),
+        "AI Lab must reuse the main dashboard language key"
+    );
+    assert!(
+        DASHBOARD_AI_JS.contains("cn: {"),
+        "AI Lab must ship a Chinese string pack"
+    );
+    assert!(
+        DASHBOARD_AI_JS.contains("function applyI18n"),
+        "AI Lab must apply i18n to data-i18n nodes"
+    );
+    assert!(
+        DASHBOARD_AI_HTML.contains(r#"data-i18n="apiKey""#)
+            || DASHBOARD_AI_HTML.contains(r#"data-i18n="btConfig""#),
+        "AI Lab markup must mark translatable nodes"
+    );
+    assert!(
+        DASHBOARD_AI_HTML.contains(r#"id="ai-lang-btn""#),
+        "AI Lab must expose a language toggle"
+    );
+    assert!(
+        DASHBOARD_AI_HTML.contains("Quant Bot Agent") || DASHBOARD_AI_HTML.contains("agent-send"),
+        "Chinese/agent primary surface must exist"
+    );
 }
