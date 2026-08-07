@@ -196,6 +196,36 @@ main, .layout-wrap {
   overflow:hidden; /* 关键：禁止把外层撑开 */
 }
 .agent-workspace > .panel-title { margin:0; flex-shrink:0; }
+.strategy-mission {
+  flex-shrink:0; padding:12px 14px; border-bottom:1px solid var(--border);
+  background:var(--bg-card);
+}
+.mission-head { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; margin-bottom:10px; }
+.mission-title { font-size:13px; font-weight:700; }
+.mission-sub { margin-top:2px; font-size:11px; color:var(--text-sub); }
+.mission-controls { display:grid; grid-template-columns:1fr 1fr 1fr auto; gap:8px; }
+.mission-control label {
+  display:block; margin-bottom:4px; font-family:var(--font-mono); font-size:9px;
+  color:var(--text-muted); letter-spacing:.1em; text-transform:uppercase;
+}
+.mission-control select { height:34px; padding:6px 28px 6px 9px; font-size:11px; }
+.mission-run { align-self:end; width:auto; height:34px; padding:0 16px; white-space:nowrap; }
+.mission-stages { display:flex; gap:6px; margin-top:9px; overflow-x:auto; scrollbar-width:none; }
+.mission-stage {
+  flex-shrink:0; padding:3px 8px; border-radius:99px; border:1px solid var(--border);
+  color:var(--text-muted); font-family:var(--font-mono); font-size:9px; letter-spacing:.05em;
+}
+.mission-stage.active { color:var(--text-main); border-color:var(--primary); background:var(--bg-strip); }
+.mission-stage.done { color:var(--success); border-color:var(--success); background:var(--success-bg); }
+.strategy-candidates { display:none; gap:7px; margin-top:9px; overflow-x:auto; scrollbar-width:thin; }
+.strategy-candidate {
+  flex:1 0 180px; min-width:0; padding:9px 10px; border:1px solid var(--border);
+  border-radius:10px; background:var(--bg-body); cursor:pointer;
+}
+.strategy-candidate.recommended { border-color:var(--success); box-shadow:inset 3px 0 var(--success); }
+.candidate-name { display:flex; justify-content:space-between; gap:8px; font-size:11px; font-weight:700; text-transform:uppercase; }
+.candidate-score { color:var(--text-sub); font-family:var(--font-mono); font-size:9px; }
+.candidate-metrics { margin-top:5px; color:var(--text-sub); font-family:var(--font-mono); font-size:9.5px; line-height:1.5; }
 .agent-chat {
   flex:1 1 auto; min-height:0; /* flex 子项可收缩，否则 overflow 无效 */
   overflow-x:hidden; overflow-y:auto;
@@ -661,6 +691,13 @@ tr:hover td { background:var(--bg-card-hover); }
   .pill { padding:4px 8px; font-size:9px; }
   .tb-nav { padding:8px 10px; }
   .agent-workspace { height:70vh; min-height:540px; }
+  .strategy-mission { padding:10px; }
+  .mission-head { margin-bottom:8px; }
+  .mission-sub { display:none; }
+  .mission-controls { grid-template-columns:1fr 1fr; }
+  .mission-control:nth-child(3) { grid-column:1 / 2; }
+  .mission-run { width:100%; }
+  .strategy-candidates { max-height:100px; }
   .agent-chat { padding:12px; }
   .agent-chat-empty { padding:52px 10px; }
   .agent-chips { flex-wrap:nowrap; overflow-x:auto; overflow-y:hidden; max-height:none; }
@@ -822,6 +859,21 @@ tr:hover td { background:var(--bg-card-hover); }
       <span class="pill" style="margin-left:auto;padding:3px 8px;font-size:9px;">PROPOSAL ONLY</span>
       <span class="sec-live" id="process-live" style="display:none;margin-left:auto;">RUNNING</span>
     </div>
+    <section class="strategy-mission" id="strategy-mission">
+      <div class="mission-head">
+        <div><div class="mission-title">策略研究任务</div><div class="mission-sub">Agent 自动读取上下文、筛选策略、扫参、验证并排名</div></div>
+      </div>
+      <div class="mission-controls">
+        <div class="mission-control"><label for="mission-goal">目标</label><select class="form-select" id="mission-goal"><option value="balanced">收益 / 风险平衡</option><option value="sharpe">最大化夏普</option><option value="return">最大化收益</option><option value="drawdown">控制回撤</option></select></div>
+        <div class="mission-control"><label for="mission-risk">风险预算</label><select class="form-select" id="mission-risk"><option value="balanced">标准 · DD ≤ 10%</option><option value="conservative">保守 · DD ≤ 5%</option><option value="aggressive">进取 · DD ≤ 15%</option></select></div>
+        <div class="mission-control"><label for="mission-universe">策略范围</label><select class="form-select" id="mission-universe"><option value="core">网格 + 趋势</option><option value="all">网格 + 趋势 + DCA</option><option value="grid">仅网格</option><option value="trend">仅趋势</option></select></div>
+        <button type="button" class="btn btn-primary mission-run" id="mission-run">开始研究</button>
+      </div>
+      <div class="mission-stages" id="mission-stages">
+        <span class="mission-stage" data-stage="context">1 上下文</span><span class="mission-stage" data-stage="screen">2 筛选</span><span class="mission-stage" data-stage="backtest">3 回测</span><span class="mission-stage" data-stage="rank">4 排名</span><span class="mission-stage" data-stage="recommend">5 推荐</span>
+      </div>
+      <div class="strategy-candidates" id="strategy-candidates"></div>
+    </section>
     <div class="agent-chat" id="agent-chat">
       <div class="agent-chat-empty" id="agent-chat-empty">
         Quant Agent 待命中<br>

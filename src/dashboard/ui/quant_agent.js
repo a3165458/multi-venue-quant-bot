@@ -112,6 +112,22 @@
         {
             type: 'function',
             function: {
+                name: 'research_strategies',
+                description: 'Run a complete strategy research mission: read live/risk context, sweep the selected strategy universe, enforce a drawdown budget, rank verified candidates, and recommend one. Never applies live settings.',
+                parameters: {
+                    type: 'object',
+                    properties: {
+                        goal: { type: 'string', enum: ['balanced', 'sharpe', 'return', 'drawdown'] },
+                        risk: { type: 'string', enum: ['conservative', 'balanced', 'aggressive'] },
+                        universe: { type: 'string', enum: ['core', 'all', 'grid', 'trend'] }
+                    },
+                    additionalProperties: false
+                }
+            }
+        },
+        {
+            type: 'function',
+            function: {
                 name: 'apply_to_live',
                 description: 'Push strategy+params to the LIVE trading bot. DANGEROUS. Only after user explicitly asks to go live and results look acceptable.',
                 parameters: {
@@ -266,6 +282,7 @@
         run_backtest: { icon: '📈', label: '运行回测' },
         run_param_sweep: { icon: '🔬', label: '参数扫描' },
         compare_strategies: { icon: '⚖️', label: '策略对比' },
+        research_strategies: { icon: '🧪', label: '策略研究' },
         apply_to_live: { icon: '🚀', label: '应用到实盘' }
     };
 
@@ -364,6 +381,11 @@
         if (stop) stop.style.display = on ? 'inline-flex' : 'none';
         var live = $('process-live');
         if (live) live.style.display = on ? 'inline-flex' : 'none';
+        var missionRun = $('mission-run');
+        if (missionRun) {
+            missionRun.disabled = on;
+            missionRun.textContent = on ? '研究中…' : '开始研究';
+        }
     }
 
     function workspace() {
@@ -557,6 +579,171 @@
         return { grid: grid, trend: trend };
     }
 
+    function scoreStrategyCandidate(result, goal, risk) {
+        var r = result && result.optimized ? result.optimized : null;
+        if (!r) return { eligible: false, score: -Infinity, reason: '没有有效回测结果' };
+        var ret = Number(r.total_return_pct);
+        var sharpe = Number(r.sharpe_ratio);
+        var dd = Math.abs(Number(r.max_drawdown_pct));
+        var trades = Number(r.total_trades);
+        var maxDd = risk === 'conservative' ? 5 : risk === 'aggressive' ? 15 : 10;
+        if (![ret, sharpe, dd, trades].every(Number.isFinite)) {
+            return { eligible: false, score: -Infinity, reason: '指标不完整' };
+        }
+        if (trades < 3) return { eligible: false, score: -Infinity, reason: '成交不足 3 笔' };
+        if (ret <= 0) return { eligible: false, score: -Infinity, reason: '验证收益不为正' };
+        if (dd > maxDd) return { eligible: false, score: -Infinity, reason: '回撤超过 ' + maxDd + '%' };
+        var score;
+        if (goal === 'return') score = ret - dd * 0.35;
+        else if (goal === 'drawdown') score = ret * 0.25 + sharpe - dd;
+        else if (goal === 'sharpe') score = sharpe * 5 + ret * 0.15 - dd * 0.4;
+        else score = ret + sharpe * 2 - dd * 0.75;
+        // Tiny-sample strategies are allowed above the hard floor but rank lower.
+        score -= trades < 8 ? (8 - trades) * 0.2 : 0;
+        return { eligible: true, score: score, max_drawdown_budget_pct: maxDd };
+    }
+
+    function missionStrategies(universe) {
+        if (universe === 'grid' || universe === 'trend') return [universe];
+        return universe === 'all' ? ['grid', 'trend', 'dca'] : ['grid', 'trend'];
+    }
+
+    function setMissionStage(stage) {
+        var order = ['context', 'screen', 'backtest', 'rank', 'recommend'];
+        var active = order.indexOf(stage);
+        document.querySelectorAll('#mission-stages [data-stage]').forEach(function (el) {
+            var idx = order.indexOf(el.getAttribute('data-stage'));
+            el.classList.toggle('done', active >= 0 && idx < active);
+            el.classList.toggle('active', idx === active);
+        });
+    }
+
+    function renderStrategyCandidates(research) {
+        var box = $('strategy-candidates');
+        if (!box) return;
+        var candidates = research.candidates || [];
+        box.style.display = 'flex';
+        box.innerHTML = candidates.map(function (candidate, index) {
+            var r = candidate.result.optimized || {};
+            var verdict = candidate.eligible ? ('评分 ' + candidate.score.toFixed(2)) : candidate.reason;
+            return '<button type="button" class="strategy-candidate ' + (index === 0 && candidate.eligible ? 'recommended' : '')
+                + '" data-candidate-index="' + index + '"><div class="candidate-name"><span>'
+                + escHtml(candidate.strategy) + '</span><span class="candidate-score">' + escHtml(verdict) + '</span></div>'
+                + '<div class="candidate-metrics">收益 ' + Number(r.total_return_pct || 0).toFixed(2) + '% · Sharpe '
+                + Number(r.sharpe_ratio || 0).toFixed(2) + '<br>DD ' + Math.abs(Number(r.max_drawdown_pct || 0)).toFixed(2)
+                + '% · ' + Number(r.total_trades || 0) + ' 笔</div></button>';
+        }).join('');
+        box.querySelectorAll('[data-candidate-index]').forEach(function (button) {
+            button.addEventListener('click', function () {
+                var candidate = candidates[Number(button.getAttribute('data-candidate-index'))];
+                if (!candidate || !candidate.result.optimized) return;
+                applyWorkspace({ strategy: candidate.strategy, params: candidate.result.optimized_params });
+                lastVerifiedBacktest = candidate.result.optimized;
+                showResultPanel(candidate.result.optimized);
+                appendText('system', '已把 ' + candidate.strategy + ' 候选加载到工作区；尚未应用到实盘。', 'step-ok');
+            });
+        });
+    }
+
+    async function toolResearchStrategies(args) {
+        args = args || {};
+        var goal = args.goal || val('mission-goal', 'balanced');
+        var risk = args.risk || val('mission-risk', 'balanced');
+        var universe = args.universe || val('mission-universe', 'core');
+        var ws = workspace();
+        setMissionStage('context');
+        var liveParts = await Promise.all([
+            fetch('/api/status').then(function (r) { return r.json(); }),
+            fetch('/api/positions').then(function (r) { return r.json(); }),
+            fetch('/api/agent/status').then(function (r) { return r.json(); })
+        ]);
+        var context = {
+            equity: Number(liveParts[0].equity || 0),
+            trading_paused: !!(liveParts[2].policy && liveParts[2].policy.trading_paused),
+            open_positions: Array.isArray(liveParts[1].positions) ? liveParts[1].positions.length : 0,
+            agent_gate: liveParts[2].status || 'unknown'
+        };
+        setMissionStage('screen');
+        var strategies = missionStrategies(universe);
+        var candidates = [];
+        setMissionStage('backtest');
+        for (var i = 0; i < strategies.length; i++) {
+            if (abortFlag) throw new Error('strategy mission stopped');
+            var result = await toolSweep({
+                strategy: strategies[i], data_file: ws.data_file, start: ws.start, end: ws.end,
+                capital: ws.capital, goal: goal, mode: 'quick', params: ''
+            });
+            var ranked = scoreStrategyCandidate(result, goal, risk);
+            if (strategies[i] === 'dca' && ranked.eligible) {
+                ranked = { eligible: false, score: ranked.score, reason: 'DCA 当前仅研究，尚未开放实盘审批' };
+            }
+            candidates.push(Object.assign({ strategy: strategies[i], result: result }, ranked));
+        }
+        setMissionStage('rank');
+        candidates.sort(function (a, b) {
+            if (a.eligible !== b.eligible) return a.eligible ? -1 : 1;
+            return b.score - a.score;
+        });
+        var recommended = candidates.find(function (candidate) { return candidate.eligible; }) || null;
+        var research = {
+            status: recommended ? 'ok' : 'no_candidate',
+            goal: goal,
+            risk: risk,
+            universe: universe,
+            context: context,
+            candidates: candidates,
+            recommended: recommended ? {
+                strategy: recommended.strategy,
+                params: recommended.result.optimized_params,
+                metrics: recommended.result.optimized,
+                score: recommended.score
+            } : null,
+            next_action: recommended ? 'review_and_load_candidate' : 'broaden_data_or_risk_budget',
+            live_applied: false
+        };
+        renderStrategyCandidates(research);
+        setMissionStage('recommend');
+        return research;
+    }
+
+    async function startStrategyMission() {
+        if (agentBusy) return;
+        abortFlag = false;
+        setBusy(true);
+        var args = {
+            goal: val('mission-goal', 'balanced'),
+            risk: val('mission-risk', 'balanced'),
+            universe: val('mission-universe', 'core')
+        };
+        appendText('user', '启动策略研究 · 目标 ' + args.goal + ' · 风险 ' + args.risk + ' · 范围 ' + args.universe);
+        try {
+            var research = await toolResearchStrategies(args);
+            appendTool('research_strategies', args, research, research.status === 'ok');
+            if (!research.recommended) {
+                appendText('assistant', '本轮没有候选同时满足正收益、最少成交数和回撤预算。建议扩大数据窗口或调整风险预算；不会上线任何策略。');
+            } else {
+                var best = research.recommended;
+                appendText('assistant', '推荐 ' + best.strategy + '：' + best.params
+                    + '\n已通过本轮真实扫参和风险预算筛选。点击上方候选卡可加载到工作区；尚未应用实盘。');
+                var cfg = getProvider();
+                if (cfg.url && cfg.model && cfg.key) {
+                    var evidence = JSON.stringify({ goal: research.goal, risk: research.risk, context: research.context, recommended: best, candidates: research.candidates.map(function (c) {
+                        return { strategy: c.strategy, eligible: c.eligible, score: c.score, reason: c.reason, metrics: c.result.optimized };
+                    }) });
+                    var reply = await callModel([
+                        { role: 'system', content: systemPrompt() + '\nExplain verified strategy research evidence. Do not invent metrics and do not call or suggest automatic live execution.' },
+                        { role: 'user', content: '[verified_strategy_research] ' + evidence + '\n请用中文给出简短策略判断、适用行情、主要风险和下一步验证建议。' }
+                    ], { chatOnly: true });
+                    appendText('assistant', reply.content || '', null, 'AI 策略解读 · ' + (reply.model || cfg.model));
+                }
+            }
+        } catch (e) {
+            appendText('system', '策略研究失败: ' + e.message, 'step-err');
+        }
+        setBusy(false);
+        refreshAgentGovernance();
+    }
+
     /* 人工确认闸门。
        原来这里只检查 args.confirm === true —— 而 confirm 是**模型自己填的参数**，
        等于让被约束的一方给自己签字：模型写个 confirm:true 就能直接改实盘策略。
@@ -699,6 +886,7 @@
             else if (name === 'run_backtest') result = await toolRunBacktest(args);
             else if (name === 'run_param_sweep') result = await toolSweep(args);
             else if (name === 'compare_strategies') result = await toolCompare(args);
+            else if (name === 'research_strategies') result = await toolResearchStrategies(args);
             else if (name === 'apply_to_live') result = await toolApplyLive(args);
             else result = { status: 'error', message: 'Unknown tool: ' + name };
             var ok = !(result && result.status === 'error');
@@ -1198,6 +1386,7 @@
         var input = $('agent-input');
         var stop = $('agent-stop');
         var compactBtn = $('agent-compact');
+        var missionRun = $('mission-run');
         if (send && input) {
             send.addEventListener('click', function () {
                 var text = (input.value || '').trim();
@@ -1221,6 +1410,7 @@
                 agentLoop('compact');
             });
         }
+        if (missionRun) missionRun.addEventListener('click', startStrategyMission);
         ['ai-context-window', 'ai-max-tokens'].forEach(function (id) {
             var el = $(id);
             if (el) {
@@ -1249,6 +1439,8 @@
         compact: function () { return compactHistory(true); },
         contextMeter: updateContextMeter,
         tools: TOOLS,
+        research: startStrategyMission,
+        scoreStrategyCandidate: scoreStrategyCandidate,
         // 暴露给自动化测试：验证"拒绝时不写实盘"这条不变量，不必真的接一个大模型
         _executeTool: executeTool
     };
