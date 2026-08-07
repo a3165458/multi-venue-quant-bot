@@ -362,3 +362,28 @@ fn ai_lab_shares_dashboard_language_and_has_chinese_copy() {
         "Chinese/agent primary surface must exist"
     );
 }
+
+#[test]
+fn ai_lab_layout_keeps_agent_primary_and_responsive_rules_authoritative() {
+    const DASHBOARD_AI_HTML: &str = include_str!("ui/ai.html");
+    assert!(DASHBOARD_AI_HTML.contains(r#"class="config-sidebar""#));
+    assert!(DASHBOARD_AI_HTML.contains("grid-template-areas:\"config agent rail\""));
+    assert!(DASHBOARD_AI_HTML.contains("grid-area:agent"));
+    assert!(DASHBOARD_AI_HTML.contains("grid-area:config"));
+    assert!(DASHBOARD_AI_HTML.contains("grid-area:rail"));
+    assert!(
+        DASHBOARD_AI_HTML.contains("grid-template-areas:\"agent\" \"config\" \"rail\""),
+        "mobile must put the task surface before lengthy configuration"
+    );
+
+    let base_rail = DASHBOARD_AI_HTML
+        .find(".agent-rail {")
+        .expect("agent rail base rule");
+    let responsive = DASHBOARD_AI_HTML
+        .rfind("@media (max-width:1200px)")
+        .expect("tablet responsive rule");
+    assert!(
+        responsive > base_rail,
+        "responsive rules must come after base rules so they are not overridden"
+    );
+}
