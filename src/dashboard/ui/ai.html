@@ -175,28 +175,21 @@ main, .layout-wrap {
    关键点：三栏同高锁在视口内；只有栏内滚动，document 不随对话变长。 */
 .layout {
   flex:1; min-height:0; /* 吃掉 layout-wrap 剩余高度 */
-  display:grid; grid-template-columns:320px minmax(0,1fr) 280px; gap:12px; align-items:stretch;
+  display:grid; grid-template-columns:300px minmax(0,1fr) 300px;
+  grid-template-areas:"config agent rail";
+  gap:12px; align-items:stretch;
   overflow:hidden;
 }
 /* 左栏：配置表单自己滚 */
-.layout > div:first-child {
+.config-sidebar {
+  grid-area:config;
   min-height:0; max-height:100%; overflow-x:hidden; overflow-y:auto;
   padding-right:2px; scrollbar-width:thin;
-}
-@media (max-width:1200px) {
-  .layout { grid-template-columns:300px minmax(0,1fr); }
-  .agent-rail { display:none; }
-}
-@media (max-width:900px) {
-  /* 窄屏允许整页滚，避免挤死 */
-  main, .layout-wrap { height:auto; max-height:none; overflow:visible; }
-  .layout { grid-template-columns:1fr; overflow:visible; height:auto; }
-  .layout > div:first-child { max-height:none; overflow:visible; }
-  .agent-workspace { height:min(70vh, 640px) !important; max-height:70vh !important; }
 }
 
 /* ── Quant Agent 对话区：固定高度，消息区内滚 ── */
 .agent-workspace {
+  grid-area:agent;
   background:var(--bg-card); border:1px solid var(--border); border-radius:var(--radius-lg);
   display:flex; flex-direction:column;
   height:100%; max-height:100%; min-height:0;
@@ -280,6 +273,7 @@ main, .layout-wrap {
 .agent-composer .btn { width:auto; min-width:96px; }
 /* ── 右侧工具/结果轨（精修）── */
 .agent-rail {
+  grid-area:rail;
   background:var(--bg-card); border:1px solid var(--border); border-radius:var(--radius-lg);
   display:flex; flex-direction:column; overflow:hidden;
   height:100%; max-height:100%; min-height:0;
@@ -619,6 +613,67 @@ tr:hover td { background:var(--bg-card-hover); }
   font-family:var(--font-mono); font-size:9.5px; font-weight:600; letter-spacing:0.12em; text-transform:uppercase;
 }
 @media (prefers-reduced-motion: reduce) { .spinner { animation:none; } }
+
+/* Responsive rules intentionally live after every base component rule. */
+@media (max-width:1200px) {
+  html, body { height:auto; min-height:100%; overflow:auto; }
+  main, .layout-wrap { height:auto; min-height:100vh; max-height:none; overflow:visible; }
+  .layout {
+    grid-template-columns:1fr;
+    grid-template-areas:"agent" "config" "rail";
+    align-items:start; overflow:visible;
+  }
+  .config-sidebar {
+    max-height:none; overflow:visible; padding-right:0;
+    display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; align-items:start;
+  }
+  .config-sidebar > .panel, .config-sidebar > .ai-section { margin-bottom:0; }
+  .agent-workspace { height:640px; max-height:none; min-height:560px; }
+  .agent-rail { height:auto; max-height:none; overflow:visible; }
+  .agent-rail-body { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); overflow:visible; }
+  .rail-block, .rail-block:last-child { min-height:230px; border-right:1px solid var(--border); border-bottom:none; }
+  .rail-block:last-child { border-right:none; }
+}
+
+@media (max-width:900px) {
+  .layout {
+    grid-template-columns:1fr;
+    grid-template-areas:"agent" "config" "rail";
+  }
+  .agent-workspace { height:min(72vh, 660px); min-height:520px; }
+  .config-sidebar { grid-template-columns:1fr; gap:8px; }
+  .brand-title { font-size:27px; }
+  .brand-title em { display:none; }
+  .tb-main { padding:12px 14px; }
+  .logo-icon { width:44px; height:44px; border-radius:12px; }
+  .tb-nav { flex-wrap:nowrap; overflow-x:auto; scrollbar-width:none; }
+  .tb-nav::-webkit-scrollbar { display:none; }
+  .nav-item, .nav-link { flex-shrink:0; }
+}
+
+@media (max-width:620px) {
+  main, .layout-wrap { padding:8px; }
+  .layout-wrap > .topbar { margin-bottom:8px; }
+  .layout { gap:8px; }
+  .kicker, .tb-right .pill:last-child { display:none; }
+  .brand-title { font-size:23px; }
+  .tb-right { gap:4px; }
+  .pill { padding:4px 8px; font-size:9px; }
+  .tb-nav { padding:8px 10px; }
+  .agent-workspace { height:70vh; min-height:540px; }
+  .agent-chat { padding:12px; }
+  .agent-chat-empty { padding:52px 10px; }
+  .agent-chips { flex-wrap:nowrap; overflow-x:auto; overflow-y:hidden; max-height:none; }
+  .agent-chip { flex-shrink:0; }
+  .agent-ctx-label, .agent-ctx-track { display:none; }
+  .agent-ctx-text { margin-right:auto; }
+  .agent-composer { padding:10px; }
+  .agent-composer textarea { min-height:64px; }
+  .agent-composer .btn { min-width:72px; }
+  .agent-rail-body { grid-template-columns:1fr; }
+  .rail-block, .rail-block:last-child { min-height:190px; border-right:none; border-bottom:1px solid var(--border); }
+  .rail-block:last-child { border-bottom:none; }
+}
 </style>
 </head>
 <body>
@@ -653,7 +708,7 @@ tr:hover td { background:var(--bg-card-hover); }
 </div>
 
 <div class="layout">
-  <div>
+  <div class="config-sidebar">
     <div class="panel">
       <div class="panel-title"><i data-lucide="file-text" style="width:16px;height:16px;"></i> <span data-i18n="btConfig">回测配置</span></div>
       <div class="form-group">
@@ -764,6 +819,7 @@ tr:hover td { background:var(--bg-card-hover); }
   <!-- 中：Quant Agent 对话工作台 -->
   <div class="agent-workspace" id="agent-workspace">
     <div class="panel-title"><i data-lucide="bot" style="width:16px;height:16px;"></i> <span>Quant Bot Agent</span>
+      <span class="pill" style="margin-left:auto;padding:3px 8px;font-size:9px;">PROPOSAL ONLY</span>
       <span class="sec-live" id="process-live" style="display:none;margin-left:auto;">RUNNING</span>
     </div>
     <div class="agent-chat" id="agent-chat">
