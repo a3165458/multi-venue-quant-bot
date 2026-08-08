@@ -60,5 +60,11 @@
         return { role: 'assistant', content: finalText.trim(), tool_calls: toolCalls };
     }
 
-    return { parseToolProtocol: parseToolProtocol };
+    function classifyToolOutcome(result) {
+        if (!result || result.status === 'error') return 'error';
+        if (result.status === 'no_candidate') return 'warning';
+        return 'success';
+    }
+
+    return { parseToolProtocol: parseToolProtocol, classifyToolOutcome: classifyToolOutcome };
 });

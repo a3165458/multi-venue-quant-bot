@@ -310,6 +310,9 @@
                 + (result.with_trades || 0) + ' · 最优 '
                 + (result.optimized_params || '—');
         }
+        if (name === 'research_strategies' && result && result.status === 'no_candidate') {
+            return '研究完成 · 无策略通过收益与风险门槛';
+        }
         if (name === 'compare_strategies' && result) {
             var rows = result.ranked || [];
             return rows.map(function (row) {
@@ -338,7 +341,11 @@
         el.textContent = String(rail.querySelectorAll('.tool-hit').length);
     }
 
-    function appendTool(name, args, result, ok) {
+    function appendTool(name, args, result, outcome) {
+        outcome = typeof outcome === 'boolean' ? (outcome ? 'success' : 'error') : outcome;
+        var ok = outcome !== 'error';
+        var stateClass = outcome === 'warning' ? 'warn' : (ok ? 'ok' : 'err');
+        var stateLabel = outcome === 'warning' ? 'NONE' : (ok ? 'OK' : 'ERR');
         var meta = TOOL_META[name] || { icon: '🛠', label: name };
         var summary = summarizeToolResult(name, args, result, ok);
         var argsStr = JSON.stringify(args || {}, null, 0);
@@ -346,25 +353,25 @@
         if (resStr.length > 2500) resStr = resStr.slice(0, 2500) + '\n…';
 
         // 对话里：紧凑摘要卡 + 可展开原始 JSON
-        var chatHtml = '<div class="tool-card ' + (ok ? 'ok' : 'err') + '">'
+        var chatHtml = '<div class="tool-card ' + stateClass + '">'
             + '<div class="tool-name">' + escHtml(meta.icon + ' ' + meta.label) + '</div>'
             + '<div class="tool-args">' + escHtml(summary) + '</div>'
             + '<details><summary style="padding:6px 11px 8px;cursor:pointer;font-family:var(--font-mono);font-size:10px;color:var(--text-muted);">详情</summary>'
             + '<div class="tool-args"><code>' + escHtml(argsStr) + '</code></div>'
             + '<pre class="tool-out">' + escHtml(resStr) + '</pre></details></div>';
-        appendChat('tool', chatHtml, ok ? 'step-ok' : 'step-err');
+        appendChat('tool', chatHtml, outcome === 'warning' ? 'step-warn' : (ok ? 'step-ok' : 'step-err'));
 
         // 右侧时间线：结构化条目
         var rail = $('agent-tool-rail');
         if (rail) {
             var hit = document.createElement('div');
-            hit.className = 'tool-hit ' + (ok ? 'ok' : 'err');
+            hit.className = 'tool-hit ' + stateClass;
             hit.innerHTML =
                 '<div class="th-icon">' + escHtml(meta.icon) + '</div>'
                 + '<div class="th-main">'
                 +   '<div class="th-name">' + escHtml(meta.label) + '</div>'
                 +   '<div class="th-sum">' + escHtml(summary) + '</div>'
-                +   '<span class="th-badge">' + (ok ? 'OK' : 'ERR') + '</span>'
+                +   '<span class="th-badge">' + stateLabel + '</span>'
                 + '</div>'
                 + '<div class="th-meta">' + nowTime() + '</div>'
                 + '<details><summary>参数 / 原始返回</summary>'
@@ -739,7 +746,7 @@
         appendText('user', '启动策略研究 · 目标 ' + args.goal + ' · 风险 ' + args.risk + ' · 范围 ' + args.universe);
         try {
             var research = await toolResearchStrategies(args);
-            appendTool('research_strategies', args, research, research.status === 'ok');
+            appendTool('research_strategies', args, research, window.QuantAgentProtocol.classifyToolOutcome(research));
             if (!research.recommended) {
                 appendText('assistant', '本轮没有候选同时满足正收益、最少成交数和回撤预算。建议扩大数据窗口或调整风险预算；不会上线任何策略。');
             } else {
@@ -910,9 +917,10 @@
             else if (name === 'research_strategies') result = await toolResearchStrategies(args);
             else if (name === 'apply_to_live') result = await toolApplyLive(args);
             else result = { status: 'error', message: 'Unknown tool: ' + name };
-            var ok = !(result && result.status === 'error');
-            appendTool(name, args, result, ok);
-            return { ok: ok, result: result };
+            var outcome = window.QuantAgentProtocol.classifyToolOutcome(result);
+            var ok = outcome !== 'error';
+            appendTool(name, args, result, outcome);
+            return { ok: ok, outcome: outcome, result: result };
         } catch (e) {
             appendTool(name, args, { error: e.message }, false);
             return { ok: false, result: { status: 'error', message: e.message } };

@@ -356,12 +356,14 @@ main, .layout-wrap {
 }
 .tool-hit:hover { background:var(--bg-card); border-color:var(--border-strong); }
 .tool-hit.ok { border-left:3px solid var(--success); }
+.tool-hit.warn { border-left:3px solid var(--warning); }
 .tool-hit.err { border-left:3px solid var(--danger); }
 .tool-hit .th-icon {
   width:28px; height:28px; border-radius:8px; display:flex; align-items:center; justify-content:center;
   font-size:13px; background:var(--bg-strip); border:1px solid var(--border); flex-shrink:0;
 }
 .tool-hit.ok .th-icon { background:var(--success-bg); border-color:transparent; }
+.tool-hit.warn .th-icon { background:var(--warning-bg); border-color:transparent; }
 .tool-hit.err .th-icon { background:var(--danger-bg); border-color:transparent; }
 .tool-hit .th-main { min-width:0; }
 .tool-hit .th-name {
@@ -383,6 +385,7 @@ main, .layout-wrap {
   padding:2px 7px; border-radius:99px;
 }
 .tool-hit.ok .th-badge { background:var(--success-bg); color:var(--success); }
+.tool-hit.warn .th-badge { background:var(--warning-bg); color:var(--warning); }
 .tool-hit.err .th-badge { background:var(--danger-bg); color:var(--danger); }
 .tool-hit details { grid-column:1 / -1; margin-top:2px; }
 .tool-hit details summary {
@@ -451,6 +454,7 @@ main, .layout-wrap {
   padding:0; overflow:hidden;
 }
 .tool-card.ok { border-color:var(--border); border-left:3px solid var(--success); }
+.tool-card.warn { border-color:var(--border); border-left:3px solid var(--warning); }
 .tool-card.err { border-color:var(--border); border-left:3px solid var(--danger); }
 .tool-card .tool-name {
   font-family:var(--font-mono); font-size:11px; font-weight:700;
