@@ -111,6 +111,27 @@ async fn test_golden_cross_generates_buy_and_exit_tracks_position() {
     assert!(signals2[0].risk_reducing);
 }
 
+#[tokio::test]
+async fn exchange_position_is_adopted_after_strategy_recreation() {
+    let strategy = TrendStrategy::with_options(3, 6, 0.05, 0.10, 0.0, 50.0);
+    let closes = vec![107.0; 12];
+    let mut snapshot = snapshot_with_candles("BTC", 1_700_020_000, &closes);
+    snapshot.positions.insert("BTC".to_string(), -0.5);
+    snapshot
+        .position_entry_prices
+        .insert("BTC".to_string(), 100.0);
+
+    let signals = strategy
+        .evaluate(&snapshot)
+        .await
+        .unwrap()
+        .expect("existing short beyond its stop loss must be managed after recreation");
+    assert_eq!(signals.len(), 1);
+    assert_eq!(signals[0].side, Side::Buy);
+    assert_eq!(signals[0].quantity, 0.5);
+    assert!(signals[0].risk_reducing);
+}
+
 /// Deterministic weak-then-confirm bull fixture (fast=3, slow=6, min_sep=0.05%).
 /// Extra 14: weak gold cross (sep < threshold). Extra 15: same-regime sep confirms.
 fn weak_bull_cross_series() -> Vec<f64> {
