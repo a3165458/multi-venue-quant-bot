@@ -413,6 +413,10 @@ fn ai_lab_runs_a_structured_strategy_research_mission() {
     assert!(QUANT_AGENT_JS.contains("toolSweep"));
     assert!(QUANT_AGENT_JS.contains("runAdaptiveAiResearch"));
     assert!(QUANT_AGENT_JS.contains("MAX_AI_RESEARCH_ROUNDS"));
+    assert!(QUANT_AGENT_JS.contains("var MODEL_RESEARCH_TIMEOUT_MS = 120000"));
+    assert!(QUANT_AGENT_JS.contains("timeoutMs: MODEL_RESEARCH_TIMEOUT_MS"));
+    assert!(QUANT_AGENT_JS.contains("maxTokens: 1600"));
+    assert!(QUANT_AGENT_JS.contains("opts.timeoutMs || 45000"));
     assert!(DASHBOARD_AI_HTML.contains(r#"data-stage="ai""#));
     assert!(
         !QUANT_AGENT_JS.contains("startStrategyMission")
