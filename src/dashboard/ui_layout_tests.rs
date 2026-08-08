@@ -411,6 +411,9 @@ fn ai_lab_runs_a_structured_strategy_research_mission() {
     assert!(QUANT_AGENT_JS.contains("fetch('/api/status')"));
     assert!(QUANT_AGENT_JS.contains("fetch('/api/positions')"));
     assert!(QUANT_AGENT_JS.contains("toolSweep"));
+    assert!(QUANT_AGENT_JS.contains("runAdaptiveAiResearch"));
+    assert!(QUANT_AGENT_JS.contains("MAX_AI_RESEARCH_ROUNDS"));
+    assert!(DASHBOARD_AI_HTML.contains(r#"data-stage="ai""#));
     assert!(
         !QUANT_AGENT_JS.contains("startStrategyMission")
             || !QUANT_AGENT_JS.contains("startStrategyMission();\n        toolApplyLive"),

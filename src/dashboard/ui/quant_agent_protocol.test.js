@@ -2,7 +2,12 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { parseToolProtocol, classifyToolOutcome } = require('./quant_agent_protocol.js');
+const {
+    parseToolProtocol,
+    classifyToolOutcome,
+    extractJsonObject,
+    validateResearchExperiments
+} = require('./quant_agent_protocol.js');
 
 test('parses DeepSeek DSML tool calls and typed parameters', () => {
     const content = `好的，执行策略横向对比。
@@ -35,4 +40,28 @@ test('treats a completed research run with no eligible candidate as a warning', 
     assert.equal(classifyToolOutcome({ status: 'no_candidate' }), 'warning');
     assert.equal(classifyToolOutcome({ status: 'ok' }), 'success');
     assert.equal(classifyToolOutcome({ status: 'error' }), 'error');
+});
+
+test('extracts and validates a bounded AI research plan', () => {
+    const raw = '```json\n{"hypothesis":"wider grid","experiments":[{"strategy":"grid","data_file":"BTC.csv","start":"2026-01-01","end":"2026-02-01","params":"grid_count=8,investment=10,deviation=0.02"}]}\n```';
+    const plan = extractJsonObject(raw);
+    const validated = validateResearchExperiments(plan, {
+        allowedDatasets: { 'BTC.csv': { start: '2026-01-01', end: '2026-03-01' } },
+        maxExperiments: 3
+    });
+    assert.equal(validated.experiments.length, 1);
+    assert.equal(validated.experiments[0].strategy, 'grid');
+});
+
+test('rejects unsafe or out-of-catalog AI experiments', () => {
+    const validated = validateResearchExperiments({ experiments: [
+        { strategy: 'grid', data_file: '../secret.csv', params: 'grid_count=8' },
+        { strategy: 'trend', data_file: 'BTC.csv', params: 'fast_ma=5;fetch(attack)' },
+        { strategy: 'custom_code', data_file: 'BTC.csv', params: 'x=1' }
+    ] }, {
+        allowedDatasets: { 'BTC.csv': { start: '2026-01-01', end: '2026-03-01' } },
+        maxExperiments: 3
+    });
+    assert.equal(validated.experiments.length, 0);
+    assert.equal(validated.rejected.length, 3);
 });
