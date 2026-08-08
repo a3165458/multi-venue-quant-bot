@@ -6,7 +6,8 @@ const {
     parseToolProtocol,
     classifyToolOutcome,
     extractJsonObject,
-    validateResearchExperiments
+    validateResearchExperiments,
+    isExplicitLiveApplyRequest
 } = require('./quant_agent_protocol.js');
 
 test('parses DeepSeek DSML tool calls and typed parameters', () => {
@@ -91,4 +92,11 @@ test('filters AI experiments against the current backend live notional cap', () 
     assert.equal(validated.experiments.length, 1);
     assert.equal(validated.experiments[0].params, 'fast_ma=7,slow_ma=50,notional=64');
     assert.deepEqual(validated.rejected.map((row) => row.reason), ['live_notional_cap', 'not_live_allowlisted']);
+});
+
+test('routes only explicit positive live requests to the approval flow', () => {
+    assert.equal(isExplicitLiveApplyRequest('把当前验证策略上线实盘'), true);
+    assert.equal(isExplicitLiveApplyRequest('确认应用到实盘'), true);
+    assert.equal(isExplicitLiveApplyRequest('不要上线实盘，只做回测'), false);
+    assert.equal(isExplicitLiveApplyRequest('这个策略能上线吗？'), false);
 });
