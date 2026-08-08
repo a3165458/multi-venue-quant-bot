@@ -116,6 +116,7 @@ async fn exchange_position_is_adopted_after_strategy_recreation() {
     let strategy = TrendStrategy::with_options(3, 6, 0.05, 0.10, 0.0, 50.0);
     let closes = vec![107.0; 12];
     let mut snapshot = snapshot_with_candles("BTC", 1_700_020_000, &closes);
+    snapshot.positions_authoritative = true;
     snapshot.positions.insert("BTC".to_string(), -0.5);
     snapshot
         .position_entry_prices
