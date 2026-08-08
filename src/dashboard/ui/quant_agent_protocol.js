@@ -106,6 +106,19 @@
             || values.fast_ma < values.slow_ma;
     }
 
+    function numericParam(params, names) {
+        var found = null;
+        String(params || '').split(',').some(function (part) {
+            var pair = part.trim().split('=');
+            if (pair.length === 2 && names.indexOf(pair[0].trim()) >= 0) {
+                found = Number(pair[1].trim());
+                return true;
+            }
+            return false;
+        });
+        return found;
+    }
+
     function validateResearchExperiments(plan, options) {
         options = options || {};
         var allowed = options.allowedDatasets || {};
@@ -115,6 +128,7 @@
         var rejected = [];
         var datePattern = /^\d{4}-\d{2}-\d{2}$/;
         var paramsPattern = /^[A-Za-z0-9_.=,+\-\s]*$/;
+        var livePolicy = options.livePolicy || null;
         input.slice(0, limit).forEach(function (experiment, index) {
             var strategy = experiment && String(experiment.strategy || '').toLowerCase();
             var file = experiment && String(experiment.data_file || '');
@@ -127,8 +141,32 @@
             else if (!meta) reason = 'dataset_not_allowed';
             else if (params.length > 500 || !paramsPattern.test(params)) reason = 'unsafe_params';
             else if (!validStrategyParams(strategy, params)) reason = 'invalid_params';
-            else if (!datePattern.test(start) || !datePattern.test(end) || start > end) reason = 'invalid_dates';
-            else if ((meta.start && start < meta.start) || (meta.end && end > meta.end)) reason = 'dates_out_of_range';
+            else if (livePolicy && Array.isArray(livePolicy.allowedStrategies)
+                && livePolicy.allowedStrategies.indexOf(strategy) < 0) reason = 'not_live_allowlisted';
+            else if (livePolicy && Number.isFinite(Number(livePolicy.maxNotionalUsd))) {
+                var sizing = strategy === 'trend' ? numericParam(params, ['notional'])
+                    : numericParam(params, ['investment', 'investment_per_grid']);
+                if (!Number.isFinite(sizing) || sizing <= 0 || sizing > Number(livePolicy.maxNotionalUsd)) {
+                    reason = 'live_notional_cap';
+                }
+            }
+            if (!reason && livePolicy && strategy === 'grid') {
+                var count = numericParam(params, ['grid_count']);
+                var deviation = numericParam(params, ['deviation', 'price_deviation']);
+                if (!Number.isFinite(count) || count < 4 || count > 40
+                    || !Number.isFinite(deviation) || deviation < 0.001 || deviation > 0.05) {
+                    reason = 'live_param_policy';
+                }
+            }
+            if (!reason && livePolicy && strategy === 'trend') {
+                var fast = numericParam(params, ['fast_ma']);
+                var slow = numericParam(params, ['slow_ma']);
+                if (!Number.isFinite(fast) || !Number.isFinite(slow) || fast < 2 || fast >= slow || slow > 500) {
+                    reason = 'live_param_policy';
+                }
+            }
+            if (!reason && (!datePattern.test(start) || !datePattern.test(end) || start > end)) reason = 'invalid_dates';
+            else if (!reason && ((meta.start && start < meta.start) || (meta.end && end > meta.end))) reason = 'dates_out_of_range';
             if (reason) rejected.push({ index: index, reason: reason });
             else valid.push({ strategy: strategy, data_file: file, start: start, end: end, params: params });
         });

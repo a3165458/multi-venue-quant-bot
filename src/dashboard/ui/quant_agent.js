@@ -18,6 +18,7 @@
     var COMPACT_KEEP_RECENT = 12;     // 压缩后保留最近消息条数（不含 system）
     var lastEstTokens = 0;
     var lastVerifiedBacktest = null;
+    var lastAgentPolicy = null;
     var activeRequestController = null;
 
     var TOOLS = [
@@ -167,6 +168,11 @@
         var lang = (localStorage.getItem('lighter-lang') || 'cn');
         var zh = lang === 'cn';
         var cfg = getProvider();
+        var policyHint = lastAgentPolicy && Number.isFinite(Number(lastAgentPolicy.max_notional_usd))
+            ? ('实盘硬约束：最大回撤 ' + Number(lastAgentPolicy.max_drawdown_pct).toFixed(2)
+                + '%；grid investment / trend notional 不得超过 $'
+                + Number(lastAgentPolicy.max_notional_usd).toFixed(2) + '；仅 grid/trend 可提案。')
+            : '提出上线候选前必须先运行 research_strategies 获取当前后端实盘政策；不得仅按回测本金推算仓位。';
         return [
             zh
                 ? '你是 Lighter Quant Bot 网页上的 Quant Agent 助手。'
@@ -181,8 +187,8 @@
                 ? '只有用户明确要求回测、扫参、对比策略、改参数、上线时，才调用工具。涉及收益/夏普/成交笔数必须用工具，禁止编造。'
                 : 'Only call tools when the user asks for backtests, sweeps, comparisons, param changes, or live apply. Never invent metrics.',
             zh
-                ? '研究任务时：先工具拿真数 → 再简短结论。趋势 notional 必须 < capital；apply_to_live 仅当用户明确要求且 confirm=true。'
-                : 'For research: tools first, then brief conclusion. Trend notional must be < capital. apply_to_live only with explicit user request + confirm=true.',
+                ? '研究任务时：先工具拿真数 → 再简短结论。' + policyHint + ' apply_to_live 仅当用户明确要求且 confirm=true。'
+                : 'For research, use verified tools first. Live sizing must follow the latest backend agent policy, not backtest capital. apply_to_live only with explicit user request + confirm=true.',
             zh
                 ? '默认用中文，简洁。'
                 : 'Be concise. Prefer the user language.'
@@ -610,20 +616,58 @@
         };
     }
 
-    function scoreStrategyCandidate(result, goal, risk) {
+    function parseNumericParams(params) {
+        var parsed = {};
+        String(params || '').split(',').forEach(function (part) {
+            var pair = part.split('=');
+            if (pair.length !== 2) return;
+            var number = Number(pair[1].trim());
+            if (Number.isFinite(number)) parsed[pair[0].trim()] = number;
+        });
+        return parsed;
+    }
+
+    function scoreStrategyCandidate(result, goal, risk, livePolicy) {
         var r = result && result.optimized ? result.optimized : null;
-        if (!r) return { eligible: false, score: -Infinity, reason: '没有有效回测结果' };
+        if (!r) return { eligible: false, live_eligible: false, score: -Infinity, reason: '没有有效回测结果' };
         var ret = Number(r.total_return_pct);
         var sharpe = Number(r.sharpe_ratio);
         var dd = Math.abs(Number(r.max_drawdown_pct));
         var trades = Number(r.total_trades);
-        var maxDd = risk === 'conservative' ? 5 : risk === 'aggressive' ? 15 : 10;
+        var researchMaxDd = risk === 'conservative' ? 5 : risk === 'aggressive' ? 15 : 10;
+        var policyMaxDd = livePolicy && Number(livePolicy.max_drawdown_pct);
+        var maxDd = Number.isFinite(policyMaxDd) ? Math.min(researchMaxDd, policyMaxDd) : researchMaxDd;
         if (![ret, sharpe, dd, trades].every(Number.isFinite)) {
-            return { eligible: false, score: -Infinity, reason: '指标不完整' };
+            return { eligible: false, live_eligible: false, score: -Infinity, reason: '指标不完整' };
         }
-        if (trades < 3) return { eligible: false, score: -Infinity, reason: '成交不足 3 笔' };
-        if (ret <= 0) return { eligible: false, score: -Infinity, reason: '验证收益不为正' };
-        if (dd > maxDd) return { eligible: false, score: -Infinity, reason: '回撤超过 ' + maxDd + '%' };
+        if (trades < 3) return { eligible: false, live_eligible: false, score: -Infinity, reason: '成交不足 3 笔' };
+        if (ret <= 0) return { eligible: false, live_eligible: false, score: -Infinity, reason: '验证收益不为正' };
+        if (dd > maxDd) return { eligible: false, live_eligible: false, score: -Infinity, reason: '回撤超过实盘预算 ' + maxDd + '%' };
+        if (livePolicy) {
+            var params = parseNumericParams(result.optimized_params);
+            var cap = Number(livePolicy.max_notional_usd);
+            var strategy = r.strategy === 'trend_following' ? 'trend'
+                : r.strategy === 'grid_trading' ? 'grid' : r.strategy;
+            var sizing = strategy === 'trend' ? params.notional
+                : (params.investment != null ? params.investment : params.investment_per_grid);
+            if (['grid', 'trend'].indexOf(strategy) < 0) {
+                return { eligible: false, live_eligible: false, score: -Infinity, reason: '策略不在实盘白名单' };
+            }
+            if (!Number.isFinite(cap) || !Number.isFinite(sizing) || sizing <= 0 || sizing > cap) {
+                return { eligible: false, live_eligible: false, score: -Infinity, reason: '仓位超过当前实盘上限 $' + (Number.isFinite(cap) ? cap.toFixed(2) : '—') };
+            }
+            if (strategy === 'grid') {
+                var gridCount = params.grid_count;
+                var gridDeviation = params.deviation != null ? params.deviation : params.price_deviation;
+                if (!Number.isFinite(gridCount) || gridCount < 4 || gridCount > 40
+                    || !Number.isFinite(gridDeviation) || gridDeviation < 0.001 || gridDeviation > 0.05) {
+                    return { eligible: false, live_eligible: false, score: -Infinity, reason: '网格参数不符合实盘范围' };
+                }
+            } else if (!Number.isFinite(params.fast_ma) || !Number.isFinite(params.slow_ma)
+                || params.fast_ma < 2 || params.fast_ma >= params.slow_ma || params.slow_ma > 500) {
+                return { eligible: false, live_eligible: false, score: -Infinity, reason: '趋势均线参数不符合实盘范围' };
+            }
+        }
         var score;
         if (goal === 'return') score = ret - dd * 0.35;
         else if (goal === 'drawdown') score = ret * 0.25 + sharpe - dd;
@@ -631,7 +675,7 @@
         else score = ret + sharpe * 2 - dd * 0.75;
         // Tiny-sample strategies are allowed above the hard floor but rank lower.
         score -= trades < 8 ? (8 - trades) * 0.2 : 0;
-        return { eligible: true, score: score, max_drawdown_budget_pct: maxDd };
+        return { eligible: true, live_eligible: true, score: score, max_drawdown_budget_pct: maxDd };
     }
 
     function missionStrategies(universe) {
@@ -694,6 +738,15 @@
             open_positions: Array.isArray(liveParts[1].positions) ? liveParts[1].positions.length : 0,
             agent_gate: liveParts[2].status || 'unknown'
         };
+        var backendPolicy = liveParts[2].policy || {};
+        var livePolicy = {
+            max_drawdown_pct: Number(backendPolicy.max_drawdown_pct || 10),
+            max_notional_pct: Number(backendPolicy.max_notional_pct || 0),
+            max_notional_usd: Number(backendPolicy.equity || context.equity || 0)
+                * Number(backendPolicy.max_notional_pct || 0) / 100,
+            allowed_strategies: ['grid', 'trend']
+        };
+        lastAgentPolicy = livePolicy;
         setMissionStage('screen');
         var strategies = missionStrategies(universe);
         var candidates = [];
@@ -705,10 +758,7 @@
                 strategy: strategies[i], data_file: ws.data_file, start: ws.start, end: ws.end,
                 capital: ws.capital, goal: goal, mode: 'quick', params: ''
             });
-            var ranked = scoreStrategyCandidate(result, goal, risk);
-            if (strategies[i] === 'dca' && ranked.eligible) {
-                ranked = { eligible: false, score: ranked.score, reason: 'DCA 当前仅研究，尚未开放实盘审批' };
-            }
+            var ranked = scoreStrategyCandidate(result, goal, risk, livePolicy);
             candidates.push(Object.assign({ strategy: strategies[i], result: result }, ranked));
         }
         setMissionStage('rank');
@@ -723,6 +773,7 @@
             risk: risk,
             universe: universe,
             context: context,
+            live_policy: livePolicy,
             candidates: candidates,
             recommended: recommended ? {
                 strategy: recommended.strategy,
@@ -743,6 +794,7 @@
             goal: research.goal,
             risk: research.risk,
             universe: research.universe,
+            live_policy: research.live_policy,
             candidates: (research.candidates || []).map(function (candidate) {
                 var metrics = candidate.result && candidate.result.optimized;
                 return {
@@ -790,6 +842,7 @@
                 + ' · 正在基于真实回测结果提出下一组实验…', 'step-ai');
             var prompt = {
                 objective: { goal: args.goal, risk: args.risk, universe: args.universe },
+                mandatory_live_policy: research.live_policy,
                 allowed_datasets: allowedDatasets,
                 verified_baseline: compactResearchEvidence(research),
                 prior_ai_experiments: experimentEvidence.slice(-9)
@@ -797,7 +850,7 @@
             var reply;
             try {
                 var researchMessages = [
-                    { role: 'system', content: 'You are a bounded quant research planner. Propose hypotheses for REAL backtests only. You may select only grid, trend, or dca and only datasets and date ranges in the supplied catalog. Never request code, paths, capital changes, credentials, live trading, or strategy deployment. Return JSON only in this exact shape: {"hypothesis":"short reason","experiments":[{"strategy":"grid|trend|dca","data_file":"exact catalog filename","start":"YYYY-MM-DD","end":"YYYY-MM-DD","params":"key=value,key=value"}]}. Return at most 3 experiments. Vary strategy, market window, and valid numeric parameters based on prior verified failures.' },
+                    { role: 'system', content: 'You are a bounded quant research planner. Propose hypotheses for REAL backtests that can pass the supplied mandatory_live_policy. Use only live-allowlisted grid or trend strategies, keep investment/notional at or below max_notional_usd, and target drawdown at or below max_drawdown_pct. Use only catalog datasets and date ranges. Never request code, paths, capital changes, credentials, live trading, or deployment. Return JSON only: {"hypothesis":"short reason","experiments":[{"strategy":"grid|trend","data_file":"exact catalog filename","start":"YYYY-MM-DD","end":"YYYY-MM-DD","params":"key=value,key=value"}]}. Return at most 3 experiments. Vary strategy, market window, and valid numeric parameters based on prior verified failures.' },
                     { role: 'user', content: JSON.stringify(prompt) }
                 ];
                 try {
@@ -821,7 +874,11 @@
             var plan = window.QuantAgentProtocol.extractJsonObject(reply.content);
             var validated = window.QuantAgentProtocol.validateResearchExperiments(plan, {
                 allowedDatasets: allowedDatasets,
-                maxExperiments: MAX_AI_EXPERIMENTS_PER_ROUND
+                maxExperiments: MAX_AI_EXPERIMENTS_PER_ROUND,
+                livePolicy: research.live_policy ? {
+                    maxNotionalUsd: research.live_policy.max_notional_usd,
+                    allowedStrategies: research.live_policy.allowed_strategies
+                } : null
             });
             if (validated.rejected.length) {
                 appendText('system', 'AI 方案安全校验：拒绝 ' + validated.rejected.length + ' 个越界实验。', 'step-warn');
@@ -849,10 +906,7 @@
                     params: experiment.params
                 });
                 var result = { optimized: metrics, optimized_params: experiment.params };
-                var ranked = scoreStrategyCandidate(result, args.goal, args.risk);
-                if (experiment.strategy === 'dca' && ranked.eligible) {
-                    ranked = { eligible: false, score: ranked.score, reason: 'DCA 当前仅研究，尚未开放实盘审批' };
-                }
+                var ranked = scoreStrategyCandidate(result, args.goal, args.risk, research.live_policy);
                 var candidate = Object.assign({
                     strategy: experiment.strategy,
                     result: result,
@@ -925,7 +979,10 @@
             } else {
                 var best = research.recommended;
                 appendText('assistant', '推荐 ' + best.strategy + '：' + best.params
-                    + '\n已通过本轮真实扫参和风险预算筛选。点击上方候选卡可加载到工作区；尚未应用实盘。');
+                    + '\n已通过真实回测和当前后端实盘政策预筛（DD ≤ '
+                    + Number(research.live_policy.max_drawdown_pct).toFixed(2) + '%，仓位 ≤ $'
+                    + Number(research.live_policy.max_notional_usd).toFixed(2)
+                    + '）。点击上方候选卡可加载到工作区；尚未应用实盘。');
                 var cfg = getProvider();
                 if (cfg.url && cfg.model && cfg.key) {
                     var evidence = JSON.stringify({ goal: research.goal, risk: research.risk, context: research.context, recommended: best, candidates: research.candidates.map(function (c) {
@@ -1057,6 +1114,15 @@
             ]);
             var status = pair[0];
             var audit = pair[1];
+            if (status.policy) {
+                lastAgentPolicy = {
+                    max_drawdown_pct: Number(status.policy.max_drawdown_pct || 10),
+                    max_notional_pct: Number(status.policy.max_notional_pct || 0),
+                    max_notional_usd: Number(status.policy.equity || 0)
+                        * Number(status.policy.max_notional_pct || 0) / 100,
+                    allowed_strategies: ['grid', 'trend']
+                };
+            }
             var statusEl = $('agent-policy-status');
             if (statusEl) {
                 statusEl.textContent = status.status === 'ready'
