@@ -19,6 +19,7 @@
     var lastEstTokens = 0;
     var lastVerifiedBacktest = null;
     var lastAgentPolicy = null;
+    var lastStrategyResearch = null;
     var activeRequestController = null;
 
     var TOOLS = [
@@ -694,6 +695,7 @@
     }
 
     function renderStrategyCandidates(research) {
+        lastStrategyResearch = research;
         var box = $('strategy-candidates');
         if (!box) return;
         var candidates = research.candidates || [];
@@ -703,7 +705,7 @@
             var verdict = candidate.eligible ? ('评分 ' + candidate.score.toFixed(2)) : candidate.reason;
             return '<button type="button" class="strategy-candidate ' + (index === 0 && candidate.eligible ? 'recommended' : '')
                 + '" data-candidate-index="' + index + '"><div class="candidate-name"><span>'
-                + escHtml(candidate.strategy) + '</span><span class="candidate-score">' + escHtml(verdict) + '</span></div>'
+                + escHtml('#' + (index + 1) + ' ' + candidate.strategy) + '</span><span class="candidate-score">' + escHtml(verdict) + '</span></div>'
                 + '<div class="candidate-metrics">收益 ' + Number(r.total_return_pct || 0).toFixed(2) + '% · Sharpe '
                 + Number(r.sharpe_ratio || 0).toFixed(2) + '<br>DD ' + Math.abs(Number(r.max_drawdown_pct || 0)).toFixed(2)
                 + '% · ' + Number(r.total_trades || 0) + ' 笔</div></button>';
@@ -1569,6 +1571,42 @@
             setBusy(true);
             appendText('system', '已识别明确实盘指令；正在校验当前已验证策略。通过后仍需你点击确认。', 'step-warn');
             var liveWorkspace = workspace();
+            var requestedCandidateNumber = window.QuantAgentProtocol.extractRequestedCandidateNumber(userText);
+            if (requestedCandidateNumber != null) {
+                var requestedCandidate = lastStrategyResearch
+                    && lastStrategyResearch.candidates
+                    && lastStrategyResearch.candidates[requestedCandidateNumber - 1];
+                if (!requestedCandidate) {
+                    var missingCandidate = '本次没有上线：当前研究结果中找不到候选 #'
+                        + requestedCandidateNumber + '，请重新研究或点击候选卡。';
+                    appendText('assistant', missingCandidate);
+                    history.push({ role: 'user', content: userText });
+                    history.push({ role: 'assistant', content: missingCandidate });
+                    setBusy(false);
+                    updateContextMeter();
+                    return;
+                }
+                if (!requestedCandidate.eligible || requestedCandidate.live_eligible === false) {
+                    var blockedCandidate = '本次没有上线：候选 #' + requestedCandidateNumber
+                        + ' 未通过实盘预筛（' + String(requestedCandidate.reason || '不满足收益或风险门槛')
+                        + '）。人工确认不能覆盖后端硬风控。';
+                    appendText('assistant', blockedCandidate);
+                    history.push({ role: 'user', content: userText });
+                    history.push({ role: 'assistant', content: blockedCandidate });
+                    setBusy(false);
+                    updateContextMeter();
+                    return;
+                }
+                var candidateMetrics = requestedCandidate.result && requestedCandidate.result.optimized;
+                liveWorkspace = applyWorkspace({
+                    strategy: requestedCandidate.strategy,
+                    data_file: requestedCandidate.data_file || (candidateMetrics && candidateMetrics.data_file),
+                    params: requestedCandidate.result.optimized_params
+                });
+                lastVerifiedBacktest = candidateMetrics;
+                appendText('system', '已选择候选 #' + requestedCandidateNumber + '：'
+                    + requestedCandidate.strategy + ' · ' + requestedCandidate.result.optimized_params, 'step-ok');
+            }
             var liveExecution = await executeTool('apply_to_live', {
                 strategy: liveWorkspace.strategy,
                 params: liveWorkspace.params,

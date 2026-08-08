@@ -76,6 +76,16 @@
         return /(上线实盘|实盘上线|确认上线|应用到实盘|写入实盘|启动实盘|apply\s+(?:to\s+)?live|go\s+live)/i.test(text);
     }
 
+    function extractRequestedCandidateNumber(raw) {
+        var text = String(raw || '');
+        var match = text.match(/第\s*([1-9]\d*)\s*(?:个)?\s*(?:候选|方案|策略)/)
+            || text.match(/(?:按照|采用|使用|选择)\s*(?:第\s*)?([1-9]\d*)\s*(?:号|个候选|个方案|进行)/)
+            || text.match(/\b(?:candidate|option)\s*#?\s*([1-9]\d*)\b/i);
+        if (!match) return null;
+        var number = Number(match[1]);
+        return Number.isInteger(number) && number <= 100 ? number : null;
+    }
+
     function extractJsonObject(raw) {
         var text = String(raw || '').trim()
             .replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
@@ -194,6 +204,7 @@
         parseToolProtocol: parseToolProtocol,
         classifyToolOutcome: classifyToolOutcome,
         isExplicitLiveApplyRequest: isExplicitLiveApplyRequest,
+        extractRequestedCandidateNumber: extractRequestedCandidateNumber,
         extractJsonObject: extractJsonObject,
         validateResearchExperiments: validateResearchExperiments
     };
