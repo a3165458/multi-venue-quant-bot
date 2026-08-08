@@ -417,6 +417,9 @@ fn ai_lab_runs_a_structured_strategy_research_mission() {
     assert!(QUANT_AGENT_JS.contains("timeoutMs: MODEL_RESEARCH_TIMEOUT_MS"));
     assert!(QUANT_AGENT_JS.contains("maxTokens: 1600"));
     assert!(QUANT_AGENT_JS.contains("opts.timeoutMs || 45000"));
+    assert!(QUANT_AGENT_JS.contains("max_notional_usd"));
+    assert!(QUANT_AGENT_JS.contains("livePolicy: research.live_policy"));
+    assert!(QUANT_AGENT_JS.contains("live_eligible"));
     assert!(DASHBOARD_AI_HTML.contains(r#"data-stage="ai""#));
     assert!(
         !QUANT_AGENT_JS.contains("startStrategyMission")

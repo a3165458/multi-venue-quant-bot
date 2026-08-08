@@ -77,3 +77,18 @@ test('rejects unknown and resource-exhausting strategy parameters', () => {
     assert.equal(validated.experiments.length, 0);
     assert.deepEqual(validated.rejected.map((row) => row.reason), ['invalid_params', 'invalid_params']);
 });
+
+test('filters AI experiments against the current backend live notional cap', () => {
+    const validated = validateResearchExperiments({ experiments: [
+        { strategy: 'trend', data_file: 'BTC.csv', params: 'fast_ma=7,slow_ma=50,notional=64' },
+        { strategy: 'trend', data_file: 'BTC.csv', params: 'fast_ma=7,slow_ma=50,notional=65' },
+        { strategy: 'dca', data_file: 'BTC.csv', params: 'interval=4,amount=5,dip_threshold=2' }
+    ] }, {
+        allowedDatasets: { 'BTC.csv': { start: '2026-01-01', end: '2026-03-01' } },
+        maxExperiments: 3,
+        livePolicy: { maxNotionalUsd: 64.11, allowedStrategies: ['grid', 'trend'] }
+    });
+    assert.equal(validated.experiments.length, 1);
+    assert.equal(validated.experiments[0].params, 'fast_ma=7,slow_ma=50,notional=64');
+    assert.deepEqual(validated.rejected.map((row) => row.reason), ['live_notional_cap', 'not_live_allowlisted']);
+});
