@@ -65,3 +65,15 @@ test('rejects unsafe or out-of-catalog AI experiments', () => {
     assert.equal(validated.experiments.length, 0);
     assert.equal(validated.rejected.length, 3);
 });
+
+test('rejects unknown and resource-exhausting strategy parameters', () => {
+    const validated = validateResearchExperiments({ experiments: [
+        { strategy: 'grid', data_file: 'BTC.csv', params: 'grid_count=999999999,investment=8,deviation=0.01' },
+        { strategy: 'trend', data_file: 'BTC.csv', params: 'unknown_knob=1' }
+    ] }, {
+        allowedDatasets: { 'BTC.csv': { start: '2026-01-01', end: '2026-03-01' } },
+        maxExperiments: 3
+    });
+    assert.equal(validated.experiments.length, 0);
+    assert.deepEqual(validated.rejected.map((row) => row.reason), ['invalid_params', 'invalid_params']);
+});

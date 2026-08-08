@@ -4,6 +4,8 @@
     'use strict';
 
     var MAX_STEPS = 16;
+    var MAX_AI_RESEARCH_ROUNDS = 3;
+    var MAX_AI_EXPERIMENTS_PER_ROUND = 3;
     var agentBusy = false;
     var abortFlag = false;
     var chatEl = null;
@@ -636,7 +638,7 @@
     }
 
     function setMissionStage(stage) {
-        var order = ['context', 'screen', 'backtest', 'rank', 'recommend'];
+        var order = ['context', 'screen', 'backtest', 'rank', 'ai', 'recommend'];
         var active = order.indexOf(stage);
         document.querySelectorAll('#mission-stages [data-stage]').forEach(function (el) {
             var idx = order.indexOf(el.getAttribute('data-stage'));
@@ -734,6 +736,155 @@
         return research;
     }
 
+    function compactResearchEvidence(research) {
+        return {
+            goal: research.goal,
+            risk: research.risk,
+            universe: research.universe,
+            candidates: (research.candidates || []).map(function (candidate) {
+                var metrics = candidate.result && candidate.result.optimized;
+                return {
+                    strategy: candidate.strategy,
+                    params: candidate.result && candidate.result.optimized_params,
+                    eligible: candidate.eligible,
+                    reason: candidate.reason,
+                    metrics: compactBacktest(metrics)
+                };
+            }).slice(-12)
+        };
+    }
+
+    async function runAdaptiveAiResearch(research, args) {
+        var cfg = getProvider();
+        if (!cfg.url || !cfg.model || (!cfg.key && cfg.provider !== 'ollama')) {
+            research.adaptive_status = 'not_configured';
+            research.adaptive_rounds = 0;
+            return research;
+        }
+        setMissionStage('ai');
+        var catalog = await toolListDatasets();
+        var allowedDatasets = {};
+        (catalog.datasets || []).forEach(function (dataset) {
+            if (dataset.file && dataset.start && dataset.end) {
+                allowedDatasets[dataset.file] = {
+                    start: dataset.start,
+                    end: dataset.end,
+                    candles: dataset.candles
+                };
+            }
+        });
+        if (!Object.keys(allowedDatasets).length) {
+            research.adaptive_status = 'no_datasets';
+            research.adaptive_rounds = 0;
+            return research;
+        }
+
+        var seen = {};
+        var experimentEvidence = [];
+        research.adaptive_status = 'running';
+        for (var round = 1; round <= MAX_AI_RESEARCH_ROUNDS; round++) {
+            if (abortFlag) throw new Error('adaptive strategy research stopped');
+            appendText('system', 'AI 策略迭代 ' + round + '/' + MAX_AI_RESEARCH_ROUNDS
+                + ' · 正在基于真实回测结果提出下一组实验…', 'step-ai');
+            var prompt = {
+                objective: { goal: args.goal, risk: args.risk, universe: args.universe },
+                allowed_datasets: allowedDatasets,
+                verified_baseline: compactResearchEvidence(research),
+                prior_ai_experiments: experimentEvidence.slice(-9)
+            };
+            var reply;
+            try {
+                reply = await callModel([
+                    { role: 'system', content: 'You are a bounded quant research planner. Propose hypotheses for REAL backtests only. You may select only grid, trend, or dca and only datasets and date ranges in the supplied catalog. Never request code, paths, capital changes, credentials, live trading, or strategy deployment. Return JSON only in this exact shape: {"hypothesis":"short reason","experiments":[{"strategy":"grid|trend|dca","data_file":"exact catalog filename","start":"YYYY-MM-DD","end":"YYYY-MM-DD","params":"key=value,key=value"}]}. Return at most 3 experiments. Vary strategy, market window, and valid numeric parameters based on prior verified failures.' },
+                    { role: 'user', content: JSON.stringify(prompt) }
+                ], { chatOnly: true });
+            } catch (modelError) {
+                research.adaptive_status = 'model_error';
+                research.adaptive_error = String(modelError.message || modelError).slice(0, 300);
+                appendText('system', 'AI 研究模型调用失败：' + research.adaptive_error, 'step-warn');
+                break;
+            }
+            var plan = window.QuantAgentProtocol.extractJsonObject(reply.content);
+            var validated = window.QuantAgentProtocol.validateResearchExperiments(plan, {
+                allowedDatasets: allowedDatasets,
+                maxExperiments: MAX_AI_EXPERIMENTS_PER_ROUND
+            });
+            if (validated.rejected.length) {
+                appendText('system', 'AI 方案安全校验：拒绝 ' + validated.rejected.length + ' 个越界实验。', 'step-warn');
+            }
+            if (!validated.experiments.length) {
+                experimentEvidence.push({ round: round, status: 'invalid_plan' });
+                appendText('system', 'AI 第 ' + round + ' 轮未给出可执行的合规实验，继续请求修正。', 'step-warn');
+                research.adaptive_rounds = round;
+                continue;
+            }
+
+            for (var i = 0; i < validated.experiments.length; i++) {
+                var experiment = validated.experiments[i];
+                var signature = JSON.stringify(experiment);
+                if (seen[signature]) continue;
+                seen[signature] = true;
+                appendText('system', 'AI 实验 ' + round + '.' + (i + 1) + ' · '
+                    + experiment.strategy + ' · 正在真实回测', 'step-ai');
+                var metrics = await toolRunBacktest({
+                    strategy: experiment.strategy,
+                    data_file: experiment.data_file,
+                    start: experiment.start,
+                    end: experiment.end,
+                    capital: workspace().capital,
+                    params: experiment.params
+                });
+                var result = { optimized: metrics, optimized_params: experiment.params };
+                var ranked = scoreStrategyCandidate(result, args.goal, args.risk);
+                if (experiment.strategy === 'dca' && ranked.eligible) {
+                    ranked = { eligible: false, score: ranked.score, reason: 'DCA 当前仅研究，尚未开放实盘审批' };
+                }
+                var candidate = Object.assign({
+                    strategy: experiment.strategy,
+                    result: result,
+                    source: 'ai',
+                    hypothesis: validated.hypothesis,
+                    round: round,
+                    data_file: experiment.data_file
+                }, ranked);
+                research.candidates.push(candidate);
+                experimentEvidence.push({
+                    round: round,
+                    experiment: experiment,
+                    eligible: candidate.eligible,
+                    reason: candidate.reason,
+                    metrics: compactBacktest(metrics)
+                });
+            }
+            research.candidates.sort(function (a, b) {
+                if (a.eligible !== b.eligible) return a.eligible ? -1 : 1;
+                return b.score - a.score;
+            });
+            var recommended = research.candidates.find(function (candidate) { return candidate.eligible; });
+            research.adaptive_rounds = round;
+            renderStrategyCandidates(research);
+            if (recommended) {
+                research.status = 'ok';
+                research.adaptive_status = 'candidate_found';
+                research.recommended = {
+                    strategy: recommended.strategy,
+                    params: recommended.result.optimized_params,
+                    metrics: recommended.result.optimized,
+                    score: recommended.score,
+                    source: 'ai',
+                    hypothesis: recommended.hypothesis
+                };
+                research.next_action = 'review_and_load_candidate';
+                return research;
+            }
+        }
+        if (research.adaptive_status === 'running') research.adaptive_status = 'exhausted';
+        research.status = 'no_candidate';
+        research.next_action = 'review_ai_experiments';
+        renderStrategyCandidates(research);
+        return research;
+    }
+
     async function startStrategyMission() {
         if (agentBusy) return;
         abortFlag = false;
@@ -746,9 +897,17 @@
         appendText('user', '启动策略研究 · 目标 ' + args.goal + ' · 风险 ' + args.risk + ' · 范围 ' + args.universe);
         try {
             var research = await toolResearchStrategies(args);
+            if (!research.recommended) research = await runAdaptiveAiResearch(research, args);
+            setMissionStage('recommend');
             appendTool('research_strategies', args, research, window.QuantAgentProtocol.classifyToolOutcome(research));
             if (!research.recommended) {
-                appendText('assistant', '本轮没有候选同时满足正收益、最少成交数和回撤预算。建议扩大数据窗口或调整风险预算；不会上线任何策略。');
+                var rounds = Number(research.adaptive_rounds || 0);
+                var reason = research.adaptive_status === 'not_configured'
+                    ? 'AI 模型尚未配置，因此只完成了固定策略扫参。'
+                    : research.adaptive_status === 'model_error'
+                        ? 'AI 模型调用失败，已保留固定扫参与错误信息。'
+                        : '固定扫参及 ' + rounds + ' 轮 AI 假设实验均未找到合格候选。';
+                appendText('assistant', reason + ' 所有展示指标都来自真实回测；本轮不会上线任何策略。');
             } else {
                 var best = research.recommended;
                 appendText('assistant', '推荐 ' + best.strategy + '：' + best.params
