@@ -73,6 +73,8 @@ impl MarketDataStore {
             recent_trades: self.recent_trades[recent_trades_start..].to_vec(),
             candles: recent_candles,
             positions: std::collections::HashMap::new(),
+            position_entry_prices: std::collections::HashMap::new(),
+            positions_authoritative: false,
         }
     }
 

@@ -1481,6 +1481,7 @@ async fn run_live_trading(config_path: &str) -> Result<()> {
         // reset-prone internal state.
         {
             let ds = dash_state.read().await;
+            snapshot.positions_authoritative = true;
             for p in &ds.positions {
                 let (Some(symbol), Some(size), Some(side)) =
                     (p["symbol"].as_str(), p["size"].as_f64(), p["side"].as_str())
@@ -1493,6 +1494,11 @@ async fn run_live_trading(config_path: &str) -> Result<()> {
                     size.abs()
                 };
                 snapshot.positions.insert(symbol.to_string(), signed);
+                if let Some(entry_price) = p["entry_price"].as_f64().filter(|price| *price > 0.0) {
+                    snapshot
+                        .position_entry_prices
+                        .insert(symbol.to_string(), entry_price);
+                }
             }
         }
 

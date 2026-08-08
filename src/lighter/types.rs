@@ -238,6 +238,11 @@ pub struct MarketSnapshot {
     /// Signed net position per symbol from the exchange (positive = long, negative = short).
     /// Injected by the live loop so position-aware strategies can cap one-sided accumulation.
     pub positions: HashMap<String, f64>,
+    /// Actual exchange entry prices for the signed positions above.
+    pub position_entry_prices: HashMap<String, f64>,
+    /// True only when `positions` is a complete exchange snapshot. Backtests leave this false
+    /// and let strategies maintain their own simulated position state.
+    pub positions_authoritative: bool,
 }
 
 // ===== 下单请求 =====

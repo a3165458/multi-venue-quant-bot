@@ -173,6 +173,39 @@ impl Strategy for TrendStrategy {
 
             let state = states.entry(symbol.clone()).or_default();
 
+            // A recreated live strategy starts with empty in-memory state. Adopt the complete
+            // exchange snapshot before evaluating exits or entries so an existing position is
+            // still protected and cannot be mistaken for a flat account. Backtests deliberately
+            // leave positions_authoritative=false and keep using the simulated state below.
+            if snapshot.positions_authoritative {
+                let signed_qty = snapshot.positions.get(symbol).copied().unwrap_or(0.0);
+                if signed_qty.abs() <= 1e-12 {
+                    state.position = None;
+                } else {
+                    let side = if signed_qty > 0.0 { Side::Buy } else { Side::Sell };
+                    let quantity = signed_qty.abs();
+                    let entry_price = snapshot
+                        .position_entry_prices
+                        .get(symbol)
+                        .copied()
+                        .filter(|price| *price > 0.0)
+                        .unwrap_or(mid_price);
+                    let should_adopt = state.position.map(|position| {
+                        position.side != side
+                            || (position.quantity - quantity).abs() > 1e-12
+                            || (position.entry_price - entry_price).abs() > 1e-9
+                    }).unwrap_or(true);
+                    if should_adopt {
+                        state.position = Some(PositionState {
+                            side,
+                            entry_price,
+                            quantity,
+                            best_price: mid_price,
+                        });
+                    }
+                }
+            }
+
             // 更新持仓最优价
             if let Some(pos) = state.position.as_mut() {
                 match pos.side {
