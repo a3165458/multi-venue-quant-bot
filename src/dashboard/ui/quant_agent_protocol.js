@@ -66,6 +66,16 @@
         return 'success';
     }
 
+    function isExplicitLiveApplyRequest(raw) {
+        var text = String(raw || '').trim();
+        if (!text) return false;
+        var negative = /(不要|别|暂不|先不|无需|不能|不想).{0,16}(上线|实盘|应用)|\b(do not|don't|dont|not yet|without)\b.{0,24}\b(apply|live)\b/i;
+        if (negative.test(text)) return false;
+        var question = /(能|可以|是否|怎么|如何|为什么|为何).{0,12}(上线|实盘)|(?:上线|实盘).{0,6}(吗|么|？|\?)|\b(can|could|how|whether)\b.{0,24}\b(apply|live)\b/i;
+        if (question.test(text)) return false;
+        return /(上线实盘|实盘上线|确认上线|应用到实盘|写入实盘|启动实盘|apply\s+(?:to\s+)?live|go\s+live)/i.test(text);
+    }
+
     function extractJsonObject(raw) {
         var text = String(raw || '').trim()
             .replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
@@ -183,6 +193,7 @@
     return {
         parseToolProtocol: parseToolProtocol,
         classifyToolOutcome: classifyToolOutcome,
+        isExplicitLiveApplyRequest: isExplicitLiveApplyRequest,
         extractJsonObject: extractJsonObject,
         validateResearchExperiments: validateResearchExperiments
     };

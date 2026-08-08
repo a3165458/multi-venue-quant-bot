@@ -137,7 +137,7 @@
             type: 'function',
             function: {
                 name: 'apply_to_live',
-                description: 'Push strategy+params to the LIVE trading bot. DANGEROUS. Only after user explicitly asks to go live and results look acceptable.',
+                description: 'Request writing verified strategy+params to the LIVE bot. Only after an explicit user instruction. This opens a mandatory human approval card; the model cannot approve it.',
                 parameters: {
                     type: 'object',
                     properties: {
@@ -1557,6 +1557,31 @@
             } catch (e) {
                 appendText('system', 'Compact 失败: ' + e.message, 'step-err');
             }
+            setBusy(false);
+            updateContextMeter();
+            return;
+        }
+
+        // Explicit live commands do not depend on whether a provider decides to emit a tool call.
+        // They enter the exact same backend policy + human approval path; negative/capability
+        // questions are excluded by the protocol classifier.
+        if (window.QuantAgentProtocol.isExplicitLiveApplyRequest(userText)) {
+            setBusy(true);
+            appendText('system', '已识别明确实盘指令；正在校验当前已验证策略。通过后仍需你点击确认。', 'step-warn');
+            var liveWorkspace = workspace();
+            var liveExecution = await executeTool('apply_to_live', {
+                strategy: liveWorkspace.strategy,
+                params: liveWorkspace.params,
+                confirm: true,
+                rationale: 'explicit user live instruction'
+            });
+            var liveMessage = liveExecution.ok
+                ? '实盘策略配置已写入，交易循环会在下一次行情事件装载。'
+                : '本次没有上线：' + String(liveExecution.result.message || '后端或人工审批未通过');
+            appendText('assistant', liveMessage);
+            history.push({ role: 'user', content: userText });
+            history.push({ role: 'assistant', content: liveMessage });
+            refreshAgentGovernance();
             setBusy(false);
             updateContextMeter();
             return;
