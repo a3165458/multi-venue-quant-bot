@@ -6,6 +6,8 @@
     var MAX_STEPS = 16;
     var MAX_AI_RESEARCH_ROUNDS = 3;
     var MAX_AI_EXPERIMENTS_PER_ROUND = 3;
+    var MODEL_RESEARCH_TIMEOUT_MS = 120000;
+    var MODEL_RESEARCH_RETRY_TIMEOUT_MS = 180000;
     var agentBusy = false;
     var abortFlag = false;
     var chatEl = null;
@@ -794,10 +796,22 @@
             };
             var reply;
             try {
-                reply = await callModel([
+                var researchMessages = [
                     { role: 'system', content: 'You are a bounded quant research planner. Propose hypotheses for REAL backtests only. You may select only grid, trend, or dca and only datasets and date ranges in the supplied catalog. Never request code, paths, capital changes, credentials, live trading, or strategy deployment. Return JSON only in this exact shape: {"hypothesis":"short reason","experiments":[{"strategy":"grid|trend|dca","data_file":"exact catalog filename","start":"YYYY-MM-DD","end":"YYYY-MM-DD","params":"key=value,key=value"}]}. Return at most 3 experiments. Vary strategy, market window, and valid numeric parameters based on prior verified failures.' },
                     { role: 'user', content: JSON.stringify(prompt) }
-                ], { chatOnly: true });
+                ];
+                try {
+                    reply = await callModel(researchMessages, {
+                        chatOnly: true, timeoutMs: MODEL_RESEARCH_TIMEOUT_MS, maxTokens: 1600
+                    });
+                } catch (firstError) {
+                    if (!/超时/.test(String(firstError.message || firstError))) throw firstError;
+                    appendText('system', 'AI 研究响应较慢，正在以精简输出要求重试一次…', 'step-warn');
+                    researchMessages[0].content += ' Be extremely concise and finish within 800 output tokens.';
+                    reply = await callModel(researchMessages, {
+                        chatOnly: true, timeoutMs: MODEL_RESEARCH_RETRY_TIMEOUT_MS, maxTokens: 800
+                    });
+                }
             } catch (modelError) {
                 research.adaptive_status = 'model_error';
                 research.adaptive_error = String(modelError.message || modelError).slice(0, 300);
@@ -1280,11 +1294,12 @@
 
     async function callOpenAICompat(cfg, messages, opts) {
         opts = opts || {};
+        var timeoutMs = opts.timeoutMs || 45000;
         // max_tokens = 本轮允许的最大「输出」token，不是累计账单
         var body = {
             model: cfg.model,
             messages: messages,
-            max_tokens: cfg.maxTokens,
+            max_tokens: opts.maxTokens || cfg.maxTokens,
             temperature: opts.chatOnly ? 0.3 : 0.2
         };
         // 闲聊不带 tools，避免模型硬走工具/长自我介绍
@@ -1295,12 +1310,12 @@
         var headers = { 'Content-Type': 'application/json' };
         if (cfg.key) headers.Authorization = 'Bearer ' + cfg.key;
 
-        var r = await fetchWithTimeout(cfg.url, { method: 'POST', headers: headers, body: JSON.stringify(body) }, 45000, '模型请求');
+        var r = await fetchWithTimeout(cfg.url, { method: 'POST', headers: headers, body: JSON.stringify(body) }, timeoutMs, '模型请求');
         var text = await r.text();
         if (!r.ok) {
             // Fallback without tools if provider rejects tools schema
             if (!opts.chatOnly && r.status === 400 && /tool/i.test(text)) {
-                return callOpenAITextFallback(cfg, messages);
+                return callOpenAITextFallback(cfg, messages, opts);
             }
             throw new Error('HTTP ' + r.status + ': ' + text.slice(0, 400));
         }
@@ -1313,7 +1328,9 @@
         return out;
     }
 
-    async function callOpenAITextFallback(cfg, messages) {
+    async function callOpenAITextFallback(cfg, messages, opts) {
+        opts = opts || {};
+        var timeoutMs = opts.timeoutMs || 45000;
         var extra = {
             role: 'system',
             content: 'Tools are not available via function calling. When you need a tool, output ONLY one line:\n'
@@ -1323,12 +1340,12 @@
         var body = {
             model: cfg.model,
             messages: [extra].concat(messages),
-            max_tokens: cfg.maxTokens,
+            max_tokens: opts.maxTokens || cfg.maxTokens,
             temperature: 0.2
         };
         var headers = { 'Content-Type': 'application/json' };
         if (cfg.key) headers.Authorization = 'Bearer ' + cfg.key;
-        var r = await fetchWithTimeout(cfg.url, { method: 'POST', headers: headers, body: JSON.stringify(body) }, 45000, '模型请求');
+        var r = await fetchWithTimeout(cfg.url, { method: 'POST', headers: headers, body: JSON.stringify(body) }, timeoutMs, '模型请求');
         var text = await r.text();
         if (!r.ok) throw new Error('HTTP ' + r.status + ': ' + text.slice(0, 400));
         var d = JSON.parse(text);
@@ -1341,6 +1358,7 @@
 
     async function callAnthropic(cfg, messages, opts) {
         opts = opts || {};
+        var timeoutMs = opts.timeoutMs || 45000;
         // Convert OpenAI messages + tools to Anthropic messages API
         var sys = '';
         var anthMsgs = [];
@@ -1369,7 +1387,7 @@
         });
         var body = {
             model: cfg.model,
-            max_tokens: cfg.maxTokens,
+            max_tokens: opts.maxTokens || cfg.maxTokens,
             system: sys || systemPrompt(),
             messages: anthMsgs
         };
@@ -1391,7 +1409,7 @@
                 'anthropic-dangerous-direct-browser-access': 'true'
             },
             body: JSON.stringify(body)
-        }, 45000, '模型请求');
+        }, timeoutMs, '模型请求');
         var text = await r.text();
         if (!r.ok) throw new Error('HTTP ' + r.status + ': ' + text.slice(0, 400));
         var d = JSON.parse(text);
