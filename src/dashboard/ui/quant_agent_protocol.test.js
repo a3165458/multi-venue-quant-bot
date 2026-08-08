@@ -7,7 +7,8 @@ const {
     classifyToolOutcome,
     extractJsonObject,
     validateResearchExperiments,
-    isExplicitLiveApplyRequest
+    isExplicitLiveApplyRequest,
+    extractRequestedCandidateNumber
 } = require('./quant_agent_protocol.js');
 
 test('parses DeepSeek DSML tool calls and typed parameters', () => {
@@ -99,4 +100,11 @@ test('routes only explicit positive live requests to the approval flow', () => {
     assert.equal(isExplicitLiveApplyRequest('确认应用到实盘'), true);
     assert.equal(isExplicitLiveApplyRequest('不要上线实盘，只做回测'), false);
     assert.equal(isExplicitLiveApplyRequest('这个策略能上线吗？'), false);
+});
+
+test('extracts an explicitly numbered research candidate for live approval', () => {
+    assert.equal(extractRequestedCandidateNumber('按照6进行实盘上线'), 6);
+    assert.equal(extractRequestedCandidateNumber('请使用第 2 个候选上线实盘'), 2);
+    assert.equal(extractRequestedCandidateNumber('把当前策略上线实盘'), null);
+    assert.equal(extractRequestedCandidateNumber('notional=64，确认上线'), null);
 });
