@@ -56,8 +56,12 @@ fn invalid_venue_values_fail_closed() {
 #[test]
 fn venue_credentials_are_isolated() {
     assert_eq!(
-        LiveVenue::ArcusMainnet.credential_key("SECRET_KEY"),
-        "ARCUS_MAINNET_SECRET_KEY"
+        LiveVenue::ArcusMainnet.credential_key("API_KEY"),
+        "ARCUS_MAINNET_API_KEY"
+    );
+    assert_eq!(
+        LiveVenue::ArcusMainnet.credential_key("SIGNING_KEY"),
+        "ARCUS_MAINNET_SIGNING_KEY"
     );
     assert_eq!(
         LiveVenue::ArcusTestnet.credential_key("ADDRESS"),
@@ -67,6 +71,18 @@ fn venue_credentials_are_isolated() {
         LiveVenue::LighterRobinhood.credential_key("ACCOUNT_INDEX"),
         "LIGHTER_ROBINHOOD_ACCOUNT_INDEX"
     );
+}
+
+
+#[test]
+fn arcus_environment_template_separates_api_and_signing_keys() {
+    let template = std::fs::read_to_string(".env.example").unwrap();
+    for network in ["MAINNET", "TESTNET"] {
+        assert!(template.contains(&format!("ARCUS_{network}_API_KEY=")));
+        assert!(template.contains(&format!("ARCUS_{network}_SIGNING_KEY=")));
+    }
+    assert!(!template.contains("ARCUS_MAINNET_SECRET_KEY="));
+    assert!(!template.contains("ARCUS_TESTNET_SECRET_KEY="));
 }
 
 #[test]

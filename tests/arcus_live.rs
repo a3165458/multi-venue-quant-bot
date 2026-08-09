@@ -1,9 +1,10 @@
 use multi_venue_quant_bot::arcus::{
-    ArcusKeypair, ArcusMarket, ArcusWsEvent, DecimalGrid, MarketPosition, OrderSide,
+    ArcusClient, ArcusEnvironment, ArcusKeypair, ArcusMarket, ArcusWsEvent, DecimalGrid,
+    MarketPosition, OrderSide,
 };
 
 #[test]
-fn rfc8032_private_key_derives_the_expected_arcus_api_key() {
+fn rfc8032_signing_key_derives_the_expected_public_key() {
     let key = ArcusKeypair::from_secret_hex(
         "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60",
     )
@@ -18,6 +19,22 @@ fn rfc8032_private_key_derives_the_expected_arcus_api_key() {
          5fb8821590a33bacc61e39701cf9b46bd25bf5f0595bbe24655141438e7a100b"
             .replace(char::is_whitespace, "")
     );
+}
+
+#[test]
+fn arcus_api_key_is_independent_from_the_signing_key() {
+    let signing_key = ArcusKeypair::from_secret_hex(
+        "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60",
+    )
+    .unwrap();
+    let issued_api_key = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+    ArcusClient::authenticated_with_keypair(
+        ArcusEnvironment::Mainnet,
+        issued_api_key,
+        signing_key,
+    )
+    .unwrap();
 }
 
 #[test]
