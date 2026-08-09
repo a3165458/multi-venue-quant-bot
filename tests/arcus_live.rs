@@ -29,12 +29,8 @@ fn arcus_api_key_is_independent_from_the_signing_key() {
     .unwrap();
     let issued_api_key = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
-    ArcusClient::authenticated_with_keypair(
-        ArcusEnvironment::Mainnet,
-        issued_api_key,
-        signing_key,
-    )
-    .unwrap();
+    ArcusClient::authenticated_with_keypair(ArcusEnvironment::Mainnet, issued_api_key, signing_key)
+        .unwrap();
 }
 
 #[test]

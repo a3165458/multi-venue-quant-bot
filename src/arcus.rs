@@ -55,12 +55,12 @@ pub enum ArcusError {
 pub struct ArcusKeypair(SigningKey);
 
 impl ArcusKeypair {
-    pub fn from_secret_hex(secret: &str) -> Result<Self, ArcusError> {
-        validate_hex(secret, 64, "Arcus secret key")?;
-        let bytes = hex::decode(secret)
-            .map_err(|_| ArcusError::InvalidRequest("invalid Arcus secret key hex".into()))?;
+    pub fn from_secret_hex(signing_key: &str) -> Result<Self, ArcusError> {
+        validate_hex(signing_key, 64, "Arcus API signing key")?;
+        let bytes = hex::decode(signing_key)
+            .map_err(|_| ArcusError::InvalidRequest("invalid Arcus API signing key hex".into()))?;
         let seed: [u8; 32] = bytes.try_into().map_err(|_| {
-            ArcusError::InvalidRequest("Arcus secret key must contain 32 bytes".into())
+            ArcusError::InvalidRequest("Arcus API signing key must contain 32 bytes".into())
         })?;
         Ok(Self(SigningKey::from_bytes(&seed)))
     }
@@ -736,10 +736,10 @@ impl ArcusClient {
 
     pub fn authenticated_with_keypair(
         environment: ArcusEnvironment,
+        api_key: impl Into<String>,
         keypair: ArcusKeypair,
     ) -> Result<Self, ArcusError> {
         let keypair = Arc::new(keypair);
-        let api_key = keypair.public_key_hex();
         Self::authenticated(environment, api_key, move |message| {
             Ok(keypair.sign_hex(message))
         })

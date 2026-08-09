@@ -1963,11 +1963,11 @@ async fn run_arcus_live_trading(settings: Config) -> Result<()> {
     }
 
     let (credentials, credential_path) = env_profiles::load_arcus_credentials(venue)?;
-    let keypair = ArcusKeypair::from_secret_hex(&credentials.secret_key)
-        .context("invalid Arcus Ed25519 secret key")?;
-    let api_key = keypair.public_key_hex();
+    let keypair = ArcusKeypair::from_secret_hex(&credentials.signing_key)
+        .context("invalid Arcus Ed25519 API signing key")?;
+    let api_key = credentials.api_key;
     let client = Arc::new(
-        ArcusClient::authenticated_with_keypair(environment, keypair)
+        ArcusClient::authenticated_with_keypair(environment, &api_key, keypair)
             .context("failed to initialize Arcus client")?,
     );
     info!(

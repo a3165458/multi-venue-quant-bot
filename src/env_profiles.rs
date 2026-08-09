@@ -43,7 +43,8 @@ pub(crate) struct Credentials {
 }
 
 pub(crate) struct ArcusCredentials {
-    pub(crate) secret_key: String,
+    pub(crate) api_key: String,
+    pub(crate) signing_key: String,
     pub(crate) address: String,
     pub(crate) account_index: u8,
 }
@@ -175,7 +176,8 @@ pub(crate) fn load_arcus_credentials(venue: LiveVenue) -> Result<(ArcusCredentia
     }
     Ok((
         ArcusCredentials {
-            secret_key: value("SECRET_KEY")?,
+            api_key: value("API_KEY")?,
+            signing_key: value("SIGNING_KEY")?,
             address: value("ADDRESS")?,
             account_index,
         },

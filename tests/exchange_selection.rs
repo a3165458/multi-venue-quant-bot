@@ -73,7 +73,6 @@ fn venue_credentials_are_isolated() {
     );
 }
 
-
 #[test]
 fn arcus_environment_template_separates_api_and_signing_keys() {
     let template = std::fs::read_to_string(".env.example").unwrap();

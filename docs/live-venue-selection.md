@@ -32,7 +32,8 @@ or account state from being reused by Lighter (or vice versa).
 
 Arcus needs three values for each environment:
 
-- `ARCUS_<ENV>_SECRET_KEY`: 32-byte Ed25519 seed encoded as 64 hexadecimal characters.
+- `ARCUS_<ENV>_API_KEY`: API Key issued by Arcus.
+- `ARCUS_<ENV>_SIGNING_KEY`: API Signing Key, a 32-byte Ed25519 seed encoded as 64 hexadecimal characters.
 - `ARCUS_<ENV>_ADDRESS`: the Ethereum master address against which the API key is registered.
 - `ARCUS_<ENV>_ACCOUNT_INDEX`: subaccount index from 0 through 9.
 
