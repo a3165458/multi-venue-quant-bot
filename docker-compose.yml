@@ -1,24 +1,24 @@
 # ═══════════════════════════════════════════════════════
-# Lighter Quant Bot — Docker Compose
+# Multi-Venue Quant Bot — Docker Compose
 #
 # 快速启动:
 #   1. cp .env.example .env
-#   2. 编辑 .env 填入 API 凭证
+#   2. 编辑 .env 中对应网络前缀的 API 凭证
 #   3. docker compose up -d
 #   4. 访问 http://localhost:2028 查看 Dashboard
 # ═══════════════════════════════════════════════════════
 
 services:
-  lighter-bot:
+  multi-venue-quant-bot:
     build: .
-    container_name: lighter-bot
+    container_name: multi-venue-quant-bot
     restart: unless-stopped
     env_file: .env
     ports:
       - "2028:2028"
     volumes:
       # PnL 数据持久化 (交易历史、净值曲线)
-      - bot-data:/app/data
+      - multi-venue-bot-data:/app/data
       # 可选: 挂载自定义配置
       # - ./config/settings.yaml:/app/config/settings.yaml:ro
     environment:
@@ -36,5 +36,5 @@ services:
         max-file: "3"
 
 volumes:
-  bot-data:
+  multi-venue-bot-data:
     driver: local

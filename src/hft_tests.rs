@@ -220,7 +220,7 @@ fn scan_stats_can_reset_after_subscription_warmup() {
 
 #[test]
 fn scan_cli_defaults_to_all_mainnet_markets_in_observation_mode() {
-    let cli = Cli::try_parse_from(["lighter-bot", "scan"]).expect("valid scan command");
+    let cli = Cli::try_parse_from(["multi-venue-quant-bot", "scan"]).expect("valid scan command");
 
     match cli.command {
         Commands::Scan {

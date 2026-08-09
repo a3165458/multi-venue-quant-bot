@@ -22,7 +22,7 @@ use tokio::sync::RwLock;
 use tracing::{debug, error, info, warn};
 
 #[derive(Parser)]
-#[command(author, version, about = "Lighter Trading Bot", long_about = None)]
+#[command(author, version, about = "Multi-Venue Quant Bot", long_about = None)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -208,7 +208,7 @@ fn default_live_config_path() -> String {
 }
 
 async fn run_live_trading(config_path: &str) -> Result<()> {
-    info!("🚀 Starting Lighter Trading Bot");
+    info!("🚀 Starting Multi-Venue Quant Bot");
 
     // Load config
     let settings = Config::builder()
@@ -1933,11 +1933,11 @@ async fn run_live_trading(config_path: &str) -> Result<()> {
 }
 
 async fn run_arcus_live_trading(settings: Config) -> Result<()> {
-    use lighter_bot::arcus::{
+    use multi_venue_quant_bot::arcus::{
         ArcusClient, ArcusEnvironment, ArcusKeypair, ArcusMarket, ArcusWebSocket, ArcusWsEvent,
         DecimalGrid, OrderSide as ArcusSide, PlaceOrder, PlaceOrderRequest, TimeInForce,
     };
-    use lighter_bot::exchange::LiveVenue;
+    use multi_venue_quant_bot::exchange::LiveVenue;
 
     let environment = match settings
         .get_string("exchange.environment")
@@ -1953,7 +1953,9 @@ async fn run_arcus_live_trading(settings: Config) -> Result<()> {
         ArcusEnvironment::Testnet => LiveVenue::ArcusTestnet,
     };
     let selected = env_profiles::selected_venue();
-    if selected.exchange() == lighter_bot::exchange::ExchangeKind::Arcus && selected != venue {
+    if selected.exchange() == multi_venue_quant_bot::exchange::ExchangeKind::Arcus
+        && selected != venue
+    {
         anyhow::bail!(
             "selected venue {selected} does not match config environment {}",
             venue.as_str()
@@ -2356,7 +2358,7 @@ async fn run_arcus_live_trading(settings: Config) -> Result<()> {
 }
 
 fn arcus_dashboard_positions(
-    positions: &[lighter_bot::arcus::MarketPosition],
+    positions: &[multi_venue_quant_bot::arcus::MarketPosition],
 ) -> Vec<serde_json::Value> {
     positions
         .iter()

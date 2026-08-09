@@ -1,4 +1,4 @@
-use lighter_bot::exchange::{ExchangeKind, LiveVenue};
+use multi_venue_quant_bot::exchange::{ExchangeKind, LiveVenue};
 use std::str::FromStr;
 
 #[test]

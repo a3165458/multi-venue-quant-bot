@@ -1,4 +1,4 @@
-// Lighter Bot — Dashboard Logic (Full-Featured)
+// Multi-Venue Quant Bot — Dashboard Logic
 (function() {
     'use strict';
 

@@ -118,6 +118,6 @@ dashboard:
 # Logging
 logging:
   level: "info"
-  file: "logs/lighter-bot.log"
+  file: "logs/multi-venue-quant-bot-lighter-mainnet.log"
   rotation: "daily"
   format: "json"

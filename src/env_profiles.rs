@@ -1,5 +1,5 @@
 use anyhow::{bail, Context, Result};
-use lighter_bot::exchange::LiveVenue;
+use multi_venue_quant_bot::exchange::LiveVenue;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
@@ -155,7 +155,7 @@ pub(crate) fn load_credentials(profile: CredentialProfile) -> Result<(Credential
 }
 
 pub(crate) fn load_arcus_credentials(venue: LiveVenue) -> Result<(ArcusCredentials, PathBuf)> {
-    if venue.exchange() != lighter_bot::exchange::ExchangeKind::Arcus {
+    if venue.exchange() != multi_venue_quant_bot::exchange::ExchangeKind::Arcus {
         bail!("{venue} is not an Arcus venue");
     }
     let path = PathBuf::from(".env");

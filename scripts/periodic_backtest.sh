@@ -3,7 +3,7 @@
 # 把关键指标追加到 backtests/tracking/backtest_history.csv。由 cron 周期调用。
 set -e
 cd "$(dirname "$0")/.."
-BIN=./target/release/lighter-bot
+BIN=./target/release/multi-venue-quant-bot
 [ ! -x "$BIN" ] && exit 0
 mkdir -p backtests/tracking backtests/data
 END=$(date -u +%Y-%m-%d)

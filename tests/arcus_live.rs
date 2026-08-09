@@ -1,4 +1,4 @@
-use lighter_bot::arcus::{
+use multi_venue_quant_bot::arcus::{
     ArcusKeypair, ArcusMarket, ArcusWsEvent, DecimalGrid, MarketPosition, OrderSide,
 };
 

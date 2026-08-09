@@ -176,8 +176,8 @@
             : '提出上线候选前必须先运行 research_strategies 获取当前后端实盘政策；不得仅按回测本金推算仓位。';
         return [
             zh
-                ? '你是 Lighter Quant Bot 网页上的 Quant Agent 助手。'
-                : 'You are the Quant Agent assistant inside Lighter Quant Bot.',
+                ? '你是 Multi-Venue Quant Bot 网页上的 Quant Agent 助手。'
+                : 'You are the Quant Agent assistant inside Multi-Venue Quant Bot.',
             zh
                 ? '当前用户配置的模型 ID：' + (cfg.model || '（未填写）') + '；提供商：' + (cfg.provider || '—') + '。若被问“用什么模型”，直接如实回答，一两句即可，不要自我介绍长文。'
                 : 'Configured model id: ' + (cfg.model || '(empty)') + '; provider: ' + (cfg.provider || '—') + '. If asked which model you use, answer briefly with that id.',

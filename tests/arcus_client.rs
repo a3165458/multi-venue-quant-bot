@@ -1,5 +1,5 @@
-use lighter_bot::arcus;
-use lighter_bot::arcus::{ArcusEnvironment, OrderSide, PlaceOrder, PlaceOrderRequest};
+use multi_venue_quant_bot::arcus;
+use multi_venue_quant_bot::arcus::{ArcusEnvironment, OrderSide, PlaceOrder, PlaceOrderRequest};
 
 #[test]
 fn environments_use_the_official_arcus_endpoints() {

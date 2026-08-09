@@ -1,6 +1,6 @@
-# Lighter Quant Bot 🤖
+# Multi-Venue Quant Bot 🤖
 
-基于 Rust 的 [Lighter.xyz](https://lighter.xyz) DEX 自动化量化交易机器人。
+基于 Rust 的多交易所自动化量化交易机器人，同时支持 Lighter 与 Arcus。
 
 ## ✨ 功能
 
@@ -18,15 +18,15 @@
 
 ### 前置条件
 
-- [Lighter.xyz](https://lighter.xyz) 账户（已创建 API Key）
+- Lighter 或 Arcus 账户（已创建相应 API Key）
 - Docker（推荐）或 Rust 1.80+
 
 ### 方式一：Docker 部署（推荐）
 
 ```bash
 # 1. 克隆项目
-git clone https://github.com/your-username/lighter-quant-bot.git
-cd lighter-quant-bot
+git clone https://github.com/your-username/multi-venue-quant-bot.git
+cd multi-venue-quant-bot
 
 # 2. 创建并编辑单一环境文件
 cp .env.example .env
@@ -55,7 +55,7 @@ nano .env
 
 # 4. 编译并运行
 cargo build --release
-./target/release/lighter-bot live --config config/settings.yaml
+./scripts/run_venue_live.sh lighter-mainnet
 ```
 
 ### 方式三：PM2 守护进程
@@ -64,7 +64,7 @@ cargo build --release
 # 编译后
 npm install -g pm2
 pm2 start ecosystem.config.js
-pm2 logs lighter-bot
+pm2 logs multi-venue-quant-bot
 ```
 
 ### 全市场只读扫描

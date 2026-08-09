@@ -455,7 +455,7 @@ async fn handle_ws_connection(mut socket: WebSocket, state: SharedDashboardState
 
     let welcome = serde_json::json!({
         "type": "welcome",
-        "message": "Connected to Lighter Bot Dashboard"
+        "message": "Connected to Multi-Venue Quant Bot Dashboard"
     });
     let _ = socket.send(Message::Text(welcome.to_string())).await;
 

@@ -1,10 +1,10 @@
 # ═══════════════════════════════════════════════════════
-# Lighter Quant Bot — Docker Build
+# Multi-Venue Quant Bot — Docker Build
 # Multi-stage: build Rust binary + fetch signer .so
 # ═══════════════════════════════════════════════════════
 
 # ── Stage 1: Build the Rust binary ──
-FROM rust:1.83-bookworm AS builder
+FROM rust:1.88-bookworm AS builder
 
 WORKDIR /usr/src/app
 COPY Cargo.toml Cargo.lock ./
@@ -12,7 +12,7 @@ COPY src/ src/
 COPY config/ config/
 COPY benches/ benches/
 
-RUN cargo build --release
+RUN cargo build --release --locked
 
 # ── Stage 2: Fetch lighter-signer.so from PyPI package ──
 FROM python:3.12-slim-bookworm AS signer
@@ -26,13 +26,15 @@ FROM debian:bookworm-slim
 
 RUN apt-get update && apt-get install -y \
     ca-certificates \
+    curl \
     libssl3 \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd --system --uid 10001 --create-home quantbot
 
 WORKDIR /app
 
 # Copy binary from builder
-COPY --from=builder /usr/src/app/target/release/lighter-bot /usr/local/bin/lighter-bot
+COPY --from=builder /usr/src/app/target/release/multi-venue-quant-bot /usr/local/bin/multi-venue-quant-bot
 
 # Copy signer .so from signer stage
 COPY --from=signer /tmp/lighter-signer.so /app/lighter-signer.so
@@ -41,7 +43,9 @@ COPY --from=signer /tmp/lighter-signer.so /app/lighter-signer.so
 COPY config/ /app/config/
 
 # Create data directory for PnL persistence
-RUN mkdir -p /app/data
+RUN mkdir -p /app/data /app/logs && chown -R quantbot:quantbot /app
+
+USER quantbot
 
 # Expose dashboard port
 EXPOSE 2028
@@ -51,4 +55,4 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD curl -sf http://localhost:2028/api/status || exit 1
 
 # Default command: live trading
-CMD ["lighter-bot", "live", "--config", "config/settings.yaml"]
+CMD ["multi-venue-quant-bot", "live"]

@@ -23,7 +23,7 @@ if [ -f "$F" ]; then
   SAME=$(awk -F, -v tr="$TR" -v ps="$PSZ" 'NR>1{print $3","$7}' "$F" | tail -n "$STALL_N" \
          | grep -c "^${TR},${PSZ}$" || true)
   if [ "${SAME:-0}" -ge "$STALL_N" ]; then
-    echo "[$TS] ⚠️ STALL: 已连续 ${STALL_N} 次采样(~$((STALL_N*15))min)无成交 — realized_pnl=$TR pos=$PSZ。检查是否死锁: pm2 logs lighter-bot | grep 'kept .* reducing'（N>6 即逃生阀失效）" \
+    echo "[$TS] ⚠️ STALL: 已连续 ${STALL_N} 次采样(~$((STALL_N*15))min)无成交 — realized_pnl=$TR pos=$PSZ。检查是否死锁: pm2 logs multi-venue-quant-bot | grep 'kept .* reducing'（N>6 即逃生阀失效）" \
       >> backtests/tracking/ALERTS.log
   fi
 fi
