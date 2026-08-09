@@ -1,9 +1,5 @@
-#![allow(dead_code)]
-
-#[path = "../src/arcus.rs"]
-mod arcus;
-
-use arcus::{ArcusEnvironment, OrderSide, PlaceOrder, PlaceOrderRequest};
+use lighter_bot::arcus;
+use lighter_bot::arcus::{ArcusEnvironment, OrderSide, PlaceOrder, PlaceOrderRequest};
 
 #[test]
 fn environments_use_the_official_arcus_endpoints() {
