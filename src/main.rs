@@ -480,13 +480,15 @@ async fn run_live_trading(config_path: &str) -> Result<()> {
 
     // Restore persistent strategy config from disk
     if let Some(saved) = dashboard::server::PersistentStrategyConfig::load(&network_name) {
-        let mut ds = dash_state.write().await;
         info!(
             "📂 Loaded strategy config: {} params={:?}",
             saved.strategy_name, saved.strategy_params
         );
-        ds.strategy_name = saved.strategy_name;
-        ds.strategy_params = saved.strategy_params;
+        {
+            let mut ds = dash_state.write().await;
+            ds.strategy_name = saved.strategy_name;
+            ds.strategy_params = saved.strategy_params;
+        }
     }
 
     // Restore persistent risk config from disk
@@ -2061,6 +2063,19 @@ async fn run_arcus_live_trading(settings: Config) -> Result<()> {
         quant_agent: dashboard::quant_agent::AgentLedger::load(venue.as_str()),
         ..dashboard::server::DashboardState::default()
     }));
+    if let Some(saved) = dashboard::server::PersistentStrategyConfig::load(venue.as_str()) {
+        info!(
+            "📂 Loaded strategy config: {} params={:?}",
+            saved.strategy_name, saved.strategy_params
+        );
+        {
+            let mut dashboard = dash_state.write().await;
+            dashboard.strategy_name = saved.strategy_name;
+            dashboard.strategy_params = saved.strategy_params;
+            dashboard.strategy_config_changed = true;
+        }
+        apply_pending_strategy_update(&dash_state, &strategy).await;
+    }
     let dashboard_port = settings.get_int("dashboard.port").unwrap_or(4028) as u16;
     let dashboard_host = settings
         .get_string("dashboard.host")

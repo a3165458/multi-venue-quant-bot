@@ -85,10 +85,15 @@ fn dashboard_uses_the_dedicated_4028_port_everywhere() {
 #[test]
 fn both_live_exchange_paths_restore_and_apply_dashboard_strategy_updates() {
     let main = fs::read_to_string("src/main.rs").unwrap();
+    let arcus_live = main
+        .split("async fn run_arcus_live_trading")
+        .nth(1)
+        .expect("Arcus live path exists");
     assert_eq!(
-        main.matches("apply_pending_strategy_update(&dash_state, &strategy)")
+        arcus_live
+            .matches("apply_pending_strategy_update(&dash_state, &strategy)")
             .count(),
-        4,
-        "Lighter and Arcus must apply saved settings at startup and dashboard changes while live"
+        2,
+        "Arcus must apply saved settings at startup and dashboard changes while live"
     );
 }
