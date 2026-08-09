@@ -80,11 +80,14 @@
             swarmFootL: 'Nearest to market is inverted', swarmFootR: 'Fill bar = filled / quantity',
             railKicker: 'Real events only \u00b7 newest first',
             envKicker: 'Read at process start \u00b7 restart required', envTitle: 'Environment',
+            networkKicker: 'Active connection \u00b7 restart to switch', networkTitle: 'Network',
+            networkCredentials: 'Mainnet and Robinhood Chain use separate account credentials. Update the account index, API key index and private key below before switching.',
+            saveNetwork: 'Use selected network after restart', networkFootL: 'Current connection stays unchanged', networkFootR: 'Selection is saved to .env',
             envWarnTag: 'Security',
             envWarn: 'This panel has no authentication and the live process binds 0.0.0.0. Anyone who can reach this port can edit these values. The secret key is write-only \u2014 it is never sent back to the browser.',
             writeOnly: '(write-only)', currentValue: 'current',
             secretHint: 'Exchange API private key, not the wallet L1 key. Leaving this blank keeps the existing value.',
-            saveEnv: 'Save to .env', envFootL: 'Changes land in .env on disk', envFootR: 'Restart the bot to apply', eventLog: 'Event Log', thisWeek: 'This week \u00b7 realised',
+            saveEnv: 'Save network credentials', envFootL: 'One file · isolated network prefixes', envFootR: 'Restart the bot to apply', eventLog: 'Event Log', thisWeek: 'This week \u00b7 realised',
             confirmCancel: 'Cancel ALL open orders? This cannot be undone.', navMenu: 'Menu',
         },
         cn: {
@@ -137,11 +140,14 @@
             swarmFootL: '离市价最近的一档是反相卡', swarmFootR: '进度条 = 已成交 / 委托量',
             railKicker: '只记真实事件 \u00b7 最新在上',
             envKicker: '进程启动时读入 \u00b7 需重启生效', envTitle: '环境变量',
+            networkKicker: '当前连接 \u00b7 切换需重启', networkTitle: '网络',
+            networkCredentials: '主网与 Robinhood Chain 的账户凭据互不通用。切换前请同步更新下方的账户索引、API Key 索引和私钥。',
+            saveNetwork: '重启后使用所选网络', networkFootL: '当前连接不会立即改变', networkFootR: '选择保存到 .env',
             envWarnTag: '安全',
             envWarn: '本面板没有任何鉴权，且实盘进程绑定在 0.0.0.0。能访问该端口的任何人都能改这些值。密钥是只写的 \u2014 后端永远不会把明文回给浏览器。',
             writeOnly: '（只写）', currentValue: '当前',
             secretHint: '这是交易所 API 私钥，不是钱包 L1 私钥。留空表示保持原值不变。',
-            saveEnv: '保存到 .env', envFootL: '改动写入磁盘上的 .env', envFootR: '重启机器人后生效', eventLog: '事件流', thisWeek: '本周 \u00b7 已实现',
+            saveEnv: '保存网络凭据', envFootL: '单一文件 · 两组网络前缀隔离', envFootR: '重启机器人后生效', eventLog: '事件流', thisWeek: '本周 \u00b7 已实现',
             confirmCancel: '取消所有挂单？此操作不可撤销。', navMenu: '菜单',
         }
     };
@@ -705,6 +711,15 @@
         setVal('pf-ord-count', d.open_orders || 0);
 
         if (d.version) setVal('set-version', d.version);
+        if (d.network) {
+            var venueLabels = {
+                'lighter-mainnet': 'Lighter Mainnet',
+                'lighter-robinhood': 'Lighter · Robinhood Chain',
+                'arcus-mainnet': 'Arcus Mainnet',
+                'arcus-testnet': 'Arcus Testnet'
+            };
+            setVal('set-exchange', venueLabels[d.network] || d.network);
+        }
         if (d.strategy) setVal('strat-name', d.strategy);
 
         // Equity chart update

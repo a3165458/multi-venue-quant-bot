@@ -1,19 +1,16 @@
 #!/bin/bash
 set -e
 
-echo "🚀 启动 Lighter 交易机器人..."
+echo "🚀 启动多交易所量化机器人..."
 
-# 加载环境变量
-if [ -f .env ]; then
-    export $(cat .env | grep -v '^#' | xargs)
-fi
-
-# 检查必要的环境变量
-if [ -z "$LIGHTER_SECRET_KEY" ] || [ -z "$LIGHTER_ACCOUNT_INDEX" ] || [ -z "$LIGHTER_API_KEY_INDEX" ]; then
-    echo "❌ 错误: 请设置 LIGHTER_SECRET_KEY / LIGHTER_ACCOUNT_INDEX / LIGHTER_API_KEY_INDEX"
-    echo "💡 请复制 .env.example 为 .env 并填入你的API密钥"
-    exit 1
-fi
+VENUE="${1:-lighter-mainnet}"
+case "$VENUE" in
+    mainnet|lighter-mainnet) VENUE="lighter-mainnet"; CONFIG="config/settings.yaml" ;;
+    robinhood|lighter-robinhood) VENUE="lighter-robinhood"; CONFIG="config/settings.robinhood.yaml" ;;
+    arcus-mainnet) CONFIG="config/settings.arcus.yaml" ;;
+    arcus-testnet) CONFIG="config/settings.arcus-testnet.yaml" ;;
+    *) echo "❌ 用法: $0 [lighter-mainnet|lighter-robinhood|arcus-mainnet|arcus-testnet]"; exit 1 ;;
+esac
 
 # 构建项目
 echo "🔨 构建项目..."
@@ -21,4 +18,4 @@ cargo build --release
 
 # 运行机器人
 echo "🤖 运行交易机器人..."
-RUST_LOG=${RUST_LOG:-info} ./target/release/lighter-bot live --config config/settings.yaml
+TRADING_VENUE="$VENUE" RUST_LOG=${RUST_LOG:-info} ./target/release/lighter-bot live --config "$CONFIG"

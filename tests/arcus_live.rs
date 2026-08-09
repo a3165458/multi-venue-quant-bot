@@ -13,7 +13,7 @@ fn rfc8032_private_key_derives_the_expected_arcus_api_key() {
         "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a"
     );
     assert_eq!(
-        key.sign_hex(b"") ,
+        key.sign_hex(b""),
         "e5564300c360ac729086e2cc806e828a84877f1eb8e5d974d873e06522490155\
          5fb8821590a33bacc61e39701cf9b46bd25bf5f0595bbe24655141438e7a100b"
             .replace(char::is_whitespace, "")
@@ -58,6 +58,8 @@ fn websocket_bbo_messages_are_normalized_for_the_strategy_loop() {
             symbol: "BTC-USD".into(),
             bid: 49_999.9,
             ask: 50_000.1,
+            bid_size: 1.2,
+            ask_size: 0.8,
             sequence: 42,
         }
     );

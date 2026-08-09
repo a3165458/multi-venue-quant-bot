@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-pub const AUDIT_FILE: &str = "data/quant_agent_audit.json";
+pub const AUDIT_FILE: &str = "quant_agent_audit.json";
 const MAX_AUDIT_RECORDS: usize = 200;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -148,17 +148,24 @@ pub fn evaluate_proposal(input: &ProposalInput, policy: &PolicySnapshot) -> Poli
 }
 
 impl AgentLedger {
-    pub fn load() -> Self {
-        std::fs::read_to_string(AUDIT_FILE)
+    pub fn load(network: &str) -> Self {
+        let Ok(path) = super::runtime_paths::data_file(network, AUDIT_FILE) else {
+            return Self::default();
+        };
+        std::fs::read_to_string(path)
             .ok()
             .and_then(|raw| serde_json::from_str(&raw).ok())
             .unwrap_or_default()
     }
 
-    pub fn save(&self) -> std::io::Result<()> {
-        std::fs::create_dir_all("data")?;
+    pub fn save(&self, network: &str) -> std::io::Result<()> {
+        let path =
+            super::runtime_paths::data_file(network, AUDIT_FILE).map_err(std::io::Error::other)?;
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
         let json = serde_json::to_string_pretty(self).map_err(std::io::Error::other)?;
-        std::fs::write(AUDIT_FILE, json)
+        std::fs::write(path, json)
     }
 
     pub fn record(&mut self, proposal: AgentProposal) {

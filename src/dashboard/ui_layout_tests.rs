@@ -199,6 +199,32 @@ fn ai_api_key_is_persisted_in_browser_local_storage() {
 }
 
 #[test]
+fn settings_exposes_restart_safe_network_selection() {
+    for id in [
+        "network-lighter-mainnet",
+        "network-lighter-robinhood",
+        "network-arcus-mainnet",
+        "network-arcus-testnet",
+        "network-rest-url",
+        "network-ws-url",
+        "network-chain-id",
+        "btn-save-network",
+        "network-msg",
+    ] {
+        assert!(
+            DASHBOARD_HTML.contains(&format!(r#"id="{id}""#)),
+            "missing network setting control: {id}"
+        );
+    }
+    assert!(DASHBOARD_HTML.contains("/api/network"));
+    assert!(DASHBOARD_HTML.contains("requires_restart"));
+    assert!(
+        DASHBOARD_HTML.contains("credentials") || DASHBOARD_HTML.contains("凭据"),
+        "network settings must warn that network credentials are isolated"
+    );
+}
+
+#[test]
 fn ai_lab_loads_datasets_and_aligns_dates() {
     assert!(
         DASHBOARD_AI_JS.contains("/api/backtest/datasets"),

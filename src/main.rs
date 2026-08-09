@@ -2,6 +2,7 @@
 mod backtest;
 mod dashboard;
 mod data;
+mod env_profiles;
 mod hft;
 mod lighter;
 mod risk;
@@ -31,8 +32,9 @@ struct Cli {
 enum Commands {
     /// Run live trading
     Live {
-        #[arg(short, long, default_value = "config/settings.yaml")]
-        config: String,
+        /// Config file. When omitted, LIGHTER_NETWORK selects mainnet or Robinhood Chain.
+        #[arg(short, long)]
+        config: Option<String>,
     },
 
     /// Run backtest
@@ -127,13 +129,16 @@ enum Commands {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    env_profiles::load_shared_env()?;
     utils::logger::init_logger();
-    dotenv::dotenv().ok();
 
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Live { config } => run_live_trading(&config).await,
+        Commands::Live { config } => {
+            let config = config.unwrap_or_else(default_live_config_path);
+            run_live_trading(&config).await
+        }
         Commands::Backtest {
             strategy,
             data,
@@ -198,6 +203,10 @@ async fn main() -> Result<()> {
     }
 }
 
+fn default_live_config_path() -> String {
+    env_profiles::selected_venue().config_path().to_string()
+}
+
 async fn run_live_trading(config_path: &str) -> Result<()> {
     info!("🚀 Starting Lighter Trading Bot");
 
@@ -208,15 +217,31 @@ async fn run_live_trading(config_path: &str) -> Result<()> {
         .build()
         .context("Failed to load config")?;
 
+    if settings
+        .get_string("exchange.kind")
+        .map(|kind| kind.eq_ignore_ascii_case("arcus"))
+        .unwrap_or(false)
+    {
+        return run_arcus_live_trading(settings).await;
+    }
+
+    let chain_id = settings.get_int("lighter.chain_id").unwrap_or(304);
+    let credential_profile = env_profiles::profile_for_chain_id(chain_id)?;
+    let (credentials, credential_path) = env_profiles::load_credentials(credential_profile)?;
+    info!(
+        "🔐 Using {} credential profile from {}",
+        credential_profile.network_name(),
+        credential_path.display()
+    );
+
     // Load credentials from env
-    let secret_key =
-        std::env::var("LIGHTER_SECRET_KEY").context("LIGHTER_SECRET_KEY not set in .env")?;
-    let account_index: i64 = std::env::var("LIGHTER_ACCOUNT_INDEX")
-        .context("LIGHTER_ACCOUNT_INDEX not set in .env")?
+    let secret_key = credentials.secret_key;
+    let account_index: i64 = credentials
+        .account_index
         .parse()
         .context("Invalid LIGHTER_ACCOUNT_INDEX")?;
-    let api_key_index: i32 = std::env::var("LIGHTER_API_KEY_INDEX")
-        .context("LIGHTER_API_KEY_INDEX not set in .env")?
+    let api_key_index: i32 = credentials
+        .api_key_index
         .parse()
         .context("Invalid LIGHTER_API_KEY_INDEX")?;
 
@@ -226,7 +251,7 @@ async fn run_live_trading(config_path: &str) -> Result<()> {
     let ws_url = settings
         .get_string("lighter.ws_url")
         .unwrap_or_else(|_| "wss://mainnet.zklighter.elliot.ai/stream".to_string());
-    let chain_id = settings.get_int("lighter.chain_id").unwrap_or(304) as i32;
+    let chain_id = chain_id as i32;
 
     let max_open_orders = settings.get_int("trading.max_open_orders").unwrap_or(8) as u32;
     info!("⚙️ Max open orders: {}", max_open_orders);
@@ -340,7 +365,17 @@ async fn run_live_trading(config_path: &str) -> Result<()> {
     let open_orders_count = Arc::new(std::sync::atomic::AtomicU32::new(0));
 
     // Setup shared dashboard state
+    let network_name = if chain_id == 466324 {
+        "lighter-robinhood"
+    } else {
+        "lighter-mainnet"
+    }
+    .to_string();
     let dash_state = Arc::new(RwLock::new(dashboard::server::DashboardState {
+        network_name: network_name.clone(),
+        rest_url: rest_url.clone(),
+        ws_url: ws_url.clone(),
+        chain_id,
         equity,
         available_balance: free_balance,
         unrealized_pnl: account.positions.iter().map(|p| p.unrealized_pnl).sum(),
@@ -434,17 +469,17 @@ async fn run_live_trading(config_path: &str) -> Result<()> {
         risk_update_requested: None,
         leverage_limit: 3.0,
         last_prices: std::collections::HashMap::new(),
-        quant_agent: dashboard::quant_agent::AgentLedger::load(),
+        quant_agent: dashboard::quant_agent::AgentLedger::load(&network_name),
     }));
 
     // Restore persistent PnL data from disk
-    if let Some(persisted) = dashboard::server::PersistentPnlData::load() {
+    if let Some(persisted) = dashboard::server::PersistentPnlData::load(&network_name) {
         let mut ds = dash_state.write().await;
         ds.restore_pnl(&persisted);
     }
 
     // Restore persistent strategy config from disk
-    if let Some(saved) = dashboard::server::PersistentStrategyConfig::load() {
+    if let Some(saved) = dashboard::server::PersistentStrategyConfig::load(&network_name) {
         let mut ds = dash_state.write().await;
         info!(
             "📂 Loaded strategy config: {} params={:?}",
@@ -455,7 +490,7 @@ async fn run_live_trading(config_path: &str) -> Result<()> {
     }
 
     // Restore persistent risk config from disk
-    if let Some(saved) = dashboard::server::PersistentRiskConfig::load() {
+    if let Some(saved) = dashboard::server::PersistentRiskConfig::load(&network_name) {
         let mut ds = dash_state.write().await;
         info!(
             "📂 Loaded risk config: leverage_limit={}",
@@ -467,10 +502,13 @@ async fn run_live_trading(config_path: &str) -> Result<()> {
 
     // Start dashboard server
     let dash_port = settings.get_int("dashboard.port").unwrap_or(2028) as u16;
+    let dash_host = settings
+        .get_string("dashboard.host")
+        .unwrap_or_else(|_| "127.0.0.1".to_string());
     let dash_state_clone = dash_state.clone();
     tokio::spawn(async move {
         if let Err(e) =
-            dashboard::server::start_with_state("0.0.0.0", dash_port, dash_state_clone).await
+            dashboard::server::start_with_state(&dash_host, dash_port, dash_state_clone).await
         {
             error!("Dashboard error: {}", e);
         }
@@ -952,6 +990,7 @@ async fn run_live_trading(config_path: &str) -> Result<()> {
                                     close_price,
                                     pos.size.abs(),
                                     mi,
+                                    true,
                                 )
                                 .await
                             {
@@ -1320,6 +1359,7 @@ async fn run_live_trading(config_path: &str) -> Result<()> {
                                         close_price,
                                         pos.size.abs(),
                                         mi,
+                                        true,
                                     )
                                     .await
                                 {
@@ -1399,6 +1439,7 @@ async fn run_live_trading(config_path: &str) -> Result<()> {
                                     sig.current_price,
                                     sig.size,
                                     mi,
+                                    true,
                                 )
                                 .await
                             {
@@ -1585,7 +1626,7 @@ async fn run_live_trading(config_path: &str) -> Result<()> {
 
         match strategy.read().await.evaluate(&snapshot).await {
             Ok(Some(signals)) => {
-                for signal in signals {
+                for mut signal in signals {
                     // Check if market is active (dashboard trading controls)
                     if !active_markets.contains(&signal.market_id) {
                         continue;
@@ -1671,6 +1712,40 @@ async fn run_live_trading(config_path: &str) -> Result<()> {
                         }
                     }
 
+                    // Risk-reducing signals (exits/stop-loss): clamp quantity to the
+                    // actual position held. Defense in depth on top of reduce_only
+                    // — 即使交易所侧 ReduceOnly 生效，也要保证发出的数量语义正确，
+                    // 防止策略状态滞后导致超大离场量（2026-08-08 事故的 qty 抬升隐患）。
+                    if signal.risk_reducing {
+                        let held_size = {
+                            let ds = dash_state.read().await;
+                            ds.positions
+                                .iter()
+                                .find(|p| {
+                                    p["symbol"]
+                                        .as_str()
+                                        .map(|s| signal.symbol.contains(s))
+                                        .unwrap_or(false)
+                                })
+                                .map(|p| p["size"].as_f64().unwrap_or(0.0).abs())
+                                .unwrap_or(0.0)
+                        };
+                        if held_size <= 0.0 {
+                            info!(
+                                "⏭️ Risk-reducing signal for {} but no position held, skipping",
+                                signal.symbol
+                            );
+                            continue;
+                        }
+                        if signal.quantity > held_size {
+                            info!(
+                                "🛡️ Clamping risk-reducing {} qty {:.6} -> held {:.6}",
+                                signal.symbol, signal.quantity, held_size
+                            );
+                            signal.quantity = held_size;
+                        }
+                    }
+
                     let market_info = market_infos.get(&signal.market_id);
                     info!(
                         "📊 Signal: {} {:?} {} @ ${:.2} qty={:.6} — {}",
@@ -1689,6 +1764,7 @@ async fn run_live_trading(config_path: &str) -> Result<()> {
                             signal.price,
                             signal.quantity,
                             market_info,
+                            signal.risk_reducing,
                         )
                         .await
                     {
@@ -1854,6 +1930,448 @@ async fn run_live_trading(config_path: &str) -> Result<()> {
     }
 
     Ok(())
+}
+
+async fn run_arcus_live_trading(settings: Config) -> Result<()> {
+    use lighter_bot::arcus::{
+        ArcusClient, ArcusEnvironment, ArcusKeypair, ArcusMarket, ArcusWebSocket, ArcusWsEvent,
+        DecimalGrid, OrderSide as ArcusSide, PlaceOrder, PlaceOrderRequest, TimeInForce,
+    };
+    use lighter_bot::exchange::LiveVenue;
+
+    let environment = match settings
+        .get_string("exchange.environment")
+        .unwrap_or_else(|_| "mainnet".into())
+        .as_str()
+    {
+        "mainnet" => ArcusEnvironment::Mainnet,
+        "testnet" => ArcusEnvironment::Testnet,
+        other => anyhow::bail!("unsupported Arcus environment {other}"),
+    };
+    let venue = match environment {
+        ArcusEnvironment::Mainnet => LiveVenue::ArcusMainnet,
+        ArcusEnvironment::Testnet => LiveVenue::ArcusTestnet,
+    };
+    let selected = env_profiles::selected_venue();
+    if selected.exchange() == lighter_bot::exchange::ExchangeKind::Arcus && selected != venue {
+        anyhow::bail!(
+            "selected venue {selected} does not match config environment {}",
+            venue.as_str()
+        );
+    }
+
+    let (credentials, credential_path) = env_profiles::load_arcus_credentials(venue)?;
+    let keypair = ArcusKeypair::from_secret_hex(&credentials.secret_key)
+        .context("invalid Arcus Ed25519 secret key")?;
+    let api_key = keypair.public_key_hex();
+    let client = Arc::new(
+        ArcusClient::authenticated_with_keypair(environment, keypair)
+            .context("failed to initialize Arcus client")?,
+    );
+    info!(
+        "🔐 Using {} account {} subaccount {} from {} (API key …{})",
+        venue,
+        credentials.address,
+        credentials.account_index,
+        credential_path.display(),
+        &api_key[api_key.len().saturating_sub(8)..]
+    );
+
+    let account = client
+        .account(&credentials.address, credentials.account_index)
+        .await
+        .context("failed to fetch Arcus account")?;
+    let equity = account
+        .equity
+        .parse::<f64>()
+        .context("invalid Arcus equity")?;
+    let free_collateral = account
+        .free_collateral
+        .parse::<f64>()
+        .context("invalid Arcus free collateral")?;
+    let positions = account
+        .market_positions()
+        .context("invalid Arcus position response")?;
+    match client
+        .cancel_all_orders(&credentials.address, credentials.account_index)
+        .await
+    {
+        Ok(_) => info!("✅ Cleared existing Arcus orders before strategy startup"),
+        Err(error) => warn!("⚠️ Arcus startup cancel-all failed: {error}"),
+    }
+
+    let raw_markets = client
+        .markets()
+        .await
+        .context("failed to fetch Arcus markets")?;
+    let configured_ids: Vec<i64> = settings
+        .get("trading.markets")
+        .context("trading.markets is required for Arcus live mode")?;
+    let market_ids: Vec<u32> = configured_ids
+        .into_iter()
+        .map(|id| u32::try_from(id).context("Arcus market id must be positive"))
+        .collect::<Result<_>>()?;
+    let mut markets = std::collections::HashMap::<u32, ArcusMarket>::new();
+    for market in &raw_markets {
+        if market.status == "ONLINE" && market_ids.contains(&(market.market_id as u32)) {
+            markets.insert(
+                market.market_id as u32,
+                ArcusMarket {
+                    market_id: market.market_id,
+                    symbol: market.market_display_name.clone(),
+                    tick_size: DecimalGrid::new(&market.tick_size)?,
+                    step_size: DecimalGrid::new(&market.step_size)?,
+                },
+            );
+        }
+    }
+    if markets.len() != market_ids.len() {
+        anyhow::bail!(
+            "one or more configured Arcus markets are missing or offline: {:?}",
+            market_ids
+        );
+    }
+
+    let strategy: Arc<tokio::sync::RwLock<Box<dyn strategy::Strategy>>> = Arc::new(
+        tokio::sync::RwLock::new(strategy::create_strategy(&settings)?),
+    );
+    let strategy_name = strategy.read().await.name().to_string();
+    let risk_manager = Arc::new(tokio::sync::Mutex::new(
+        risk::risk_manager::RiskManager::new(&settings)?,
+    ));
+    risk_manager.lock().await.update_equity(equity);
+
+    let dash_state = Arc::new(RwLock::new(dashboard::server::DashboardState {
+        network_name: venue.as_str().to_string(),
+        rest_url: environment.rest_url().to_string(),
+        ws_url: environment.websocket_url().to_string(),
+        chain_id: 0,
+        equity,
+        available_balance: free_collateral,
+        unrealized_pnl: positions
+            .iter()
+            .filter_map(|p| p.unrealized_pnl.parse::<f64>().ok())
+            .sum(),
+        strategy_name,
+        initial_equity: equity,
+        peak_equity: equity,
+        equity_history: vec![(Utc::now().timestamp(), equity)],
+        active_markets: market_ids.clone(),
+        available_markets: raw_markets
+            .iter()
+            .filter(|market| market.status == "ONLINE")
+            .map(|market| (market.market_id as u32, market.market_display_name.clone()))
+            .collect(),
+        positions: arcus_dashboard_positions(&positions),
+        leverage_limit: 3.0,
+        quant_agent: dashboard::quant_agent::AgentLedger::load(venue.as_str()),
+        ..dashboard::server::DashboardState::default()
+    }));
+    let dashboard_port = settings.get_int("dashboard.port").unwrap_or(2028) as u16;
+    let dashboard_host = settings
+        .get_string("dashboard.host")
+        .unwrap_or_else(|_| "127.0.0.1".to_string());
+    let dashboard_state = dash_state.clone();
+    tokio::spawn(async move {
+        if let Err(error) =
+            dashboard::server::start_with_state(&dashboard_host, dashboard_port, dashboard_state)
+                .await
+        {
+            error!("Arcus dashboard failed: {error}");
+        }
+    });
+
+    let data_store = Arc::new(RwLock::new(data::storage::MarketDataStore::new()));
+    for market in markets.values() {
+        match client.candles(&market.symbol, "1h", 100).await {
+            Ok(candles) => {
+                let mut store = data_store.write().await;
+                for candle in candles {
+                    let Some(timestamp) =
+                        chrono::DateTime::<Utc>::from_timestamp_micros(candle.open_time)
+                    else {
+                        continue;
+                    };
+                    let parsed = || -> Option<lighter::types::Candlestick> {
+                        Some(lighter::types::Candlestick {
+                            timestamp,
+                            open: candle.open.parse().ok()?,
+                            high: candle.high.parse().ok()?,
+                            low: candle.low.parse().ok()?,
+                            close: candle.close.parse().ok()?,
+                            volume: candle.volume.parse().ok()?,
+                            symbol: market.symbol.clone(),
+                        })
+                    };
+                    if let Some(candle) = parsed() {
+                        store.add_candle(candle);
+                    }
+                }
+            }
+            Err(error) => warn!(
+                "failed to load Arcus candles for {}: {error}",
+                market.symbol
+            ),
+        }
+    }
+
+    let websocket = ArcusWebSocket::new(environment.websocket_url());
+    websocket
+        .connect()
+        .await
+        .context("failed to connect Arcus WebSocket")?;
+    for market in markets.values() {
+        websocket.subscribe_bbo(&market.symbol).await?;
+    }
+    let mut events = websocket.receiver();
+
+    let refresh_client = client.clone();
+    let refresh_address = credentials.address.clone();
+    let refresh_account_index = credentials.account_index;
+    let refresh_dashboard = dash_state.clone();
+    let refresh_risk = risk_manager.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(10));
+        loop {
+            interval.tick().await;
+            let cancel_requested = refresh_dashboard.read().await.cancel_all_requested;
+            if cancel_requested {
+                match refresh_client
+                    .cancel_all_orders(&refresh_address, refresh_account_index)
+                    .await
+                {
+                    Ok(_) => info!("✅ Arcus cancel-all accepted"),
+                    Err(error) => error!("❌ Arcus cancel-all failed: {error}"),
+                }
+                refresh_dashboard.write().await.cancel_all_requested = false;
+            }
+            let (account, orders) = tokio::join!(
+                refresh_client.account(&refresh_address, refresh_account_index),
+                refresh_client.open_orders(&refresh_address, refresh_account_index),
+            );
+            if let Ok(account) = account {
+                if let (Ok(equity), Ok(free), Ok(positions)) = (
+                    account.equity.parse::<f64>(),
+                    account.free_collateral.parse::<f64>(),
+                    account.market_positions(),
+                ) {
+                    refresh_risk.lock().await.update_equity(equity);
+                    let mut dashboard = refresh_dashboard.write().await;
+                    dashboard.equity = equity;
+                    dashboard.available_balance = free;
+                    dashboard.positions = arcus_dashboard_positions(&positions);
+                    dashboard
+                        .last_prices
+                        .extend(positions.iter().filter_map(|position| {
+                            position
+                                .entry_price
+                                .parse::<f64>()
+                                .ok()
+                                .map(|price| (position.market_display_name.clone(), price))
+                        }));
+                }
+            }
+            if let Ok(orders) = orders {
+                let mut dashboard = refresh_dashboard.write().await;
+                dashboard.open_orders = orders.len() as u32;
+                dashboard.open_orders_list = orders
+                    .into_iter()
+                    .map(|order| {
+                        serde_json::json!({
+                            "id": order.order_id,
+                            "symbol": order.market_display_name,
+                            "side": format!("{:?}", order.side),
+                            "price": order.price.parse::<f64>().unwrap_or(0.0),
+                            "quantity": order.original_size.parse::<f64>().unwrap_or(0.0),
+                            "filled_quantity": order.filled_size.parse::<f64>().unwrap_or(0.0),
+                            "status": order.status,
+                        })
+                    })
+                    .collect();
+            }
+        }
+    });
+
+    info!("🚀 Arcus live trading active on {venue}");
+    let mut trade_count = 0_u64;
+    let max_open_orders = settings.get_int("trading.max_open_orders").unwrap_or(8) as u32;
+    loop {
+        let event = events
+            .recv()
+            .await
+            .context("Arcus WebSocket event stream closed")?;
+        if event == ArcusWsEvent::Disconnected {
+            let _ = client
+                .cancel_all_orders(&credentials.address, credentials.account_index)
+                .await;
+            anyhow::bail!(
+                "Arcus WebSocket disconnected; cancel-all requested and live loop stopped"
+            );
+        }
+        let ArcusWsEvent::Bbo {
+            symbol,
+            bid,
+            ask,
+            bid_size,
+            ask_size,
+            ..
+        } = event
+        else {
+            continue;
+        };
+        let market = markets
+            .values()
+            .find(|market| market.symbol == symbol)
+            .context("Arcus BBO references an unknown market")?;
+        data_store
+            .write()
+            .await
+            .update_order_book(lighter::types::OrderBook {
+                symbol: symbol.clone(),
+                market_id: market.market_id as u32,
+                bids: vec![lighter::types::PriceLevel {
+                    price: bid,
+                    quantity: bid_size,
+                }],
+                asks: vec![lighter::types::PriceLevel {
+                    price: ask,
+                    quantity: ask_size,
+                }],
+                timestamp: Utc::now(),
+            });
+        let mut snapshot = data_store.read().await.get_snapshot();
+        {
+            let dashboard = dash_state.read().await;
+            snapshot.positions = dashboard
+                .positions
+                .iter()
+                .filter_map(|position| {
+                    let symbol = position.get("symbol")?.as_str()?.to_string();
+                    let size = position.get("size")?.as_f64()?;
+                    let signed = if position.get("side")?.as_str()? == "Sell" {
+                        -size
+                    } else {
+                        size
+                    };
+                    Some((symbol, signed))
+                })
+                .collect();
+            snapshot.positions_authoritative = true;
+        }
+        dash_state
+            .write()
+            .await
+            .last_prices
+            .insert(symbol.clone(), (bid + ask) / 2.0);
+        if dash_state.read().await.trading_paused {
+            continue;
+        }
+        let Some(signals) = strategy.read().await.evaluate(&snapshot).await? else {
+            continue;
+        };
+        for mut signal in signals {
+            {
+                let dashboard = dash_state.read().await;
+                if !signal.risk_reducing && dashboard.open_orders >= max_open_orders {
+                    warn!("Arcus max_open_orders reached; skipping new entry");
+                    continue;
+                }
+                if signal.risk_reducing {
+                    let held = dashboard
+                        .positions
+                        .iter()
+                        .find(|position| {
+                            position.get("symbol").and_then(|v| v.as_str())
+                                == Some(signal.symbol.as_str())
+                        })
+                        .and_then(|position| position.get("size"))
+                        .and_then(|value| value.as_f64())
+                        .unwrap_or(0.0);
+                    if held <= 0.0 {
+                        continue;
+                    }
+                    signal.quantity = signal.quantity.min(held);
+                }
+            }
+            if !risk_manager.lock().await.check_signal(&signal).await? {
+                continue;
+            }
+            let market = markets
+                .get(&signal.market_id)
+                .context("strategy emitted unknown Arcus market")?;
+            let side = match signal.side {
+                lighter::types::Side::Buy => ArcusSide::Buy,
+                lighter::types::Side::Sell => ArcusSide::Sell,
+            };
+            let values = market.quantize_order(signal.price, signal.quantity, side)?;
+            let timestamp = Utc::now()
+                .timestamp_nanos_opt()
+                .context("system clock out of range")? as u64;
+            let good_til_time_us =
+                (Utc::now() + chrono::Duration::days(32)).timestamp_micros() as u64;
+            let client_id = format!("qb{}_{}", market.market_id, timestamp);
+            let signed = PlaceOrder {
+                address: credentials.address.clone(),
+                account_index: credentials.account_index,
+                market_id: market.market_id,
+                side,
+                price_ticks: values.price_ticks,
+                quantity_quantums: values.quantity_quantums,
+                good_til_time_ns: good_til_time_us * 1_000,
+                time_in_force: TimeInForce::Gtt,
+                reduce_only: signal.risk_reducing,
+                client_id: Some(client_id.clone()),
+            };
+            let request = PlaceOrderRequest {
+                address: credentials.address.clone(),
+                market_id: market.market_id,
+                account_index: credentials.account_index,
+                order_side: side,
+                order_type: "LIMIT".into(),
+                quantity: values.quantity,
+                price: values.price,
+                time_in_force: TimeInForce::Gtt,
+                good_til_time: good_til_time_us.to_string(),
+                timestamp,
+                client_id: Some(client_id),
+                reduce_only: signal.risk_reducing,
+            };
+            match client.place_order(&signed, &request).await {
+                Ok(ack) => {
+                    trade_count += 1;
+                    let mut dashboard = dash_state.write().await;
+                    dashboard.total_trades = trade_count;
+                    dashboard.push_trade(serde_json::json!({
+                        "timestamp": signal.timestamp.to_rfc3339(), "symbol": signal.symbol,
+                        "market_id": signal.market_id, "side": format!("{:?}", signal.side),
+                        "price": signal.price, "quantity": signal.quantity, "pnl": 0.0,
+                        "action": if signal.risk_reducing { "Close" } else { "Open" },
+                        "reason": signal.reason, "order_id": ack.order_id,
+                    }));
+                }
+                Err(error) => error!("❌ Arcus order failed: {error}"),
+            }
+        }
+    }
+}
+
+fn arcus_dashboard_positions(
+    positions: &[lighter_bot::arcus::MarketPosition],
+) -> Vec<serde_json::Value> {
+    positions
+        .iter()
+        .filter_map(|position| {
+            let signed_size = position.signed_size().ok()?;
+            Some(serde_json::json!({
+                "symbol": position.market_display_name,
+                "side": if signed_size >= 0.0 { "Buy" } else { "Sell" },
+                "size": signed_size.abs(),
+                "entry_price": position.entry_price.parse::<f64>().ok()?,
+                "mark_price": position.entry_price.parse::<f64>().ok()?,
+                "unrealized_pnl": position.unrealized_pnl.parse::<f64>().ok()?,
+            }))
+        })
+        .collect()
 }
 
 struct BacktestCliOpts {

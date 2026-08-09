@@ -4,10 +4,14 @@
 //! owning private-key material, so applications can keep keys in their existing secret store or
 //! hardware-backed signer.
 
+use ed25519_dalek::{Signer as _, SigningKey};
+use futures_util::{SinkExt, StreamExt};
 use reqwest::{Client, Method, StatusCode};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use thiserror::Error;
+use tokio::sync::broadcast;
+use tokio_tungstenite::{connect_async, tungstenite::Message};
 
 pub const MAINNET_REST_URL: &str = "https://api.arcus.xyz";
 pub const MAINNET_WEBSOCKET_URL: &str = "wss://api.arcus.xyz/v1/ws";
@@ -46,6 +50,287 @@ pub enum ArcusError {
     Transport(#[from] reqwest::Error),
     #[error("Arcus API returned HTTP {status}: {message}")]
     Api { status: StatusCode, message: String },
+}
+
+pub struct ArcusKeypair(SigningKey);
+
+impl ArcusKeypair {
+    pub fn from_secret_hex(secret: &str) -> Result<Self, ArcusError> {
+        validate_hex(secret, 64, "Arcus secret key")?;
+        let bytes = hex::decode(secret)
+            .map_err(|_| ArcusError::InvalidRequest("invalid Arcus secret key hex".into()))?;
+        let seed: [u8; 32] = bytes.try_into().map_err(|_| {
+            ArcusError::InvalidRequest("Arcus secret key must contain 32 bytes".into())
+        })?;
+        Ok(Self(SigningKey::from_bytes(&seed)))
+    }
+
+    pub fn public_key_hex(&self) -> String {
+        hex::encode(self.0.verifying_key().as_bytes())
+    }
+
+    pub fn sign_hex(&self, message: &[u8]) -> String {
+        hex::encode(self.0.sign(message).to_bytes())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DecimalGrid {
+    coefficient: u64,
+    scale: u32,
+}
+
+impl DecimalGrid {
+    pub fn new(value: &str) -> Result<Self, ArcusError> {
+        let (coefficient, scale) = parse_decimal(value)?;
+        if coefficient == 0 {
+            return Err(ArcusError::InvalidRequest(
+                "decimal grid must be positive".into(),
+            ));
+        }
+        Ok(Self { coefficient, scale })
+    }
+
+    pub fn units(&self, value: &str) -> Result<u64, ArcusError> {
+        let (coefficient, scale) = parse_decimal(value)?;
+        let common_scale = self.scale.max(scale);
+        let value_scaled = coefficient
+            .checked_mul(pow10(common_scale - scale)?)
+            .ok_or_else(|| ArcusError::InvalidRequest("decimal value overflow".into()))?;
+        let grid_scaled = self
+            .coefficient
+            .checked_mul(pow10(common_scale - self.scale)?)
+            .ok_or_else(|| ArcusError::InvalidRequest("decimal grid overflow".into()))?;
+        if value_scaled == 0 || value_scaled % grid_scaled != 0 {
+            return Err(ArcusError::InvalidRequest(format!(
+                "{value} is not an exact multiple of the market grid"
+            )));
+        }
+        Ok(value_scaled / grid_scaled)
+    }
+
+    pub fn decimal(&self, units: u64) -> String {
+        format_decimal(self.coefficient.saturating_mul(units), self.scale)
+    }
+
+    pub fn nearest(&self, value: f64) -> Result<(u64, String), ArcusError> {
+        self.quantize(value, true)
+    }
+
+    pub fn floor(&self, value: f64) -> Result<(u64, String), ArcusError> {
+        self.quantize(value, false)
+    }
+
+    fn quantize(&self, value: f64, nearest: bool) -> Result<(u64, String), ArcusError> {
+        if !value.is_finite() || value <= 0.0 {
+            return Err(ArcusError::InvalidRequest(
+                "order value must be finite and positive".into(),
+            ));
+        }
+        let grid = self.coefficient as f64 / 10_f64.powi(self.scale as i32);
+        let raw = value / grid;
+        let units = if nearest { raw.round() } else { raw.floor() };
+        if units < 1.0 || units > u64::MAX as f64 {
+            return Err(ArcusError::InvalidRequest(
+                "order value is outside the supported range".into(),
+            ));
+        }
+        let units = units as u64;
+        Ok((units, self.decimal(units)))
+    }
+}
+
+fn pow10(power: u32) -> Result<u64, ArcusError> {
+    10_u64
+        .checked_pow(power)
+        .ok_or_else(|| ArcusError::InvalidRequest("decimal precision is too large".into()))
+}
+
+fn parse_decimal(value: &str) -> Result<(u64, u32), ArcusError> {
+    if value.is_empty() || value.starts_with('-') || value.starts_with('+') {
+        return Err(ArcusError::InvalidRequest(
+            "expected an unsigned decimal string".into(),
+        ));
+    }
+    let mut parts = value.split('.');
+    let whole = parts.next().unwrap_or_default();
+    let fraction = parts.next().unwrap_or_default();
+    if parts.next().is_some()
+        || whole.is_empty()
+        || !whole.bytes().all(|b| b.is_ascii_digit())
+        || !fraction.bytes().all(|b| b.is_ascii_digit())
+        || fraction.len() > 18
+    {
+        return Err(ArcusError::InvalidRequest("invalid decimal string".into()));
+    }
+    let scale = fraction.len() as u32;
+    let digits = format!("{whole}{fraction}");
+    let coefficient = digits
+        .parse::<u64>()
+        .map_err(|_| ArcusError::InvalidRequest("decimal value overflow".into()))?;
+    Ok((coefficient, scale))
+}
+
+fn format_decimal(coefficient: u64, scale: u32) -> String {
+    if scale == 0 {
+        return coefficient.to_string();
+    }
+    let mut digits = format!("{:0width$}", coefficient, width = scale as usize + 1);
+    digits.insert(digits.len() - scale as usize, '.');
+    while digits.ends_with('0') {
+        digits.pop();
+    }
+    if digits.ends_with('.') {
+        digits.pop();
+    }
+    digits
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArcusMarket {
+    pub market_id: u16,
+    pub symbol: String,
+    pub tick_size: DecimalGrid,
+    pub step_size: DecimalGrid,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArcusOrderValues {
+    pub market_id: u16,
+    pub side: OrderSide,
+    pub price_ticks: u64,
+    pub quantity_quantums: u64,
+    pub price: String,
+    pub quantity: String,
+}
+
+impl ArcusMarket {
+    pub fn order_values(
+        &self,
+        price: &str,
+        quantity: &str,
+        side: OrderSide,
+    ) -> Result<ArcusOrderValues, ArcusError> {
+        Ok(ArcusOrderValues {
+            market_id: self.market_id,
+            side,
+            price_ticks: self.tick_size.units(price)?,
+            quantity_quantums: self.step_size.units(quantity)?,
+            price: price.to_string(),
+            quantity: quantity.to_string(),
+        })
+    }
+
+    pub fn quantize_order(
+        &self,
+        price: f64,
+        quantity: f64,
+        side: OrderSide,
+    ) -> Result<ArcusOrderValues, ArcusError> {
+        let (price_ticks, price) = self.tick_size.nearest(price)?;
+        let (quantity_quantums, quantity) = self.step_size.floor(quantity)?;
+        Ok(ArcusOrderValues {
+            market_id: self.market_id,
+            side,
+            price_ticks,
+            quantity_quantums,
+            price,
+            quantity,
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ArcusWsEvent {
+    Bbo {
+        symbol: String,
+        bid: f64,
+        ask: f64,
+        bid_size: f64,
+        ask_size: f64,
+        sequence: u64,
+    },
+    Disconnected,
+    Ignored,
+}
+
+impl ArcusWsEvent {
+    pub fn parse(text: &str) -> Result<Self, ArcusError> {
+        let value: serde_json::Value = serde_json::from_str(text)
+            .map_err(|error| ArcusError::InvalidRequest(error.to_string()))?;
+        if value.get("type").and_then(|v| v.as_str()) != Some("channel_data") {
+            return Ok(Self::Ignored);
+        }
+        if value.get("channel").and_then(|v| v.as_str()) != Some("bbo") {
+            return Ok(Self::Ignored);
+        }
+        let symbol = value
+            .get("id")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| ArcusError::InvalidRequest("BBO event is missing id".into()))?;
+        let contents = value
+            .get("contents")
+            .ok_or_else(|| ArcusError::InvalidRequest("BBO event is missing contents".into()))?;
+        let price = |side: &str| -> Result<f64, ArcusError> {
+            contents
+                .get(side)
+                .and_then(|v| v.get("price"))
+                .and_then(|v| v.as_str())
+                .and_then(|v| v.parse().ok())
+                .filter(|v: &f64| v.is_finite() && *v > 0.0)
+                .ok_or_else(|| ArcusError::InvalidRequest(format!("invalid BBO {side}")))
+        };
+        let size = |side: &str| -> Result<f64, ArcusError> {
+            contents
+                .get(side)
+                .and_then(|v| v.get("size"))
+                .and_then(|v| v.as_str())
+                .and_then(|v| v.parse().ok())
+                .filter(|v: &f64| v.is_finite() && *v > 0.0)
+                .ok_or_else(|| ArcusError::InvalidRequest(format!("invalid BBO {side} size")))
+        };
+        let sequence = contents
+            .get("lastSequenceId")
+            .and_then(|v| v.as_u64())
+            .ok_or_else(|| ArcusError::InvalidRequest("BBO event is missing sequence".into()))?;
+        Ok(Self::Bbo {
+            symbol: symbol.to_string(),
+            bid: price("bestBid")?,
+            ask: price("bestAsk")?,
+            bid_size: size("bestBid")?,
+            ask_size: size("bestAsk")?,
+            sequence,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MarketPosition {
+    pub market_id: u16,
+    pub market_display_name: String,
+    pub side: String,
+    pub size: String,
+    #[serde(rename = "averageEntryPrice", alias = "entryPrice")]
+    pub entry_price: String,
+    pub unrealized_pnl: String,
+    pub leverage: String,
+}
+
+impl MarketPosition {
+    pub fn signed_size(&self) -> Result<f64, ArcusError> {
+        let size = self
+            .size
+            .parse::<f64>()
+            .ok()
+            .filter(|value| value.is_finite())
+            .ok_or_else(|| ArcusError::InvalidRequest("invalid position size".into()))?;
+        match self.side.as_str() {
+            "LONG" | "BUY" => Ok(size.abs()),
+            "SHORT" | "SELL" => Ok(-size.abs()),
+            _ => Err(ArcusError::InvalidRequest("invalid position side".into())),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -261,6 +546,63 @@ pub struct Account {
     pub sequence_number: u64,
 }
 
+impl Account {
+    pub fn market_positions(&self) -> Result<Vec<MarketPosition>, ArcusError> {
+        self.positions
+            .values()
+            .cloned()
+            .map(|value| {
+                serde_json::from_value(value)
+                    .map_err(|error| ArcusError::InvalidRequest(error.to_string()))
+            })
+            .collect()
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ArcusOpenOrder {
+    pub order_id: String,
+    pub client_id: Option<String>,
+    pub market_id: u16,
+    pub market_display_name: String,
+    pub side: OrderSide,
+    pub price: String,
+    pub original_size: String,
+    pub filled_size: String,
+    pub remaining_size: String,
+    pub status: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenOrdersResponse {
+    orders: Vec<ArcusOpenOrder>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ArcusCandle {
+    pub market_display_name: String,
+    pub market_id: u16,
+    pub timeframe: String,
+    pub open_time: i64,
+    pub open: String,
+    pub high: String,
+    pub low: String,
+    pub close: String,
+    pub volume: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct CandlesResponse {
+    candles: Vec<ArcusCandle>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CancelAllAcknowledgement {
+    pub status: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PlaceOrderRequest {
@@ -392,6 +734,17 @@ impl ArcusClient {
         })
     }
 
+    pub fn authenticated_with_keypair(
+        environment: ArcusEnvironment,
+        keypair: ArcusKeypair,
+    ) -> Result<Self, ArcusError> {
+        let keypair = Arc::new(keypair);
+        let api_key = keypair.public_key_hex();
+        Self::authenticated(environment, api_key, move |message| {
+            Ok(keypair.sign_hex(message))
+        })
+    }
+
     pub async fn markets(&self) -> Result<Vec<Market>, ArcusError> {
         Ok(self
             .send_json::<MarketsResponse>(Method::GET, "/v1/markets", None)
@@ -414,6 +767,50 @@ impl ArcusClient {
         }
         let path = format!("/v1/account?address={address}&accountIndex={account_index}");
         self.send_json(Method::GET, &path, None).await
+    }
+
+    pub async fn open_orders(
+        &self,
+        address: &str,
+        account_index: u8,
+    ) -> Result<Vec<ArcusOpenOrder>, ArcusError> {
+        validate_address(address)?;
+        if account_index > 9 {
+            return Err(ArcusError::InvalidRequest(
+                "account_index must be between 0 and 9".into(),
+            ));
+        }
+        let path =
+            format!("/v1/openOrders?address={address}&accountIndex={account_index}&limit=1000");
+        Ok(self
+            .send_json::<OpenOrdersResponse>(Method::GET, &path, None)
+            .await?
+            .orders)
+    }
+
+    pub async fn candles(
+        &self,
+        market: &str,
+        timeframe: &str,
+        countback: u16,
+    ) -> Result<Vec<ArcusCandle>, ArcusError> {
+        validate_market_name(market)?;
+        const TIMEFRAMES: &[&str] = &[
+            "1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "8h", "12h", "1d", "3d", "1w",
+        ];
+        if !TIMEFRAMES.contains(&timeframe) || !(1..=1500).contains(&countback) {
+            return Err(ArcusError::InvalidRequest(
+                "invalid candle timeframe or countback".into(),
+            ));
+        }
+        let to = chrono::Utc::now().timestamp_micros();
+        let path = format!(
+            "/v1/candles?market={market}&timeframe={timeframe}&to={to}&countback={countback}"
+        );
+        Ok(self
+            .send_json::<CandlesResponse>(Method::GET, &path, None)
+            .await?
+            .candles)
     }
 
     pub async fn place_order(
@@ -471,6 +868,40 @@ impl ArcusClient {
             .await
     }
 
+    pub async fn cancel_all_orders(
+        &self,
+        address: &str,
+        account_index: u8,
+    ) -> Result<CancelAllAcknowledgement, ArcusError> {
+        validate_address(address)?;
+        if account_index > 9 {
+            return Err(ArcusError::InvalidRequest(
+                "account_index must be between 0 and 9".into(),
+            ));
+        }
+        let timestamp = chrono::Utc::now()
+            .timestamp_nanos_opt()
+            .ok_or_else(|| ArcusError::InvalidRequest("system clock is out of range".into()))?
+            as u64;
+        let body = serde_json::json!({
+            "accountIndex": account_index,
+            "address": address,
+        });
+        let canonical = format!(
+            r#"{{"accountIndex":{},"address":"{}"}}"#,
+            account_index, address
+        );
+        let message = format!("{timestamp}cancelAllOrders{canonical}");
+        let signer = self.signer.as_ref().ok_or_else(|| {
+            ArcusError::InvalidRequest("authenticated client required for cancellation".into())
+        })?;
+        let signature = signer(message.as_bytes()).map_err(ArcusError::Signing)?;
+        validate_hex(&signature, 128, "signature")?;
+        let path = format!("/v1/cancelAllOrders?address={address}");
+        self.send_signed_json(Method::POST, &path, body, timestamp, &signature)
+            .await
+    }
+
     async fn send_json<T: for<'de> Deserialize<'de>>(
         &self,
         method: Method,
@@ -511,6 +942,82 @@ impl ArcusClient {
             .send()
             .await?;
         decode_response(response).await
+    }
+}
+
+pub struct ArcusWebSocket {
+    url: String,
+    events: broadcast::Sender<ArcusWsEvent>,
+    commands: tokio::sync::mpsc::Sender<String>,
+    command_rx: tokio::sync::Mutex<Option<tokio::sync::mpsc::Receiver<String>>>,
+}
+
+impl ArcusWebSocket {
+    pub fn new(url: impl Into<String>) -> Self {
+        let (events, _) = broadcast::channel(4096);
+        let (commands, command_rx) = tokio::sync::mpsc::channel(256);
+        Self {
+            url: url.into(),
+            events,
+            commands,
+            command_rx: tokio::sync::Mutex::new(Some(command_rx)),
+        }
+    }
+
+    pub async fn connect(&self) -> Result<(), ArcusError> {
+        let mut guard = self.command_rx.lock().await;
+        let mut commands = guard.take().ok_or_else(|| {
+            ArcusError::InvalidRequest("Arcus WebSocket is already connected".into())
+        })?;
+        let url = self.url.clone();
+        let events = self.events.clone();
+        let (socket, _) = connect_async(&url)
+            .await
+            .map_err(|error| ArcusError::Signing(format!("WebSocket connect failed: {error}")))?;
+        let (mut writer, mut reader) = socket.split();
+        tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    command = commands.recv() => match command {
+                        Some(command) => {
+                            if writer.send(Message::Text(command)).await.is_err() { break; }
+                        }
+                        None => break,
+                    },
+                    message = reader.next() => match message {
+                        Some(Ok(Message::Text(text))) => {
+                            if let Ok(event) = ArcusWsEvent::parse(&text) {
+                                if event != ArcusWsEvent::Ignored { let _ = events.send(event); }
+                            }
+                        }
+                        Some(Ok(Message::Ping(payload))) => {
+                            if writer.send(Message::Pong(payload)).await.is_err() { break; }
+                        }
+                        Some(Ok(Message::Close(_))) | Some(Err(_)) | None => break,
+                        _ => {}
+                    }
+                }
+            }
+            let _ = events.send(ArcusWsEvent::Disconnected);
+        });
+        Ok(())
+    }
+
+    pub async fn subscribe_bbo(&self, market: &str) -> Result<(), ArcusError> {
+        validate_market_name(market)?;
+        let message = serde_json::json!({
+            "type": "subscribe",
+            "channel": "bbo",
+            "id": market,
+        });
+        self.commands
+            .send(message.to_string())
+            .await
+            .map_err(|_| ArcusError::InvalidRequest("WebSocket is disconnected".into()))
+    }
+
+    pub fn receiver(&self) -> broadcast::Receiver<ArcusWsEvent> {
+        self.events.subscribe()
     }
 }
 

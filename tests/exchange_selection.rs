@@ -4,7 +4,11 @@ use std::str::FromStr;
 #[test]
 fn every_live_venue_has_an_unambiguous_exchange_and_config() {
     let cases = [
-        ("lighter-mainnet", ExchangeKind::Lighter, "config/settings.yaml"),
+        (
+            "lighter-mainnet",
+            ExchangeKind::Lighter,
+            "config/settings.yaml",
+        ),
         (
             "lighter-robinhood",
             ExchangeKind::Lighter,

@@ -28,9 +28,9 @@
 git clone https://github.com/your-username/lighter-quant-bot.git
 cd lighter-quant-bot
 
-# 2. 创建并编辑 .env
+# 2. 创建并编辑单一环境文件
 cp .env.example .env
-nano .env   # 填入你的 API 凭证
+nano .env   # 分别填写 MAINNET / ROBINHOOD 前缀的凭据
 
 # 3. 一键启动
 docker compose up -d
@@ -88,7 +88,11 @@ cargo run --release -- scan \
 
 ## ⚙️ 配置说明
 
-### .env 必填字段（仅三项）
+### 单文件、网络隔离的凭据（每个网络各三项）
+
+两组凭据保存在同一个 `.env`，但使用 `LIGHTER_MAINNET_*` 和
+`LIGHTER_ROBINHOOD_*` 前缀隔离。程序根据配置文件中的 `lighter.chain_id`
+选择对应的一组，不会读取无前缀的旧凭据。
 
 | 变量 | 说明 | 对应 API Key 生成弹窗字段 |
 |------|------|--------------------------|
@@ -133,7 +137,7 @@ risk:
 机器人同时支持 [Lighter on Robinhood Chain](https://robinhoodchain.lighter.xyz/)（USDG 计价，含 BTC/ETH/SOL 等加密永续与 AAPL/TSLA/NVDA 等股票永续）：
 
 ```bash
-# 实盘（.env 需使用 Robinhood Chain 实例的账户凭据）
+# 实盘（读取 .env 中 LIGHTER_ROBINHOOD_* 凭据）
 cargo run --release -- live --config config/settings.robinhood.yaml
 
 # 下载 RH 实例历史数据（--url 指定实例）

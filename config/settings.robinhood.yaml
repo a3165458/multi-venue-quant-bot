@@ -1,6 +1,6 @@
 # Lighter on Robinhood Chain — Trading Bot Configuration
 # 用法: cargo run --release -- live --config config/settings.robinhood.yaml
-# 注意: .env 中的 LIGHTER_SECRET_KEY / LIGHTER_ACCOUNT_INDEX / LIGHTER_API_KEY_INDEX
+# 注意: .env 中需填写 LIGHTER_ROBINHOOD_SECRET_KEY / ACCOUNT_INDEX / API_KEY_INDEX
 #       必须是 Robinhood Chain 实例的账户凭据（与主网账户不通用）
 lighter:
   # Robinhood Chain instance (quote asset: USDG, L1 chain id 4663)
@@ -107,7 +107,7 @@ backtest:
 dashboard:
   enabled: true
   host: "127.0.0.1"
-  port: 2029
+  port: 2028
   refresh_interval_ms: 1000
 
   charts:

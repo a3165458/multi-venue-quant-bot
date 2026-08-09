@@ -1,0 +1,118 @@
+use std::{fmt, str::FromStr};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExchangeKind {
+    Lighter,
+    Arcus,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LiveVenue {
+    LighterMainnet,
+    LighterRobinhood,
+    ArcusMainnet,
+    ArcusTestnet,
+}
+
+impl LiveVenue {
+    pub const ALL: [Self; 4] = [
+        Self::LighterMainnet,
+        Self::LighterRobinhood,
+        Self::ArcusMainnet,
+        Self::ArcusTestnet,
+    ];
+
+    pub const fn exchange(self) -> ExchangeKind {
+        match self {
+            Self::LighterMainnet | Self::LighterRobinhood => ExchangeKind::Lighter,
+            Self::ArcusMainnet | Self::ArcusTestnet => ExchangeKind::Arcus,
+        }
+    }
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::LighterMainnet => "lighter-mainnet",
+            Self::LighterRobinhood => "lighter-robinhood",
+            Self::ArcusMainnet => "arcus-mainnet",
+            Self::ArcusTestnet => "arcus-testnet",
+        }
+    }
+
+    pub const fn config_path(self) -> &'static str {
+        match self {
+            Self::LighterMainnet => "config/settings.yaml",
+            Self::LighterRobinhood => "config/settings.robinhood.yaml",
+            Self::ArcusMainnet => "config/settings.arcus.yaml",
+            Self::ArcusTestnet => "config/settings.arcus-testnet.yaml",
+        }
+    }
+
+    pub const fn rest_url(self) -> &'static str {
+        match self {
+            Self::LighterMainnet => "https://mainnet.zklighter.elliot.ai",
+            Self::LighterRobinhood => "https://api.rh.lighter.xyz",
+            Self::ArcusMainnet => crate::arcus::MAINNET_REST_URL,
+            Self::ArcusTestnet => crate::arcus::TESTNET_REST_URL,
+        }
+    }
+
+    pub const fn websocket_url(self) -> &'static str {
+        match self {
+            Self::LighterMainnet => "wss://mainnet.zklighter.elliot.ai/stream",
+            Self::LighterRobinhood => "wss://api.rh.lighter.xyz/stream",
+            Self::ArcusMainnet => crate::arcus::MAINNET_WEBSOCKET_URL,
+            Self::ArcusTestnet => crate::arcus::TESTNET_WEBSOCKET_URL,
+        }
+    }
+
+    pub const fn chain_id(self) -> Option<i64> {
+        match self {
+            Self::LighterMainnet => Some(304),
+            Self::LighterRobinhood => Some(466_324),
+            Self::ArcusMainnet | Self::ArcusTestnet => None,
+        }
+    }
+
+    pub fn credential_key(self, suffix: &str) -> String {
+        let prefix = match self {
+            Self::LighterMainnet => "LIGHTER_MAINNET",
+            Self::LighterRobinhood => "LIGHTER_ROBINHOOD",
+            Self::ArcusMainnet => "ARCUS_MAINNET",
+            Self::ArcusTestnet => "ARCUS_TESTNET",
+        };
+        format!("{prefix}_{suffix}")
+    }
+}
+
+impl FromStr for LiveVenue {
+    type Err = ParseLiveVenueError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "lighter-mainnet" | "mainnet" => Ok(Self::LighterMainnet),
+            "lighter-robinhood" | "robinhood" => Ok(Self::LighterRobinhood),
+            "arcus-mainnet" => Ok(Self::ArcusMainnet),
+            "arcus-testnet" => Ok(Self::ArcusTestnet),
+            _ => Err(ParseLiveVenueError),
+        }
+    }
+}
+
+impl fmt::Display for LiveVenue {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ParseLiveVenueError;
+
+impl fmt::Display for ParseLiveVenueError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(
+            "venue must be lighter-mainnet, lighter-robinhood, arcus-mainnet, or arcus-testnet",
+        )
+    }
+}
+
+impl std::error::Error for ParseLiveVenueError {}
