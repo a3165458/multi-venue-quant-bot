@@ -44,7 +44,10 @@ async fn invalid_dashboard_strategy_switch_fails_closed() {
 
     assert!(!apply_pending_strategy_update(&dashboard_state, &execution_strategy).await);
     assert_eq!(execution_strategy.read().await.name(), "trend_following");
-    assert_eq!(dashboard_state.read().await.strategy_name, "trend_following");
+    assert_eq!(
+        dashboard_state.read().await.strategy_name,
+        "trend_following"
+    );
 }
 
 #[test]

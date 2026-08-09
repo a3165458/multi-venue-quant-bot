@@ -1861,75 +1861,67 @@ async fn run_live_trading(config_path: &str) -> Result<()> {
             last_risk_update = std::time::Instant::now();
         }
 
-        // Check if dashboard user changed strategy params or switched strategy
-        {
-            let mut ds = dash_state.write().await;
-            if ds.strategy_config_changed {
-                ds.strategy_config_changed = false;
-                let new_strategy_name = ds.strategy_name.clone();
-                let params = ds.strategy_params.clone();
-                drop(ds);
-
-                // Build params string from HashMap
-                let params_str: String = params
-                    .iter()
-                    .map(|(k, v)| format!("{}={}", k, v))
-                    .collect::<Vec<_>>()
-                    .join(",");
-
-                // Check if strategy type changed
-                let current_name = strategy.read().await.name().to_string();
-                if new_strategy_name != current_name && !new_strategy_name.is_empty() {
-                    info!(
-                        "🔄 Strategy switch: {} → {}",
-                        current_name, new_strategy_name
-                    );
-                    match crate::strategy::create_strategy_with_params(
-                        &new_strategy_name,
-                        if params_str.is_empty() {
-                            None
-                        } else {
-                            Some(&params_str)
-                        },
-                    ) {
-                        Ok(new_strat) => {
-                            *strategy.write().await = new_strat;
-                            info!("✅ Strategy switched to: {}", new_strategy_name);
-                        }
-                        Err(e) => {
-                            warn!(
-                                "❌ Strategy switch failed: {} — keeping {}",
-                                e, current_name
-                            );
-                            let mut ds = dash_state.write().await;
-                            ds.strategy_name = current_name;
-                        }
-                    }
-                } else if !params_str.is_empty() {
-                    info!("🔧 Strategy params update: {:?}", params);
-                    // Recreate with new params
-                    match crate::strategy::create_strategy_with_params(
-                        &current_name,
-                        Some(&params_str),
-                    ) {
-                        Ok(new_strat) => {
-                            *strategy.write().await = new_strat;
-                            info!("✅ Strategy recreated with new params");
-                        }
-                        Err(e) => {
-                            warn!(
-                                "⚠ Failed to recreate strategy: {} — clearing state instead",
-                                e
-                            );
-                            strategy.read().await.clear_filled_state();
-                        }
-                    }
-                }
-            }
-        }
+        apply_pending_strategy_update(&dash_state, &strategy).await;
     }
 
     Ok(())
+}
+
+async fn apply_pending_strategy_update(
+    dash_state: &Arc<RwLock<dashboard::server::DashboardState>>,
+    execution_strategy: &Arc<tokio::sync::RwLock<Box<dyn strategy::Strategy>>>,
+) -> bool {
+    let (requested_name, params) = {
+        let mut dashboard = dash_state.write().await;
+        if !dashboard.strategy_config_changed {
+            return false;
+        }
+        dashboard.strategy_config_changed = false;
+        (
+            dashboard.strategy_name.clone(),
+            dashboard.strategy_params.clone(),
+        )
+    };
+
+    let current_name = execution_strategy.read().await.name().to_string();
+    let target_name = if requested_name.is_empty() {
+        current_name.clone()
+    } else {
+        requested_name
+    };
+    let mut params = params.into_iter().collect::<Vec<_>>();
+    params.sort_by(|left, right| left.0.cmp(&right.0));
+    let params_string = params
+        .iter()
+        .map(|(key, value)| format!("{key}={value}"))
+        .collect::<Vec<_>>()
+        .join(",");
+
+    if target_name == current_name && params_string.is_empty() {
+        return false;
+    }
+    if target_name != current_name {
+        info!("🔄 Strategy switch: {current_name} → {target_name}");
+    } else {
+        info!("🔧 Strategy params update: {:?}", params);
+    }
+
+    match strategy::create_strategy_with_params(
+        &target_name,
+        (!params_string.is_empty()).then_some(params_string.as_str()),
+    ) {
+        Ok(new_strategy) => {
+            *execution_strategy.write().await = new_strategy;
+            dash_state.write().await.strategy_name = target_name.clone();
+            info!("✅ Execution strategy active: {target_name}");
+            true
+        }
+        Err(error) => {
+            warn!("❌ Strategy update failed: {error} — keeping {current_name}");
+            dash_state.write().await.strategy_name = current_name;
+            false
+        }
+    }
 }
 
 async fn run_arcus_live_trading(settings: Config) -> Result<()> {
@@ -2265,6 +2257,7 @@ async fn run_arcus_live_trading(settings: Config) -> Result<()> {
             .await
             .last_prices
             .insert(symbol.clone(), (bid + ask) / 2.0);
+        apply_pending_strategy_update(&dash_state, &strategy).await;
         if dash_state.read().await.trading_paused {
             continue;
         }
