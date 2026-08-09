@@ -5,7 +5,7 @@
 #   1. cp .env.example .env
 #   2. 编辑 .env 中对应网络前缀的 API 凭证
 #   3. docker compose up -d
-#   4. 访问 http://localhost:3028 查看 Dashboard
+#   4. 访问 http://localhost:4028 查看 Dashboard
 # ═══════════════════════════════════════════════════════
 
 services:
@@ -15,7 +15,7 @@ services:
     restart: unless-stopped
     env_file: .env
     ports:
-      - "3028:3028"
+      - "4028:4028"
     volumes:
       # PnL 数据持久化 (交易历史、净值曲线)
       - multi-venue-bot-data:/app/data
@@ -24,7 +24,7 @@ services:
     environment:
       - RUST_LOG=${RUST_LOG:-info}
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:3028/api/status"]
+      test: ["CMD", "curl", "-sf", "http://localhost:4028/api/status"]
       interval: 30s
       timeout: 5s
       retries: 3

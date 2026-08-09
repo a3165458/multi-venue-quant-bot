@@ -36,7 +36,7 @@ nano .env   # 分别填写 MAINNET / ROBINHOOD 前缀的凭据
 docker compose up -d
 
 # 4. 查看 Dashboard
-# 浏览器打开 http://localhost:3028
+# 浏览器打开 http://localhost:4028
 ```
 
 ### 方式二：本地编译
@@ -164,7 +164,7 @@ cargo run --release -- backtest --strategy grid \
 
 ## 📊 Dashboard
 
-访问 `http://localhost:3028`（默认端口）
+访问 `http://localhost:4028`（默认端口）
 
 | 功能 | 说明 |
 |------|------|

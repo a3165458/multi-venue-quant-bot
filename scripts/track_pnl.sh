@@ -6,8 +6,8 @@ cd "$(dirname "$0")/.."
 mkdir -p backtests/tracking
 F="backtests/tracking/live_pnl.csv"
 TS=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-ST=$(curl -s --max-time 8 http://localhost:3028/api/status 2>/dev/null)
-POS=$(curl -s --max-time 8 http://localhost:3028/api/positions 2>/dev/null)
+ST=$(curl -s --max-time 8 http://localhost:4028/api/status 2>/dev/null)
+POS=$(curl -s --max-time 8 http://localhost:4028/api/positions 2>/dev/null)
 [ -z "$ST" ] && exit 0   # dashboard 不可达则跳过本次，不写脏数据
 val(){ echo "$1" | grep -o "\"$2\":[0-9.eE+-]*" | head -1 | cut -d: -f2; }
 EQ=$(val "$ST" equity); TR=$(val "$ST" total_realized_pnl); DR=$(val "$ST" daily_realized_pnl)

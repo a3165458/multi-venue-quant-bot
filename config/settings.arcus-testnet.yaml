@@ -53,7 +53,7 @@ risk:
 dashboard:
   enabled: true
   host: "127.0.0.1"
-  port: 3028
+  port: 4028
   refresh_interval_ms: 1000
 
 logging:
