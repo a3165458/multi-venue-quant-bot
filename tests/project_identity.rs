@@ -59,3 +59,25 @@ fn dashboard_brand_describes_the_multi_venue_product() {
         );
     }
 }
+
+#[test]
+fn dashboard_uses_the_dedicated_4028_port_everywhere() {
+    for path in [
+        "src/main.rs",
+        "config/settings.yaml",
+        "config/settings.robinhood.yaml",
+        "config/settings.arcus.yaml",
+        "config/settings.arcus-testnet.yaml",
+        "Dockerfile",
+        "docker-compose.yml",
+        "scripts/track_pnl.sh",
+        "README.md",
+    ] {
+        let contents = fs::read_to_string(path).unwrap();
+        assert!(contents.contains("4028"), "{path} does not use port 4028");
+        assert!(
+            !contents.contains("3028"),
+            "{path} still references the conflicting port 3028"
+        );
+    }
+}
