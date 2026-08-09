@@ -82,7 +82,7 @@ enum Commands {
     Dashboard {
         #[arg(long, default_value = "0.0.0.0")]
         host: String,
-        #[arg(short, long, default_value = "2028")]
+        #[arg(short, long, default_value = "3028")]
         port: u16,
     },
 
@@ -501,7 +501,7 @@ async fn run_live_trading(config_path: &str) -> Result<()> {
     }
 
     // Start dashboard server
-    let dash_port = settings.get_int("dashboard.port").unwrap_or(2028) as u16;
+    let dash_port = settings.get_int("dashboard.port").unwrap_or(3028) as u16;
     let dash_host = settings
         .get_string("dashboard.host")
         .unwrap_or_else(|_| "127.0.0.1".to_string());
@@ -2069,7 +2069,7 @@ async fn run_arcus_live_trading(settings: Config) -> Result<()> {
         quant_agent: dashboard::quant_agent::AgentLedger::load(venue.as_str()),
         ..dashboard::server::DashboardState::default()
     }));
-    let dashboard_port = settings.get_int("dashboard.port").unwrap_or(2028) as u16;
+    let dashboard_port = settings.get_int("dashboard.port").unwrap_or(3028) as u16;
     let dashboard_host = settings
         .get_string("dashboard.host")
         .unwrap_or_else(|_| "127.0.0.1".to_string());

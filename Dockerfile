@@ -48,11 +48,11 @@ RUN mkdir -p /app/data /app/logs && chown -R quantbot:quantbot /app
 USER quantbot
 
 # Expose dashboard port
-EXPOSE 2028
+EXPOSE 3028
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD curl -sf http://localhost:2028/api/status || exit 1
+    CMD curl -sf http://localhost:3028/api/status || exit 1
 
 # Default command: live trading
 CMD ["multi-venue-quant-bot", "live"]
