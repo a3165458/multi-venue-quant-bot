@@ -81,3 +81,14 @@ fn dashboard_uses_the_dedicated_4028_port_everywhere() {
         );
     }
 }
+
+#[test]
+fn both_live_exchange_loops_apply_dashboard_strategy_updates() {
+    let main = fs::read_to_string("src/main.rs").unwrap();
+    assert_eq!(
+        main.matches("apply_pending_strategy_update(&dash_state, &strategy)")
+            .count(),
+        2,
+        "Lighter and Arcus live loops must both apply dashboard strategy changes"
+    );
+}

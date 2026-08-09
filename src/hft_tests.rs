@@ -7,7 +7,45 @@ use crate::hft::{
     StandardRateBudget,
 };
 use crate::lighter::{types::WsMessage, websocket::LighterWebSocket};
-use crate::{Cli, Commands};
+use crate::{apply_pending_strategy_update, dashboard, strategy, Cli, Commands};
+use std::sync::Arc;
+use tokio::sync::RwLock;
+
+#[tokio::test]
+async fn pending_dashboard_strategy_switch_replaces_the_execution_strategy() {
+    let execution_strategy = Arc::new(RwLock::new(
+        strategy::create_strategy_with_params("trend_following", None).unwrap(),
+    ));
+    let mut dashboard_state = dashboard::server::DashboardState {
+        strategy_name: "grid_trading".into(),
+        strategy_config_changed: true,
+        ..Default::default()
+    };
+    dashboard_state
+        .strategy_params
+        .insert("grid_count".into(), "6".into());
+    let dashboard_state = Arc::new(RwLock::new(dashboard_state));
+
+    assert!(apply_pending_strategy_update(&dashboard_state, &execution_strategy).await);
+    assert_eq!(execution_strategy.read().await.name(), "grid_trading");
+    assert!(!dashboard_state.read().await.strategy_config_changed);
+}
+
+#[tokio::test]
+async fn invalid_dashboard_strategy_switch_fails_closed() {
+    let execution_strategy = Arc::new(RwLock::new(
+        strategy::create_strategy_with_params("trend_following", None).unwrap(),
+    ));
+    let dashboard_state = Arc::new(RwLock::new(dashboard::server::DashboardState {
+        strategy_name: "not-a-strategy".into(),
+        strategy_config_changed: true,
+        ..Default::default()
+    }));
+
+    assert!(!apply_pending_strategy_update(&dashboard_state, &execution_strategy).await);
+    assert_eq!(execution_strategy.read().await.name(), "trend_following");
+    assert_eq!(dashboard_state.read().await.strategy_name, "trend_following");
+}
 
 #[test]
 fn subscription_plan_respects_per_connection_limit() {
