@@ -1,5 +1,7 @@
 // src/main.rs
 mod backtest;
+#[allow(dead_code)]
+mod arcus;
 mod dashboard;
 mod data;
 mod hft;
