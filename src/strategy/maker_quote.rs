@@ -552,10 +552,15 @@ impl MakerQuoteStrategy {
             .inventory_since
             .map(|since| now.signed_duration_since(since))
             .unwrap_or_else(Duration::zero);
-        // Never IOC-flatten. 08-27 HIP-3 taker closes were -21.8 bps vs maker
-        // -4.4 bps; taking the touch to unwind is worse than waiting on ALO.
+        let ioc = age >= Duration::seconds(self.flatten_ioc_secs);
         let improve = age >= Duration::seconds(self.flatten_mid_secs);
-        let (price, post_only, stage) = if improve {
+        let (price, post_only, stage) = if ioc {
+            (
+                if long { bid.price } else { ask.price },
+                false,
+                "ioc near-touch",
+            )
+        } else if improve {
             let improved = if long {
                 Self::ceil_tick(mid.max(bid.price + tick).min(ask.price), tick)
                     .clamp(bid.price + tick, ask.price)
@@ -580,8 +585,10 @@ impl MakerQuoteStrategy {
             Side::Sell => state.sell.as_ref(),
         };
         let entering = state.inventory_since == Some(now);
-        let should_emit = if entering {
-            current.is_none_or(|q| entering || (q.price - price).abs() / price * 10_000.0 > 0.1)
+        let should_emit = if ioc || entering {
+            current.is_none_or(|q| {
+                entering || (q.price - price).abs() / price * 10_000.0 > 0.1
+            })
         } else {
             self.desired_quote(price, qty, Some(1.0), now, current)
                 .is_some()
@@ -919,31 +926,17 @@ impl Strategy for MakerQuoteStrategy {
                 state.inventory_since = Some(now);
             }
 
-            if self.flatten_only {
-                if position.abs() > 1e-12 {
-                    self.flatten_inventory(
-                        &mut all_signals,
-                        state,
-                        symbol,
-                        ob,
-                        position,
-                        mid,
-                        now,
-                        eff_per_market_notional,
-                    );
-                } else {
-                    // Idle flatten must not open a new book. The previous
-                    // fallthrough quoted both ALO sides and burned HIP-3 L1
-                    // request budget after inventory hit zero.
-                    cancel_quotes_immediately(
-                        &mut all_signals,
-                        state,
-                        symbol,
-                        ob.market_id,
-                        ob.timestamp,
-                        "flatten_only idle",
-                    );
-                }
+            if self.flatten_only && position.abs() > 1e-12 {
+                self.flatten_inventory(
+                    &mut all_signals,
+                    state,
+                    symbol,
+                    ob,
+                    position,
+                    mid,
+                    now,
+                    eff_per_market_notional,
+                );
                 continue;
             }
 
@@ -2248,17 +2241,17 @@ mod tests {
 
         snap = join_book("io:SNDK", 1_700_000_016, 1471.6, 1471.9);
         snap.positions.insert("io:SNDK".into(), 0.04);
-        let late = s.evaluate(&snap).await.expect("t16");
-        if let Some(rows) = late {
-            assert!(
-                rows.iter().all(|x| x.post_only || x.action == SignalAction::Cancel),
-                "flatten must not IOC after flatten_ioc_secs: {rows:?}"
-            );
-        }
+        let ioc = s.evaluate(&snap).await.expect("t16").expect("ioc");
+        let ioc_sell = ioc
+            .iter()
+            .find(|x| x.side == Side::Sell && x.action == SignalAction::Place)
+            .expect("ioc sell");
+        assert!(!ioc_sell.post_only && ioc_sell.risk_reducing);
+        assert!((ioc_sell.price - 1471.6).abs() < 1e-9);
     }
 
     #[tokio::test]
-    async fn flatten_only_flat_inventory_does_not_place() {
+    async fn flatten_only_quotes_two_sided_when_flat() {
         let s = MakerQuoteStrategy::new(6.0, 50.0, 0.0, 0, 80.0, 160.0, false, 20, 6.0, 10.0)
             .expect("valid")
             .with_quote_mode(QuoteMode::JoinBest)
@@ -2266,13 +2259,13 @@ mod tests {
             .with_flatten_cycle(true, 2, 6, 15)
             .expect("flatten");
         let rest = join_book("io:SNDK", 1_700_000_000, 1471.6, 1471.9);
-        let signals = s.evaluate(&rest).await.expect("idle");
-        assert!(
-            signals
-                .as_ref()
-                .is_none_or(|rows| rows.iter().all(|row| row.action == SignalAction::Cancel)),
-            "flatten_only with a flat book must not open maker quotes: {signals:?}"
-        );
+        let signals = s.evaluate(&rest).await.expect("idle").expect("quotes");
+        assert!(signals.iter().any(|row| {
+            row.side == Side::Buy && row.action == SignalAction::Place && row.post_only
+        }));
+        assert!(signals.iter().any(|row| {
+            row.side == Side::Sell && row.action == SignalAction::Place && row.post_only
+        }));
     }
 
     #[tokio::test]

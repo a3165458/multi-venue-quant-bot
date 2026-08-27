@@ -1523,7 +1523,7 @@ fn maker_dashboard_params(settings: &Config) -> HashMap<String, String> {
     let booleans = [
         ("trend_filter", true),
         ("cash_open_guard", true),
-        ("flatten_only", false),
+        ("flatten_only", true),
     ];
     for (key, default) in booleans {
         let value = settings
