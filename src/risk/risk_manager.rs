@@ -3,22 +3,40 @@ use chrono::Utc;
 use config::Config;
 use tracing::{info, warn};
 
-use crate::lighter::types::{Position, Side, TradeSignal};
+use crate::lighter::types::{Position, Side, SignalAction, TradeSignal};
 use crate::risk::profitability::{ProfitabilityGuard, SignalEconomics};
+
+/// Current exchange exposure used to validate a projected order.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct RiskExposure {
+    /// Signed position notional for the signal's symbol.
+    pub symbol_position_notional: f64,
+    /// Existing resting buy notional for the signal's symbol.
+    pub symbol_buy_open_notional: f64,
+    /// Existing resting sell notional for the signal's symbol.
+    pub symbol_sell_open_notional: f64,
+    /// Sum across symbols of the larger directional outcome if all buys or all sells fill.
+    pub total_worst_case_notional: f64,
+}
+
+pub(crate) fn worst_case_symbol_notional(position: f64, buy_orders: f64, sell_orders: f64) -> f64 {
+    (position + buy_orders)
+        .abs()
+        .max((position - sell_orders).abs())
+}
 
 /// 风险管理器
 pub struct RiskManager {
     max_drawdown_pct: f64,
     daily_loss_limit_pct: f64,
-    #[allow(dead_code)]
     max_leverage: f64,
     max_position_size: f64,
     max_single_trade_pct: f64,
-    #[allow(dead_code)]
     max_total_position_pct: f64,
     current_daily_pnl: f64,
     current_equity: f64,
     initial_equity: f64,
+    equity_initialized: bool,
     /// Per-position stop-loss percentage (e.g., 0.05 = 5%)
     position_stop_loss_pct: f64,
     /// Per-position take-profit percentage (e.g., 0.08 = 8%)
@@ -90,6 +108,7 @@ impl RiskManager {
             current_daily_pnl: 0.0,
             current_equity: 10000.0,
             initial_equity: 10000.0,
+            equity_initialized: false,
             position_stop_loss_pct,
             position_take_profit_pct,
             emergency_triggered: false,
@@ -98,13 +117,38 @@ impl RiskManager {
         })
     }
 
+    pub fn override_profitability_schedule(
+        &mut self,
+        entry_fee_bps: f64,
+        exit_fee_bps: f64,
+        adverse_selection_bps: f64,
+    ) -> Result<()> {
+        self.profitability_guard = self.profitability_guard.clone().with_schedule(
+            entry_fee_bps,
+            exit_fee_bps,
+            adverse_selection_bps,
+        )?;
+        Ok(())
+    }
+
     /// 更新当前权益
     #[allow(dead_code)]
     pub fn update_equity(&mut self, equity: f64) {
         self.current_equity = equity;
-        // If initial_equity was never set from real data, sync it
-        if (self.initial_equity - 10000.0).abs() < 1.0 {
+        if !self.equity_initialized {
             self.initial_equity = equity;
+            self.equity_initialized = true;
+        }
+    }
+
+    /// Restore the live-account drawdown baseline after a process restart.
+    pub fn restore_equity_baseline(&mut self, initial_equity: f64, current_equity: f64) {
+        if initial_equity.is_finite() && initial_equity > 0.0 {
+            self.initial_equity = initial_equity;
+            self.equity_initialized = true;
+        }
+        if current_equity.is_finite() && current_equity > 0.0 {
+            self.current_equity = current_equity;
         }
     }
 
@@ -133,20 +177,40 @@ impl RiskManager {
         self.current_daily_pnl = 0.0;
     }
 
-    /// 检查交易信号是否通过风控
+    /// Check a signal without an exchange exposure snapshot.
+    ///
+    /// Live trading paths should use [`Self::check_signal_with_exposure`].
     pub async fn check_signal(&self, signal: &TradeSignal) -> Result<bool> {
-        // Block all new signals if emergency close was triggered
-        if self.emergency_triggered {
-            warn!("❌ 风控拒绝: 紧急平仓已触发，禁止新交易");
+        self.check_signal_with_exposure(signal, RiskExposure::default())
+            .await
+    }
+
+    /// Validate the projected post-order symbol and account exposure.
+    pub async fn check_signal_with_exposure(
+        &self,
+        signal: &TradeSignal,
+        exposure: RiskExposure,
+    ) -> Result<bool> {
+        if signal.action == SignalAction::Cancel {
+            return Ok(true);
+        }
+
+        let trade_value = signal.price * signal.quantity;
+        if !signal.price.is_finite()
+            || !signal.quantity.is_finite()
+            || signal.price <= 0.0
+            || signal.quantity <= 0.0
+            || !trade_value.is_finite()
+        {
+            warn!("❌ 风控拒绝: 非法价格或数量");
             return Ok(false);
         }
 
-        // 检查1：净收益门槛。明确减仓信号绕过收益要求，但仍接受其余风控检查。
-        let economics = if signal.risk_reducing {
-            SignalEconomics::exit()
-        } else {
-            SignalEconomics::entry(signal.expected_edge_bps)
-        };
+        let economics = SignalEconomics::from_signal(
+            signal.expected_edge_bps,
+            signal.risk_reducing,
+            signal.post_only,
+        );
         let profitability = self.profitability_guard.evaluate(economics);
         if !profitability.allowed {
             warn!(
@@ -162,7 +226,21 @@ impl RiskManager {
             return Ok(false);
         }
 
-        // 检查2：每日亏损限制
+        // Exit orders must remain available after loss or emergency gates fire.
+        if signal.risk_reducing {
+            return Ok(true);
+        }
+
+        if self.emergency_triggered {
+            warn!("❌ 风控拒绝: 紧急平仓已触发，禁止新增风险");
+            return Ok(false);
+        }
+
+        if !self.initial_equity.is_finite() || self.initial_equity <= 0.0 {
+            warn!("❌ 风控拒绝: 账户权益未初始化或为 0");
+            return Ok(false);
+        }
+
         let daily_loss = -self.current_daily_pnl / self.initial_equity;
         if daily_loss >= self.daily_loss_limit_pct {
             warn!(
@@ -172,37 +250,58 @@ impl RiskManager {
             return Ok(false);
         }
 
-        // 检查3：最大回撤
         let drawdown = (self.initial_equity - self.current_equity) / self.initial_equity;
         if drawdown >= self.max_drawdown_pct {
             warn!("❌ 风控拒绝: 已超过最大回撤限制 ({:.2}%)", drawdown * 100.0);
             return Ok(false);
         }
 
-        // 检查4：单笔交易大小（杠杆感知：考虑最大杠杆倍数）
-        let trade_value = signal.price * signal.quantity;
-        let leverage_factor = if self.max_leverage > 1.0 {
-            self.max_leverage
-        } else {
-            1.0
-        };
-        let max_trade_value = self.current_equity * self.max_single_trade_pct * leverage_factor;
+        let max_trade_value = self.current_equity * self.max_single_trade_pct;
         if trade_value > max_trade_value {
             warn!(
-                "❌ 风控拒绝: 交易金额 ${:.2} 超过单笔限制 ${:.2} (equity*{:.0}%*{:.0}x)",
-                trade_value,
-                max_trade_value,
-                self.max_single_trade_pct * 100.0,
-                leverage_factor
+                "❌ 风控拒绝: 交易金额 ${:.2} 超过单笔限制 ${:.2}",
+                trade_value, max_trade_value
             );
             return Ok(false);
         }
 
-        // 检查5：持仓大小
-        if trade_value > self.max_position_size {
+        let current_symbol_worst = worst_case_symbol_notional(
+            exposure.symbol_position_notional,
+            exposure.symbol_buy_open_notional,
+            exposure.symbol_sell_open_notional,
+        );
+        let (projected_buy_orders, projected_sell_orders) = match signal.side {
+            Side::Buy => (
+                exposure.symbol_buy_open_notional + trade_value,
+                exposure.symbol_sell_open_notional,
+            ),
+            Side::Sell => (
+                exposure.symbol_buy_open_notional,
+                exposure.symbol_sell_open_notional + trade_value,
+            ),
+        };
+        let projected_symbol = worst_case_symbol_notional(
+            exposure.symbol_position_notional,
+            projected_buy_orders,
+            projected_sell_orders,
+        );
+        if projected_symbol > self.max_position_size {
             warn!(
-                "❌ 风控拒绝: 交易金额 ${:.2} 超过最大持仓限制 ${:.2}",
-                trade_value, self.max_position_size
+                "❌ 风控拒绝: {} 最坏方向敞口 ${:.2} 超过单市场限制 ${:.2}",
+                signal.symbol, projected_symbol, self.max_position_size
+            );
+            return Ok(false);
+        }
+
+        let total_cap_pct = self.max_total_position_pct.max(0.0);
+        let leverage_cap = self.max_leverage.max(0.0);
+        let max_total_notional = self.current_equity * total_cap_pct.min(leverage_cap);
+        let projected_total =
+            (exposure.total_worst_case_notional - current_symbol_worst).max(0.0) + projected_symbol;
+        if projected_total > max_total_notional {
+            warn!(
+                "❌ 风控拒绝: 预计最坏方向总敞口 ${:.2} 超过账户限制 ${:.2}",
+                projected_total, max_total_notional
             );
             return Ok(false);
         }
@@ -212,6 +311,9 @@ impl RiskManager {
 
     /// 检查是否需要紧急平仓
     pub fn should_emergency_close(&self) -> bool {
+        if !self.initial_equity.is_finite() || self.initial_equity <= 0.0 {
+            return false;
+        }
         let drawdown = (self.initial_equity - self.current_equity) / self.initial_equity;
 
         // 超过最大回撤的1.5倍时紧急平仓
@@ -373,8 +475,13 @@ impl RiskManager {
 
     /// 获取当前风控状态
     pub fn status(&self) -> RiskStatus {
-        let drawdown = (self.initial_equity - self.current_equity) / self.initial_equity;
-        let daily_loss = -self.current_daily_pnl / self.initial_equity;
+        let baseline = if self.initial_equity.is_finite() && self.initial_equity > 0.0 {
+            self.initial_equity
+        } else {
+            1.0
+        };
+        let drawdown = (self.initial_equity - self.current_equity) / baseline;
+        let daily_loss = -self.current_daily_pnl / baseline;
 
         RiskStatus {
             current_equity: self.current_equity,

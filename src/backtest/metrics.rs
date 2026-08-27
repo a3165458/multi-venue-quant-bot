@@ -39,6 +39,7 @@ fn format_summary(results: &BacktestResults) -> String {
   基准收益:     {:.2}%
   超额收益:     {:.2}%
   总手续费:     ${:.4}
+  逆向选择成本: ${:.4}
 
 绩效指标:
   夏普比率:     {:.3}
@@ -60,6 +61,10 @@ fn format_summary(results: &BacktestResults) -> String {
   强平次数:     {}
   超软上限K线:  {}
   收益门槛拦截: {}
+  持仓上限拦截: {}
+  账户上限拦截: {}
+  止损退出:     {}
+  止盈退出:     {}
 
 ========================================
 "#,
@@ -69,6 +74,7 @@ fn format_summary(results: &BacktestResults) -> String {
         results.benchmark_return * 100.0,
         results.excess_return * 100.0,
         results.total_commission,
+        results.total_adverse_selection,
         results.sharpe_ratio,
         results.max_drawdown * 100.0,
         results.profit_factor,
@@ -84,6 +90,10 @@ fn format_summary(results: &BacktestResults) -> String {
         results.liq_count,
         results.bars_over_soft_cap,
         results.blocked_by_profitability,
+        results.blocked_by_position_limit,
+        results.blocked_by_total_position_limit,
+        results.stop_loss_exits,
+        results.take_profit_exits,
     )
 }
 

@@ -1,6 +1,7 @@
 # Multi-Venue Quant Bot 🤖
 
-基于 Rust 的多交易所自动化量化交易机器人，同时支持 Lighter 与 Arcus。
+基于 Rust 的多交易所自动化量化交易机器人，支持 Lighter、Arcus 与 Aster Pro
+Futures V3 实盘路径。
 
 ## ✨ 功能
 
@@ -18,7 +19,7 @@
 
 ### 前置条件
 
-- Lighter 或 Arcus 账户（已创建相应 API Key）
+- Lighter、Arcus 或 Aster 账户（已创建相应 API Key/API Wallet）
 - Docker（推荐）或 Rust 1.80+
 
 ### 方式一：Docker 部署（推荐）
@@ -30,7 +31,7 @@ cd multi-venue-quant-bot
 
 # 2. 创建并编辑单一环境文件
 cp .env.example .env
-nano .env   # 分别填写 MAINNET / ROBINHOOD 前缀的凭据
+nano .env   # 只填写目标 venue 对应前缀的凭据，不要放钱包 L1 私钥
 
 # 3. 一键启动
 docker compose up -d
@@ -88,17 +89,18 @@ cargo run --release -- scan \
 
 ## ⚙️ 配置说明
 
-### 单文件、网络隔离的凭据（每个网络各三项）
+### 单文件、venue 隔离的凭据
 
-两组凭据保存在同一个 `.env`，但使用 `LIGHTER_MAINNET_*` 和
-`LIGHTER_ROBINHOOD_*` 前缀隔离。程序根据配置文件中的 `lighter.chain_id`
-选择对应的一组，不会读取无前缀的旧凭据。
+所有凭据保存在同一个 `.env`，但通过 `LIGHTER_*`、`ARCUS_*`、`ASTER_*`
+venue 前缀隔离。`TRADING_VENUE` 优先选择 profile；旧 `LIGHTER_NETWORK`
+仍保留兼容。Dashboard 对签名密钥只返回 configured/length/tail，明文只写不回显，
+提交空 secret 不会覆盖已有值。
 
 | 变量 | 说明 | 对应 API Key 生成弹窗字段 |
 |------|------|--------------------------|
-| `LIGHTER_SECRET_KEY` | API 私钥 (hex)，注意不是钱包 L1 私钥 | 「私钥」（弹窗关闭后无法再查看） |
-| `LIGHTER_ACCOUNT_INDEX` | 账户编号 | 「您的账户索引」 |
-| `LIGHTER_API_KEY_INDEX` | API Key 槽位编号 | 「API 密钥索引」 |
+| `LIGHTER_<VENUE>_SECRET_KEY` | API 私钥 (hex)，注意不是钱包 L1 私钥 | 「私钥」（弹窗关闭后无法再查看） |
+| `LIGHTER_<VENUE>_ACCOUNT_INDEX` | 账户编号 | 「您的账户索引」 |
+| `LIGHTER_<VENUE>_API_KEY_INDEX` | API Key 槽位编号 | 「API 密钥索引」 |
 
 「公钥」无需填写；网络选择由 `--config` 决定（主网 `settings.yaml`，Robinhood Chain `settings.robinhood.yaml`，两边账户凭据独立）。
 
@@ -162,6 +164,43 @@ cargo run --release -- backtest --strategy grid \
 
 市场符号与 ID 在启动时从交易所动态拉取注册，无需手工维护映射。
 
+## Aster Pro Futures V3 接入边界
+
+`aster-mainnet` 使用 `https://fapi.asterdex.com`、`wss://fstream.asterdex.com` 和
+`config/settings.aster.yaml`。切换到目标子账户后，单独创建 Pro API Wallet：
+
+- `ASTER_MAINNET_SIGNER_ADDRESS`：API Wallet 公钥地址（V3 内部称 signer）。
+- `ASTER_MAINNET_SIGNER_PRIVATE_KEY`：API Wallet 私钥，只写；绝不能使用资金钱包/L1 私钥。
+
+新配置默认 `start_paused=true`，Dashboard 端口为 4028，且使用
+`data/aster-mainnet/` 独立运行目录。Aster 路径仅允许 `maker_quote`，要求 One-way
+持仓和逐仓模式（程序只校验，不自动修改账户），并在 WS 断线、listenKey 失效、
+countdownCancelAll 失败或下单状态不确定时
+暂停、逐合约撤单并退出。首次启动必须先人工核对 V3 子账户、API Wallet 权限、
+BTCUSDT 合约规格、余额、实际 maker/taker 费率与小额下单结果，再从 Dashboard 手动
+resume：
+
+```bash
+./scripts/run_venue_live.sh aster-mainnet
+
+# 公开 K 线下载不需要 API Wallet 凭据
+cargo run --release -- download-aster --symbols BTCUSDT --interval 1h \
+  --start 2026-01-01 --end 2026-08-17
+```
+
+默认暂停期间会运行 Aster Shadow Maker：只根据实时 BBO 生成虚拟报价/成交，记录事件
+延迟、策略耗时、预计撤挂请求、虚拟交易量以及 1s/5s/30s markout，绝不提交交易所
+订单。100ms depth20 流同时估算排队在前的名义金额，并对比 cancel+place 与单次 amend
+的请求节省。指标展示在 Dashboard，并原子保存到
+`data/aster-mainnet/shadow_metrics.json`。
+
+`trading.hft_shadow` 会并行运行 join-BBO 250ms/1000ms 与 1bps/2bps 偏移四组近盘口
+实验，requote 按单次 PUT amend 建模（虚拟报价不离场），并按 5s markout、虚拟量、请求频率
+标出领先 profile。1s markout 过毒或盘口交叉/锁定时会撤掉虚拟报价，不会推荐该 profile，
+也绝不会自动 resume。结果写入 `data/aster-mainnet/hft_shadow_metrics.json`；该实验器没有
+交易所客户端，不能下单。Aster 实盘 `maker_quote` 重报价在已知 `orderId` 时走同一条
+`PUT /fapi/v3/order` 路径；默认仍暂停，不会自动 resume。
+
 ## 📊 Dashboard
 
 访问 `http://localhost:4028`（默认端口）
@@ -173,9 +212,16 @@ cargo run --release -- backtest --strategy grid \
 | 💼 Portfolio | 持仓和挂单详情 |
 | 📜 History | 完整交易历史 + CSV 导出 + 平均持仓时间 |
 | ⚙️ Settings | 系统状态、风控限制、主题切换（不暴露账户编号） |
-| 🤖 AI Lab | 回测引擎 + AI 参数优化 + OpenCode GLM5 联合回测 |
+| 🤖 OMP Agent | 原生 OMP Web 对话入口；可执行真实回测、策略研究和受审批保护的参数提案 |
 
 ## 📝 更新历史 / 回测记录
+
+### 2026-08-10
+
+- **OMP Web Agent**
+  - `/ai` 改为原生 OMP Collab Web 入口，不再在浏览器内保存第三方模型 API Key
+  - 对话可直接调用仓库工具执行真实回测、样本外验证、策略修改和优化
+  - 实盘参数仍通过服务端提案与人工 `APPLY <proposal-id>` 审批；Agent 不能自批，部署与恢复交易也不会自动执行
 
 ### 2026-07-19 (二)
 

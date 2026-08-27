@@ -3,9 +3,15 @@ exchange:
   environment: mainnet
 
 trading:
-  # Arcus market IDs are discovered at startup; 1 is BTC-USD in the documented universe.
-  markets: [1]
-  max_open_orders: 8
+  # Safety gate: strategy changes require an audited proposal and explicit human approval.
+  # Startup still reconciles state and cancels stale orders, but emits no entries.
+  start_paused: true
+  # Arcus maker allowlist selected by 30-day 1m train/holdout screening:
+  # 8=ZEC 9=AMD 14=GOOGL 22=USO 33=SNDK 34=DRAM 35=PLTR 36=CRWV 37=ORCL 39=BE
+  markets: [8, 9, 14, 22, 33, 34, 35, 36, 37, 39]
+  # 10 markets × 2 sides. The live guard combines REST count with the local
+  # acknowledgement mirror so asynchronous refresh cannot overfill these slots.
+  max_open_orders: 20
   strategies:
     grid_trading:
       enabled: false
@@ -13,7 +19,7 @@ trading:
       investment_per_grid: 30
       price_deviation: 0.004
     trend_following:
-      enabled: true
+      enabled: false
       # 2026-08-09 整年扫描（Arcus BTC 1h 2025-08-09~2026-08-09，capital=1730）:
       #   基线: BTC buy&hold -44.4%, grid 12/30/0.004 -8.2%, 旧 trend 7/21/0.05/0.06 +3.5% (q1 -5.8%)
       #   终选 7/50/0.08/0.12/cmin0.005/clb3/notional=430: 全年 +10.8%, Sharpe 1.40, MaxDD 4.99%
@@ -30,20 +36,56 @@ trading:
       adx_period: 14
       confirm_slope_min: 0.005
       confirm_lookback: 3
+    maker_quote:
+      # 做市报价（post-only/ALO）。2026-08-10 上线 v2 多市场增强版（30bps + 自适应 + 偏斜），
+      # 回测见 backtests/results/ab/MAKER-V2-MULTIMARKET-2026-08-10.md。
+      # 实盘参数由 data/arcus-mainnet/strategy_config.json 覆盖（Dashboard 可改）。
+      enabled: true
+      spread_bps: 30.0
+      per_quote_notional: 50
+      requote_threshold_bps: 2.0
+      requote_cooldown_secs: 5
+      soft_cap_notional: 80.0
+      hard_cap_notional: 100.0
+      trend_filter: true
+      ema_period: 20
+      trend_block_bps: 6.0
+      min_quote_notional: 5.0
+      # ── 多市场增强（v2）──
+      # 自适应价差：实际价差 = spread_bps + vol_multiplier * 近期波动(bps)。
+      vol_window: 24
+      vol_multiplier: 0.5
+      # EMA/波动按每个市场的事件时间独立采样，避免其他市场 BBO 重复推进状态。
+      cash_open_guard: true
+      cash_open_guard_before_minutes: 5
+      cash_open_guard_after_minutes: 20
+      jump_circuit_breaker_bps: 20.0
+      max_book_spread_bps: 40.0
+      circuit_breaker_cooldown_secs: 60
+      feature_interval_secs: 60
+      # 库存价格偏斜（bps）：累库侧推远、减库侧拉近，主动把库存带回零。
+      max_skew_bps: 3.0
+      # 全市场单边风险预算（USD）：每市场单边 = min(per_quote_notional, budget/市场数)。
+      total_quote_budget: 600.0
   position:
     max_single_trade_percent: 50
-    max_total_position_percent: 200
+    max_total_position_percent: 25
     risk_per_trade_percent: 1.5
 
+# Maker entry is post-only at 0 bps. Inventory exits and risk closes are modeled
+# as taker execution at the observed 2.25 bps Arcus rate. Conservative validation
+# additionally requires quote penetration, partial fills, and adverse selection.
 profitability:
   enabled: true
-  entry_fee_bps: 2.0
-  exit_fee_bps: 2.0
-  entry_slippage_bps: 3.0
-  exit_slippage_bps: 3.0
+  entry_fee_bps: 0.0
+  exit_fee_bps: 2.25
+  entry_slippage_bps: 0.0
+  exit_slippage_bps: 0.0
   funding_bps: 1.0
-  adverse_selection_bps: 4.0
-  min_net_edge_bps: 3.0
+  adverse_selection_bps: 1.0
+  min_net_edge_bps: 0.5
+  maker_fill_ratio: 0.5
+  maker_min_penetration_bps: 2.0
 
 risk:
   stop_loss:
@@ -64,7 +106,7 @@ dashboard:
   refresh_interval_ms: 1000
 
 logging:
-  level: info
+  level: debug
   file: logs/arcus.log
   rotation: daily
   format: json

@@ -4,6 +4,8 @@ use std::{fmt, str::FromStr};
 pub enum ExchangeKind {
     Lighter,
     Arcus,
+    Aster,
+    Hyperliquid,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -12,20 +14,28 @@ pub enum LiveVenue {
     LighterRobinhood,
     ArcusMainnet,
     ArcusTestnet,
+    AsterMainnet,
+    HyperliquidMainnet,
+    HyperliquidTestnet,
 }
 
 impl LiveVenue {
-    pub const ALL: [Self; 4] = [
+    pub const ALL: [Self; 7] = [
         Self::LighterMainnet,
         Self::LighterRobinhood,
         Self::ArcusMainnet,
         Self::ArcusTestnet,
+        Self::AsterMainnet,
+        Self::HyperliquidMainnet,
+        Self::HyperliquidTestnet,
     ];
 
     pub const fn exchange(self) -> ExchangeKind {
         match self {
             Self::LighterMainnet | Self::LighterRobinhood => ExchangeKind::Lighter,
             Self::ArcusMainnet | Self::ArcusTestnet => ExchangeKind::Arcus,
+            Self::AsterMainnet => ExchangeKind::Aster,
+            Self::HyperliquidMainnet | Self::HyperliquidTestnet => ExchangeKind::Hyperliquid,
         }
     }
 
@@ -35,6 +45,9 @@ impl LiveVenue {
             Self::LighterRobinhood => "lighter-robinhood",
             Self::ArcusMainnet => "arcus-mainnet",
             Self::ArcusTestnet => "arcus-testnet",
+            Self::AsterMainnet => "aster-mainnet",
+            Self::HyperliquidMainnet => "hyperliquid-mainnet",
+            Self::HyperliquidTestnet => "hyperliquid-testnet",
         }
     }
 
@@ -44,6 +57,9 @@ impl LiveVenue {
             Self::LighterRobinhood => "config/settings.robinhood.yaml",
             Self::ArcusMainnet => "config/settings.arcus.yaml",
             Self::ArcusTestnet => "config/settings.arcus-testnet.yaml",
+            Self::AsterMainnet => "config/settings.aster.yaml",
+            Self::HyperliquidMainnet => "config/settings.hyperliquid.yaml",
+            Self::HyperliquidTestnet => "config/settings.hyperliquid-testnet.yaml",
         }
     }
 
@@ -53,6 +69,9 @@ impl LiveVenue {
             Self::LighterRobinhood => "https://api.rh.lighter.xyz",
             Self::ArcusMainnet => crate::arcus::MAINNET_REST_URL,
             Self::ArcusTestnet => crate::arcus::TESTNET_REST_URL,
+            Self::AsterMainnet => crate::aster::MAINNET_REST_URL,
+            Self::HyperliquidMainnet => crate::hyperliquid::MAINNET_REST_URL,
+            Self::HyperliquidTestnet => crate::hyperliquid::TESTNET_REST_URL,
         }
     }
 
@@ -62,6 +81,9 @@ impl LiveVenue {
             Self::LighterRobinhood => "wss://api.rh.lighter.xyz/stream",
             Self::ArcusMainnet => crate::arcus::MAINNET_WEBSOCKET_URL,
             Self::ArcusTestnet => crate::arcus::TESTNET_WEBSOCKET_URL,
+            Self::AsterMainnet => crate::aster::MAINNET_WS_URL,
+            Self::HyperliquidMainnet => crate::hyperliquid::MAINNET_WS_URL,
+            Self::HyperliquidTestnet => crate::hyperliquid::TESTNET_WS_URL,
         }
     }
 
@@ -69,7 +91,11 @@ impl LiveVenue {
         match self {
             Self::LighterMainnet => Some(304),
             Self::LighterRobinhood => Some(466_324),
-            Self::ArcusMainnet | Self::ArcusTestnet => None,
+            Self::ArcusMainnet
+            | Self::ArcusTestnet
+            | Self::AsterMainnet
+            | Self::HyperliquidMainnet
+            | Self::HyperliquidTestnet => None,
         }
     }
 
@@ -79,6 +105,9 @@ impl LiveVenue {
             Self::LighterRobinhood => "LIGHTER_ROBINHOOD",
             Self::ArcusMainnet => "ARCUS_MAINNET",
             Self::ArcusTestnet => "ARCUS_TESTNET",
+            Self::AsterMainnet => "ASTER_MAINNET",
+            Self::HyperliquidMainnet => "HYPERLIQUID_MAINNET",
+            Self::HyperliquidTestnet => "HYPERLIQUID_TESTNET",
         };
         format!("{prefix}_{suffix}")
     }
@@ -93,6 +122,9 @@ impl FromStr for LiveVenue {
             "lighter-robinhood" | "robinhood" => Ok(Self::LighterRobinhood),
             "arcus-mainnet" => Ok(Self::ArcusMainnet),
             "arcus-testnet" => Ok(Self::ArcusTestnet),
+            "aster-mainnet" => Ok(Self::AsterMainnet),
+            "hyperliquid-mainnet" => Ok(Self::HyperliquidMainnet),
+            "hyperliquid-testnet" => Ok(Self::HyperliquidTestnet),
             _ => Err(ParseLiveVenueError),
         }
     }
@@ -110,7 +142,7 @@ pub struct ParseLiveVenueError;
 impl fmt::Display for ParseLiveVenueError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(
-            "venue must be lighter-mainnet, lighter-robinhood, arcus-mainnet, or arcus-testnet",
+            "venue must be lighter-mainnet, lighter-robinhood, arcus-mainnet, arcus-testnet, aster-mainnet, hyperliquid-mainnet, or hyperliquid-testnet",
         )
     }
 }

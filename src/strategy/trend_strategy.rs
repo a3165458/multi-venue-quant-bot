@@ -239,6 +239,7 @@ impl Strategy for TrendStrategy {
                         timestamp: ob.timestamp,
                         expected_edge_bps: None,
                         risk_reducing: true,
+                        ..Default::default()
                     });
                     state.position = None;
                     continue; // 本轮不再开新仓，等下一根K线确认趋势
@@ -389,6 +390,7 @@ impl Strategy for TrendStrategy {
                     timestamp: ob.timestamp,
                     expected_edge_bps: Some(self.take_profit_pct * 10_000.0),
                     risk_reducing: false,
+                    ..Default::default()
                 });
 
                 state.position = Some(PositionState {

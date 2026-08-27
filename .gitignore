@@ -2,6 +2,8 @@
 .env
 config/settings.local.yaml
 keys/
+.omp/collab-url
+.omp/
 
 # 构建产物
 target/

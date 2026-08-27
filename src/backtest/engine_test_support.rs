@@ -51,6 +51,7 @@ impl Strategy for HoldAfterOpen {
             timestamp: ts,
             expected_edge_bps: None,
             risk_reducing: false,
+            ..Default::default()
         }]))
     }
 
@@ -85,6 +86,7 @@ impl Strategy for OpenThenReverse {
                 timestamp: ts,
                 expected_edge_bps: None,
                 risk_reducing: false,
+                ..Default::default()
             }])),
             1 => Ok(Some(vec![TradeSignal {
                 symbol,
@@ -97,6 +99,7 @@ impl Strategy for OpenThenReverse {
                 timestamp: ts,
                 expected_edge_bps: None,
                 risk_reducing: false,
+                ..Default::default()
             }])),
             _ => Ok(None),
         }

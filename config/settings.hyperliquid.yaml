@@ -1,0 +1,117 @@
+exchange:
+  kind: hyperliquid
+  environment: mainnet
+
+trading:
+  # Safety gate: Hyperliquid live mode starts paused. Verify the account,
+  # API/agent wallet, HIP-3 dex funding (builder-deployed perps use isolated
+  # margin inside their own dex), fees, and order sizing before manual resume.
+  # Pause blocks maker entries; reduce-only IOC risk exits remain armed.
+  start_paused: true
+  # Coins use the canonical Hyperliquid name. HIP-3 builder-deployed assets are
+  # addressed as "dex:NAME"; entropy.io markets live on the "io" dex. Primary
+  # dex coins (BTC, ETH, ...) work too - mixing dexs in one session is fine.
+  symbols: ["io:SNDK", "io:ANTH"]
+  max_open_orders: 4
+  # Isolated leverage applied per configured coin at startup (HIP-3 assets are
+  # isolated-only). Kept at 1 so position notional can never exceed margin.
+  isolated_leverage: 1
+  strategies:
+    grid_trading:
+      enabled: false
+      grid_count: 12
+      investment_per_grid: 10
+      price_deviation: 0.004
+    trend_following:
+      enabled: false
+      fast_ma: 7
+      slow_ma: 50
+      stop_loss: 0.08
+      take_profit: 0.12
+      trailing_stop: 0.0
+      notional: 10
+      adx_threshold: 0
+      adx_period: 14
+      confirm_slope_min: 0.005
+      confirm_lookback: 3
+    maker_quote:
+      enabled: true
+      # Reduce-loss mode (2026-08-27): join-best at BBO was ~-1.0 bps maker
+      # and ~-2.2 bps on 08-26 after 10x size. Mid-spread 30 bps sits off
+      # the touch so fills need a move; inventory skew + hard cap stop
+      # stacking longs. flatten_only stays false (IOC flatten was -2.65 bps).
+      quote_mode: mid_spread
+      spread_bps: 30.0
+      per_quote_notional: 40.0
+      requote_threshold_bps: 2.0
+      requote_cooldown_secs: 20
+      soft_cap_notional: 80.0
+      hard_cap_notional: 150.0
+      trend_filter: true
+      ema_period: 20
+      trend_block_bps: 8.0
+      min_quote_notional: 10.0
+      vol_window: 0
+      vol_multiplier: 0.0
+      cash_open_guard: true
+      cash_open_guard_before_minutes: 5
+      cash_open_guard_after_minutes: 20
+      jump_circuit_breaker_bps: 20.0
+      min_book_spread_bps: 1.5
+      max_book_spread_bps: 80.0
+      wide_book_size_mult: 1.0
+      max_bbo_imbalance: 3.0
+      flatten_only: false
+      join_inside_ticks: 0
+      flatten_mid_secs: 6
+      flatten_ioc_secs: 15
+      circuit_breaker_cooldown_secs: 60
+      feature_interval_secs: 60
+      max_skew_bps: 12.0
+      total_quote_budget: 160.0
+  position:
+    max_single_trade_percent: 25
+    max_total_position_percent: 50
+    risk_per_trade_percent: 1.0
+
+# Round-trip cost model applies to aggressive/non-maker entries only.
+# join_best ALO quotes skip that gate (half-spread is often < 1 bps).
+# Hyperliquid base tier is maker 1.5 bps / taker 4.5 bps; HIP-3 growth-mode
+# maker is typically ~0.3 bps. Verify the live entropy.io rate separately.
+profitability:
+  enabled: true
+  entry_fee_bps: 1.5
+  exit_fee_bps: 4.5
+  entry_slippage_bps: 0.0
+  exit_slippage_bps: 1.0
+  funding_bps: 1.0
+  adverse_selection_bps: 2.0
+  min_net_edge_bps: 1.0
+  maker_fill_ratio: 0.5
+  maker_min_penetration_bps: 2.0
+
+risk:
+  stop_loss:
+    enabled: true
+    max_drawdown_percent: 5
+    daily_loss_limit_percent: 2
+    position_stop_loss_percent: 2
+    position_take_profit_percent: 3
+  position_limit:
+    max_leverage: 2
+    # Must sit above hard_cap_notional or the live risk gate silently
+    # drops maker quotes (old $50 cap blocked most inventory).
+    max_position_size: 180
+  monitoring_interval_ms: 1000
+
+dashboard:
+  enabled: true
+  host: "127.0.0.1"
+  port: 4029
+  refresh_interval_ms: 1000
+
+logging:
+  level: info
+  file: logs/hyperliquid-mainnet.log
+  rotation: daily
+  format: json

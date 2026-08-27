@@ -207,9 +207,21 @@ pub enum WsMessage {
     Error(String),
 }
 
+/// Execution intent carried by a strategy signal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum SignalAction {
+    #[default]
+    Place,
+    Cancel,
+}
+
 // ===== 交易信号 =====
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TradeSignal {
+    /// Place a new/replacement order, or cancel the identified resting order.
+    #[serde(default)]
+    pub action: SignalAction,
     pub symbol: String,
     pub market_id: u32,
     pub side: Side,
@@ -226,6 +238,50 @@ pub struct TradeSignal {
     /// Profitability must never prevent an explicit exit.
     #[serde(default)]
     pub risk_reducing: bool,
+    /// True = the order must be submitted post-only (maker). The execution
+    /// layer uses ALO on Arcus and rejects the signal if it would take
+    /// liquidity. Defaults to false (plain limit, may cross).
+    #[serde(default)]
+    pub post_only: bool,
+    /// Stable per-quote identifier so the execution layer can deduplicate
+    /// (same id + same price already resting → no-op) and replace (same id +
+    /// different price → cancel old, place new) without losing track of the
+    /// quote across BBO ticks. Defaults to None (execution layer generates).
+    #[serde(default)]
+    pub client_id: Option<String>,
+}
+
+impl Default for TradeSignal {
+    fn default() -> Self {
+        Self {
+            action: SignalAction::Place,
+            symbol: String::new(),
+            market_id: 0,
+            side: Side::Buy,
+            price: 0.0,
+            quantity: 0.0,
+            order_type: OrderType::Limit,
+            reason: String::new(),
+            timestamp: Utc::now(),
+            expected_edge_bps: None,
+            risk_reducing: false,
+            post_only: false,
+            client_id: None,
+        }
+    }
+}
+
+/// Read-only view of one resting order on the exchange, injected into
+/// [`MarketSnapshot::open_orders`] by the live loop so maker strategies can
+/// reconcile their own quote state against reality. Backtests leave it empty.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OpenOrderRef {
+    pub symbol: String,
+    pub client_id: Option<String>,
+    pub side: Side,
+    pub price: f64,
+    pub quantity: f64,
+    pub status: String,
 }
 
 // ===== 市场快照 =====
@@ -238,6 +294,11 @@ pub struct MarketSnapshot {
     /// Signed net position per symbol from the exchange (positive = long, negative = short).
     /// Injected by the live loop so position-aware strategies can cap one-sided accumulation.
     pub positions: HashMap<String, f64>,
+    /// Resting orders on the exchange (injected by the live loop; empty in backtests).
+    pub open_orders: Vec<OpenOrderRef>,
+    /// True when `open_orders` is a complete exchange snapshot, including an
+    /// authoritative empty set.
+    pub open_orders_authoritative: bool,
     /// Actual exchange entry prices for the signed positions above.
     pub position_entry_prices: HashMap<String, f64>,
     /// True only when `positions` is a complete exchange snapshot. Backtests leave this false

@@ -1,5 +1,7 @@
+pub mod cross_dex_basis;
 pub mod dca_strategy;
 pub mod grid_strategy;
+pub mod maker_quote;
 pub mod trend_strategy;
 
 use anyhow::Result;
@@ -29,6 +31,10 @@ pub trait Strategy: Send + Sync {
 
 /// 根据配置创建策略
 pub fn create_strategy(settings: &Config) -> Result<Box<dyn Strategy>> {
+    let maker_enabled = settings
+        .get_bool("trading.strategies.maker_quote.enabled")
+        .unwrap_or(false);
+
     let grid_enabled = settings
         .get_bool("trading.strategies.grid_trading.enabled")
         .unwrap_or(false);
@@ -37,7 +43,9 @@ pub fn create_strategy(settings: &Config) -> Result<Box<dyn Strategy>> {
         .get_bool("trading.strategies.trend_following.enabled")
         .unwrap_or(false);
 
-    if grid_enabled {
+    if maker_enabled {
+        Ok(Box::new(build_maker_quote_from_settings(settings)?))
+    } else if grid_enabled {
         let grid_count = settings
             .get_int("trading.strategies.grid_trading.grid_count")
             .unwrap_or(10) as usize;
@@ -119,6 +127,136 @@ pub fn create_strategy(settings: &Config) -> Result<Box<dyn Strategy>> {
     }
 }
 
+fn build_maker_quote_from_settings(settings: &Config) -> Result<maker_quote::MakerQuoteStrategy> {
+    let prefix = "trading.strategies.maker_quote";
+    let spread_bps = settings
+        .get_float(&format!("{prefix}.spread_bps"))
+        .unwrap_or(6.0);
+    let per_quote_notional = settings
+        .get_float(&format!("{prefix}.per_quote_notional"))
+        .unwrap_or(200.0);
+    let requote_threshold_bps = settings
+        .get_float(&format!("{prefix}.requote_threshold_bps"))
+        .unwrap_or(2.0);
+    let requote_cooldown_secs = settings
+        .get_int(&format!("{prefix}.requote_cooldown_secs"))
+        .unwrap_or(5);
+    let soft_cap_notional = settings
+        .get_float(&format!("{prefix}.soft_cap_notional"))
+        .unwrap_or(600.0);
+    let hard_cap_notional = settings
+        .get_float(&format!("{prefix}.hard_cap_notional"))
+        .unwrap_or(1000.0);
+    let trend_filter = settings
+        .get_bool(&format!("{prefix}.trend_filter"))
+        .unwrap_or(true);
+    let ema_period = settings
+        .get_int(&format!("{prefix}.ema_period"))
+        .unwrap_or(20) as usize;
+    let trend_block_bps = settings
+        .get_float(&format!("{prefix}.trend_block_bps"))
+        .unwrap_or(6.0);
+    let min_quote_notional = settings
+        .get_float(&format!("{prefix}.min_quote_notional"))
+        .unwrap_or(5.0);
+    let vol_window = settings
+        .get_int(&format!("{prefix}.vol_window"))
+        .unwrap_or(0) as usize;
+    let vol_multiplier = settings
+        .get_float(&format!("{prefix}.vol_multiplier"))
+        .unwrap_or(0.0);
+    let max_skew_bps = settings
+        .get_float(&format!("{prefix}.max_skew_bps"))
+        .unwrap_or(0.0);
+    let total_quote_budget = settings
+        .get_float(&format!("{prefix}.total_quote_budget"))
+        .unwrap_or(0.0);
+    let feature_interval_secs = settings
+        .get_int(&format!("{prefix}.feature_interval_secs"))
+        .unwrap_or(60);
+    let jump_circuit_breaker_bps = settings
+        .get_float(&format!("{prefix}.jump_circuit_breaker_bps"))
+        .unwrap_or(20.0);
+    let max_book_spread_bps = settings
+        .get_float(&format!("{prefix}.max_book_spread_bps"))
+        .unwrap_or(40.0);
+    let min_book_spread_bps = settings
+        .get_float(&format!("{prefix}.min_book_spread_bps"))
+        .unwrap_or(0.0);
+    let wide_book_size_mult = settings
+        .get_float(&format!("{prefix}.wide_book_size_mult"))
+        .unwrap_or(1.0);
+    let max_bbo_imbalance = settings
+        .get_float(&format!("{prefix}.max_bbo_imbalance"))
+        .unwrap_or(0.0);
+    let flatten_only = settings
+        .get_bool(&format!("{prefix}.flatten_only"))
+        .unwrap_or(false);
+    let join_inside_ticks = settings
+        .get_int(&format!("{prefix}.join_inside_ticks"))
+        .unwrap_or(0);
+    let flatten_mid_secs = settings
+        .get_int(&format!("{prefix}.flatten_mid_secs"))
+        .unwrap_or(6);
+    let flatten_ioc_secs = settings
+        .get_int(&format!("{prefix}.flatten_ioc_secs"))
+        .unwrap_or(15);
+    let circuit_breaker_cooldown_secs = settings
+        .get_int(&format!("{prefix}.circuit_breaker_cooldown_secs"))
+        .unwrap_or(60);
+    let cash_open_guard = settings
+        .get_bool(&format!("{prefix}.cash_open_guard"))
+        .unwrap_or(true);
+    let cash_open_guard_before_minutes = settings
+        .get_int(&format!("{prefix}.cash_open_guard_before_minutes"))
+        .unwrap_or(5);
+    let cash_open_guard_after_minutes = settings
+        .get_int(&format!("{prefix}.cash_open_guard_after_minutes"))
+        .unwrap_or(20);
+    let quote_mode = maker_quote::QuoteMode::parse(
+        &settings
+            .get_string(&format!("{prefix}.quote_mode"))
+            .unwrap_or_else(|_| "mid_spread".to_string()),
+    )?;
+
+    maker_quote::MakerQuoteStrategy::new(
+        spread_bps,
+        per_quote_notional,
+        requote_threshold_bps,
+        requote_cooldown_secs,
+        soft_cap_notional,
+        hard_cap_notional,
+        trend_filter,
+        ema_period,
+        trend_block_bps,
+        min_quote_notional,
+    )?
+    .with_adaptive_spread(vol_window, vol_multiplier)?
+    .with_inventory_skew(max_skew_bps)?
+    .with_quote_budget(total_quote_budget)?
+    .with_feature_interval(feature_interval_secs)?
+    .with_market_circuit_breaker(
+        jump_circuit_breaker_bps,
+        max_book_spread_bps,
+        circuit_breaker_cooldown_secs,
+    )?
+    .with_min_book_spread(min_book_spread_bps)?
+    .with_wide_book_size_mult(wide_book_size_mult)?
+    .with_max_bbo_imbalance(max_bbo_imbalance)?
+    .with_flatten_cycle(
+        flatten_only,
+        join_inside_ticks,
+        flatten_mid_secs,
+        flatten_ioc_secs,
+    )?
+    .with_cash_open_guard(
+        cash_open_guard,
+        cash_open_guard_before_minutes,
+        cash_open_guard_after_minutes,
+    )?
+    .with_quote_mode(quote_mode)
+}
+
 /// 根据策略名称创建策略（用于回测）
 #[allow(dead_code)]
 pub fn create_strategy_from_name(name: &str) -> Result<Box<dyn Strategy>> {
@@ -131,6 +269,164 @@ pub fn create_strategy_with_params(name: &str, params: Option<&str>) -> Result<B
     let kv = parse_params(params.unwrap_or(""));
 
     match name {
+        "maker_quote" | "maker" => {
+            let spread_bps = kv
+                .get("spread_bps")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(6.0);
+            let per_quote_notional = kv
+                .get("per_quote_notional")
+                .or_else(|| kv.get("notional"))
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(200.0);
+            let requote_threshold_bps = kv
+                .get("requote_threshold_bps")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(2.0);
+            let requote_cooldown_secs = kv
+                .get("requote_cooldown_secs")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(5);
+            let soft_cap_notional = kv
+                .get("soft_cap_notional")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(600.0);
+            let hard_cap_notional = kv
+                .get("hard_cap_notional")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(1000.0);
+            let trend_filter = kv
+                .get("trend_filter")
+                .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
+                .unwrap_or(true);
+            let ema_period = kv
+                .get("ema_period")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(20);
+            let trend_block_bps = kv
+                .get("trend_block_bps")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(6.0);
+            let min_quote_notional = kv
+                .get("min_quote_notional")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(5.0);
+            let vol_window = kv
+                .get("vol_window")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0);
+            let vol_multiplier = kv
+                .get("vol_multiplier")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0.0);
+            let max_skew_bps = kv
+                .get("max_skew_bps")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0.0);
+            let total_quote_budget = kv
+                .get("total_quote_budget")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0.0);
+            let feature_interval_secs = kv
+                .get("feature_interval_secs")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(60);
+            let jump_circuit_breaker_bps = kv
+                .get("jump_circuit_breaker_bps")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(20.0);
+            let max_book_spread_bps = kv
+                .get("max_book_spread_bps")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(40.0);
+            let min_book_spread_bps = kv
+                .get("min_book_spread_bps")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0.0);
+            let wide_book_size_mult = kv
+                .get("wide_book_size_mult")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(1.0);
+            let max_bbo_imbalance = kv
+                .get("max_bbo_imbalance")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0.0);
+            let flatten_only = kv
+                .get("flatten_only")
+                .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
+                .unwrap_or(false);
+            let join_inside_ticks = kv
+                .get("join_inside_ticks")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0);
+            let flatten_mid_secs = kv
+                .get("flatten_mid_secs")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(6);
+            let flatten_ioc_secs = kv
+                .get("flatten_ioc_secs")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(15);
+            let circuit_breaker_cooldown_secs = kv
+                .get("circuit_breaker_cooldown_secs")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(60);
+            let cash_open_guard = kv
+                .get("cash_open_guard")
+                .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
+                .unwrap_or(true);
+            let cash_open_guard_before_minutes = kv
+                .get("cash_open_guard_before_minutes")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(5);
+            let cash_open_guard_after_minutes = kv
+                .get("cash_open_guard_after_minutes")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(20);
+            let quote_mode = maker_quote::QuoteMode::parse(
+                kv.get("quote_mode")
+                    .map(|s| s.as_str())
+                    .unwrap_or("mid_spread"),
+            )?;
+            Ok(Box::new(
+                maker_quote::MakerQuoteStrategy::new(
+                    spread_bps,
+                    per_quote_notional,
+                    requote_threshold_bps,
+                    requote_cooldown_secs,
+                    soft_cap_notional,
+                    hard_cap_notional,
+                    trend_filter,
+                    ema_period,
+                    trend_block_bps,
+                    min_quote_notional,
+                )?
+                .with_adaptive_spread(vol_window, vol_multiplier)?
+                .with_inventory_skew(max_skew_bps)?
+                .with_quote_budget(total_quote_budget)?
+                .with_feature_interval(feature_interval_secs)?
+                .with_market_circuit_breaker(
+                    jump_circuit_breaker_bps,
+                    max_book_spread_bps,
+                    circuit_breaker_cooldown_secs,
+                )?
+                .with_min_book_spread(min_book_spread_bps)?
+                .with_wide_book_size_mult(wide_book_size_mult)?
+                .with_max_bbo_imbalance(max_bbo_imbalance)?
+                .with_flatten_cycle(
+                    flatten_only,
+                    join_inside_ticks,
+                    flatten_mid_secs,
+                    flatten_ioc_secs,
+                )?
+                .with_cash_open_guard(
+                    cash_open_guard,
+                    cash_open_guard_before_minutes,
+                    cash_open_guard_after_minutes,
+                )?
+                .with_quote_mode(quote_mode)?,
+            ))
+        }
         "grid_trading" | "grid" => {
             let grid_count = kv
                 .get("grid_count")
@@ -248,10 +544,13 @@ fn parse_params(s: &str) -> std::collections::HashMap<String, String> {
     s.split(',')
         .filter_map(|pair| {
             let mut parts = pair.splitn(2, '=');
-            Some((
-                parts.next()?.trim().to_string(),
-                parts.next()?.trim().to_string(),
-            ))
+            let key = parts.next()?.trim();
+            let value = parts.next()?.trim();
+            if key.is_empty() {
+                None
+            } else {
+                Some((key.to_string(), value.to_string()))
+            }
         })
         .collect()
 }

@@ -24,6 +24,21 @@ fn every_live_venue_has_an_unambiguous_exchange_and_config() {
             ExchangeKind::Arcus,
             "config/settings.arcus-testnet.yaml",
         ),
+        (
+            "aster-mainnet",
+            ExchangeKind::Aster,
+            "config/settings.aster.yaml",
+        ),
+        (
+            "hyperliquid-mainnet",
+            ExchangeKind::Hyperliquid,
+            "config/settings.hyperliquid.yaml",
+        ),
+        (
+            "hyperliquid-testnet",
+            ExchangeKind::Hyperliquid,
+            "config/settings.hyperliquid-testnet.yaml",
+        ),
     ];
 
     for (name, exchange, config) in cases {
@@ -49,6 +64,7 @@ fn legacy_network_names_remain_backward_compatible() {
 #[test]
 fn invalid_venue_values_fail_closed() {
     assert!(LiveVenue::from_str("arcus").is_err());
+    assert!(LiveVenue::from_str("aster").is_err());
     assert!(LiveVenue::from_str("../arcus-mainnet").is_err());
     assert!(LiveVenue::from_str("").is_err());
 }
@@ -71,6 +87,18 @@ fn venue_credentials_are_isolated() {
         LiveVenue::LighterRobinhood.credential_key("ACCOUNT_INDEX"),
         "LIGHTER_ROBINHOOD_ACCOUNT_INDEX"
     );
+    assert_eq!(
+        LiveVenue::AsterMainnet.credential_key("SIGNER_PRIVATE_KEY"),
+        "ASTER_MAINNET_SIGNER_PRIVATE_KEY"
+    );
+    assert_eq!(
+        LiveVenue::HyperliquidMainnet.credential_key("ACCOUNT_ADDRESS"),
+        "HYPERLIQUID_MAINNET_ACCOUNT_ADDRESS"
+    );
+    assert_eq!(
+        LiveVenue::HyperliquidMainnet.credential_key("SIGNER_PRIVATE_KEY"),
+        "HYPERLIQUID_MAINNET_SIGNER_PRIVATE_KEY"
+    );
 }
 
 #[test]
@@ -85,7 +113,7 @@ fn arcus_environment_template_separates_api_and_signing_keys() {
 }
 
 #[test]
-fn dashboard_exposes_both_exchanges_as_live_venues() {
+fn dashboard_exposes_all_exchanges_as_live_venues() {
     let html = std::fs::read_to_string("src/dashboard/ui/index.html").unwrap();
     let server = std::fs::read_to_string("src/dashboard/server.rs").unwrap();
     for venue in [
@@ -93,8 +121,14 @@ fn dashboard_exposes_both_exchanges_as_live_venues() {
         "lighter-robinhood",
         "arcus-mainnet",
         "arcus-testnet",
+        "aster-mainnet",
+        "hyperliquid-mainnet",
+        "hyperliquid-testnet",
     ] {
         assert!(html.contains(venue), "dashboard is missing {venue}");
-        assert!(server.contains(venue), "network API is missing {venue}");
     }
+    assert!(
+        server.contains("LiveVenue::ALL") && server.contains("\"profiles\": profiles"),
+        "network API must derive its profiles from LiveVenue::ALL"
+    );
 }

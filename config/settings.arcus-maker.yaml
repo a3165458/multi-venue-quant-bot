@@ -1,0 +1,85 @@
+# maker_quote 策略验证/上线配置（Arcus mainnet）
+# maker 经济学：post_only(ALO) 挂单按报价价成交，无 taker 滑点；费率按 Arcus maker 档。
+# 与 settings.arcus.yaml 的唯一差异：策略 = maker_quote，profitability 为 maker 口径。
+# 实盘切换 = 改 data/arcus-mainnet/strategy_config.json (name=maker_quote) + 本文件
+# profitability 段 + pm2 restart multi-venue-quant-bot（勿在未确认时直接切换）。
+
+exchange:
+  kind: arcus
+  environment: mainnet
+
+trading:
+  markets: [1]
+  max_open_orders: 8
+  strategies:
+    maker_quote:
+      enabled: true
+      spread_bps: 6.0
+      per_quote_notional: 200
+      requote_threshold_bps: 2.0
+      requote_cooldown_secs: 5
+      soft_cap_notional: 600
+      hard_cap_notional: 1000
+      trend_filter: true
+      ema_period: 20
+      trend_block_bps: 6.0
+      min_quote_notional: 5.0
+    grid_trading:
+      enabled: false
+      grid_count: 12
+      investment_per_grid: 30
+      price_deviation: 0.004
+    trend_following:
+      enabled: false
+      fast_ma: 7
+      slow_ma: 50
+      stop_loss: 0.08
+      take_profit: 0.12
+      trailing_stop: 0.0
+      notional: 430
+      adx_threshold: 0
+      adx_period: 14
+      confirm_slope_min: 0.005
+      confirm_lookback: 3
+  position:
+    max_single_trade_percent: 50
+    max_total_position_percent: 200
+    risk_per_trade_percent: 1.5
+
+# maker 经济学：maker 信号 expected_edge_bps = spread_bps/2 = 3bps，
+# 单腿费 0（或按实盘 feetiers 实际 maker 费率调整），无滑点。
+# 净边缘 = 3.0 - (funding 1.0 + adverse 1.0) = 1.0bps；门槛 0.5bps 保留正余量
+# 但允许策略运行（>1.0 会把刚好 1.0bps 的边缘挡在门外）。
+profitability:
+  enabled: true
+  entry_fee_bps: 0.0
+  exit_fee_bps: 0.0
+  entry_slippage_bps: 0.0
+  exit_slippage_bps: 0.0
+  funding_bps: 1.0
+  adverse_selection_bps: 1.0
+  min_net_edge_bps: 0.5
+
+risk:
+  stop_loss:
+    enabled: true
+    max_drawdown_percent: 10
+    daily_loss_limit_percent: 5
+    position_stop_loss_percent: 3
+    position_take_profit_percent: 5
+  position_limit:
+    max_leverage: 5
+    max_position_size: 100
+  monitoring_interval_ms: 1000
+
+dashboard:
+  enabled: true
+  host: "127.0.0.1"
+  port: 4028
+  refresh_interval_ms: 1000
+
+logging:
+  level: info
+  file: logs/arcus.log
+  rotation: daily
+  format: json

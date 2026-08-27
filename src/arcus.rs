@@ -240,6 +240,53 @@ impl ArcusMarket {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ArcusOrderEvent {
+    pub order_id: String,
+    pub client_id: Option<String>,
+    pub market_id: u16,
+    pub market_display_name: String,
+    pub side: OrderSide,
+    pub status: String,
+    #[serde(default)]
+    pub rejection_reason: Option<String>,
+    pub price: String,
+    pub original_size: String,
+    pub remaining_size: String,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub sequence_number: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ArcusUserFillEvent {
+    pub trade_id: String,
+    pub order_id: String,
+    pub market: String,
+    pub side: OrderSide,
+    pub fill_price: String,
+    pub fill_size: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ArcusFundingPayment {
+    pub market_id: u16,
+    pub market_display_name: String,
+    pub funding_rate: String,
+    pub size: String,
+    pub payment: String,
+    pub time: i64,
+}
+
+impl ArcusFundingPayment {
+    pub fn payment_value(&self) -> Result<f64, ArcusError> {
+        parse_finite_f64(&self.payment, "funding payment")
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum ArcusWsEvent {
     Bbo {
@@ -250,6 +297,9 @@ pub enum ArcusWsEvent {
         ask_size: f64,
         sequence: u64,
     },
+    Orders(Vec<ArcusOrderEvent>),
+    UserFills(Vec<ArcusUserFillEvent>),
+    Funding(Vec<ArcusFundingPayment>),
     Disconnected,
     Ignored,
 }
@@ -261,47 +311,91 @@ impl ArcusWsEvent {
         if value.get("type").and_then(|v| v.as_str()) != Some("channel_data") {
             return Ok(Self::Ignored);
         }
-        if value.get("channel").and_then(|v| v.as_str()) != Some("bbo") {
-            return Ok(Self::Ignored);
-        }
-        let symbol = value
-            .get("id")
+        let channel = value
+            .get("channel")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| ArcusError::InvalidRequest("BBO event is missing id".into()))?;
-        let contents = value
-            .get("contents")
-            .ok_or_else(|| ArcusError::InvalidRequest("BBO event is missing contents".into()))?;
-        let price = |side: &str| -> Result<f64, ArcusError> {
-            contents
-                .get(side)
-                .and_then(|v| v.get("price"))
-                .and_then(|v| v.as_str())
-                .and_then(|v| v.parse().ok())
-                .filter(|v: &f64| v.is_finite() && *v > 0.0)
-                .ok_or_else(|| ArcusError::InvalidRequest(format!("invalid BBO {side}")))
-        };
-        let size = |side: &str| -> Result<f64, ArcusError> {
-            contents
-                .get(side)
-                .and_then(|v| v.get("size"))
-                .and_then(|v| v.as_str())
-                .and_then(|v| v.parse().ok())
-                .filter(|v: &f64| v.is_finite() && *v > 0.0)
-                .ok_or_else(|| ArcusError::InvalidRequest(format!("invalid BBO {side} size")))
-        };
-        let sequence = contents
-            .get("lastSequenceId")
-            .and_then(|v| v.as_u64())
-            .ok_or_else(|| ArcusError::InvalidRequest("BBO event is missing sequence".into()))?;
-        Ok(Self::Bbo {
-            symbol: symbol.to_string(),
-            bid: price("bestBid")?,
-            ask: price("bestAsk")?,
-            bid_size: size("bestBid")?,
-            ask_size: size("bestAsk")?,
-            sequence,
-        })
+            .ok_or_else(|| ArcusError::InvalidRequest("channel event is missing channel".into()))?;
+        let contents = value.get("contents").ok_or_else(|| {
+            ArcusError::InvalidRequest("channel event is missing contents".into())
+        })?;
+
+        match channel {
+            "bbo" => {
+                let symbol = value
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| ArcusError::InvalidRequest("BBO event is missing id".into()))?;
+                let price = |side: &str| -> Result<f64, ArcusError> {
+                    contents
+                        .get(side)
+                        .and_then(|v| v.get("price"))
+                        .and_then(|v| v.as_str())
+                        .and_then(|v| v.parse().ok())
+                        .filter(|v: &f64| v.is_finite() && *v > 0.0)
+                        .ok_or_else(|| ArcusError::InvalidRequest(format!("invalid BBO {side}")))
+                };
+                let size = |side: &str| -> Result<f64, ArcusError> {
+                    contents
+                        .get(side)
+                        .and_then(|v| v.get("size"))
+                        .and_then(|v| v.as_str())
+                        .and_then(|v| v.parse().ok())
+                        .filter(|v: &f64| v.is_finite() && *v > 0.0)
+                        .ok_or_else(|| {
+                            ArcusError::InvalidRequest(format!("invalid BBO {side} size"))
+                        })
+                };
+                let sequence = contents
+                    .get("lastSequenceId")
+                    .and_then(|v| v.as_u64())
+                    .ok_or_else(|| {
+                        ArcusError::InvalidRequest("BBO event is missing sequence".into())
+                    })?;
+                Ok(Self::Bbo {
+                    symbol: symbol.to_string(),
+                    bid: price("bestBid")?,
+                    ask: price("bestAsk")?,
+                    bid_size: size("bestBid")?,
+                    ask_size: size("bestAsk")?,
+                    sequence,
+                })
+            }
+            "orders" => Ok(Self::Orders(parse_channel_items(contents, "orders")?)),
+            "userFills" => Ok(Self::UserFills(parse_channel_items(contents, "fills")?)),
+            "funding" => Ok(Self::Funding(parse_channel_items(
+                contents,
+                "fundingPayments",
+            )?)),
+            _ => Ok(Self::Ignored),
+        }
     }
+}
+
+fn parse_channel_items<T>(
+    contents: &serde_json::Value,
+    list_key: &str,
+) -> Result<Vec<T>, ArcusError>
+where
+    T: for<'de> Deserialize<'de>,
+{
+    if let Some(items) = contents.get(list_key).and_then(|value| value.as_array()) {
+        return items
+            .iter()
+            .cloned()
+            .map(|item| {
+                serde_json::from_value(item)
+                    .map_err(|error| ArcusError::InvalidRequest(error.to_string()))
+            })
+            .collect();
+    }
+    if contents.get("isSnapshot").and_then(|value| value.as_bool()) == Some(true)
+        && contents.get(list_key).is_none()
+    {
+        return Ok(Vec::new());
+    }
+    serde_json::from_value(contents.clone())
+        .map(|item| vec![item])
+        .map_err(|error| ArcusError::InvalidRequest(error.to_string()))
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -579,6 +673,75 @@ struct OpenOrdersResponse {
     orders: Vec<ArcusOpenOrder>,
 }
 
+/// Authoritative execution returned by Arcus `GET /v1/fills`.
+///
+/// Order placement is asynchronous on Arcus, so acknowledgements must never be
+/// counted as trades. Volume and realized PnL are derived from these fill rows.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ArcusFill {
+    pub trade_id: String,
+    pub order_id: String,
+    pub market_id: u16,
+    pub market_display_name: String,
+    pub side: OrderSide,
+    pub original_size: String,
+    pub size: String,
+    pub price: String,
+    pub fee: String,
+    #[serde(default)]
+    pub closed_pnl: String,
+    pub role: String,
+    #[serde(default)]
+    pub position_effect: Option<String>,
+    pub created_at: i64,
+}
+
+impl ArcusFill {
+    pub fn notional(&self) -> Result<f64, ArcusError> {
+        let price = parse_finite_f64(&self.price, "fill price")?;
+        let size = parse_finite_f64(&self.size, "fill size")?;
+        Ok((price * size).abs())
+    }
+
+    /// Net realized contribution: engine-stamped closed PnL minus execution fee.
+    /// Opening fills normally have zero closed PnL but their fees still count.
+    pub fn net_realized_pnl(&self) -> Result<f64, ArcusError> {
+        let closed_pnl = if self.closed_pnl.is_empty() {
+            0.0
+        } else {
+            parse_finite_f64(&self.closed_pnl, "fill closed PnL")?
+        };
+        let fee = parse_finite_f64(&self.fee, "fill fee")?;
+        Ok(closed_pnl - fee)
+    }
+
+    pub fn is_position_close(&self) -> bool {
+        self.position_effect
+            .as_deref()
+            .is_some_and(|effect| effect.starts_with("CLOSE_") || effect.starts_with("FLIP_"))
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct FillsResponse {
+    fills: Vec<ArcusFill>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FundingPaymentsResponse {
+    funding_payments: Vec<ArcusFundingPayment>,
+}
+
+fn parse_finite_f64(value: &str, label: &str) -> Result<f64, ArcusError> {
+    value
+        .parse::<f64>()
+        .ok()
+        .filter(|value| value.is_finite())
+        .ok_or_else(|| ArcusError::InvalidRequest(format!("invalid {label}")))
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ArcusCandle {
@@ -626,6 +789,8 @@ pub struct PlaceOrderRequest {
 pub struct OrderAcknowledgement {
     pub order_id: String,
     pub status: String,
+    #[serde(default)]
+    pub rejection_reason: Option<String>,
     pub client_id: Option<String>,
 }
 
@@ -788,6 +953,80 @@ impl ArcusClient {
             .orders)
     }
 
+    /// Fetch authoritative fills, newest first. `from`/`to` are epoch
+    /// microseconds and inclusive, matching Arcus' response timestamps.
+    pub async fn fills(
+        &self,
+        address: &str,
+        account_index: u8,
+        from: Option<i64>,
+        to: Option<i64>,
+        limit: u16,
+    ) -> Result<Vec<ArcusFill>, ArcusError> {
+        validate_address(address)?;
+        if account_index > 9 || !(1..=1000).contains(&limit) {
+            return Err(ArcusError::InvalidRequest(
+                "invalid account_index or fills limit".into(),
+            ));
+        }
+        for timestamp in [from, to].into_iter().flatten() {
+            if timestamp < 100_000_000_000_000 {
+                return Err(ArcusError::InvalidRequest(
+                    "fill time bounds must be epoch microseconds".into(),
+                ));
+            }
+        }
+        let mut path =
+            format!("/v1/fills?address={address}&accountIndex={account_index}&limit={limit}");
+        if let Some(from) = from {
+            path.push_str(&format!("&from={from}"));
+        }
+        if let Some(to) = to {
+            path.push_str(&format!("&to={to}"));
+        }
+        Ok(self
+            .send_json::<FillsResponse>(Method::GET, &path, None)
+            .await?
+            .fills)
+    }
+
+    /// Fetch funding payments newest first. Query bounds are epoch
+    /// milliseconds; response payment times are epoch microseconds.
+    pub async fn funding_payments(
+        &self,
+        address: &str,
+        account_index: u8,
+        from_ms: Option<i64>,
+        to_ms: Option<i64>,
+        limit: u16,
+    ) -> Result<Vec<ArcusFundingPayment>, ArcusError> {
+        validate_address(address)?;
+        if account_index > 9 || !(1..=1000).contains(&limit) {
+            return Err(ArcusError::InvalidRequest(
+                "invalid account_index or funding limit".into(),
+            ));
+        }
+        for timestamp in [from_ms, to_ms].into_iter().flatten() {
+            if timestamp < 100_000_000_000 {
+                return Err(ArcusError::InvalidRequest(
+                    "funding time bounds must be epoch milliseconds".into(),
+                ));
+            }
+        }
+        let mut path =
+            format!("/v1/funding?address={address}&accountIndex={account_index}&limit={limit}");
+        if let Some(from) = from_ms {
+            path.push_str(&format!("&from={from}"));
+        }
+        if let Some(to) = to_ms {
+            path.push_str(&format!("&to={to}"));
+        }
+        Ok(self
+            .send_json::<FundingPaymentsResponse>(Method::GET, &path, None)
+            .await?
+            .funding_payments)
+    }
+
     pub async fn candles(
         &self,
         market: &str,
@@ -804,8 +1043,29 @@ impl ArcusClient {
             ));
         }
         let to = chrono::Utc::now().timestamp_micros();
+        self.candles_before(market, timeframe, countback, to).await
+    }
+
+    /// 按 `to` 游标向前分页拉历史蜡烛（回测数据下载用）。
+    /// `to_micros`：epoch 微秒，返回该时刻之前最多 `countback` 根。
+    pub async fn candles_before(
+        &self,
+        market: &str,
+        timeframe: &str,
+        countback: u16,
+        to_micros: i64,
+    ) -> Result<Vec<ArcusCandle>, ArcusError> {
+        validate_market_name(market)?;
+        const TIMEFRAMES: &[&str] = &[
+            "1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "8h", "12h", "1d", "3d", "1w",
+        ];
+        if !TIMEFRAMES.contains(&timeframe) || !(1..=1500).contains(&countback) {
+            return Err(ArcusError::InvalidRequest(
+                "invalid candle timeframe or countback".into(),
+            ));
+        }
         let path = format!(
-            "/v1/candles?market={market}&timeframe={timeframe}&to={to}&countback={countback}"
+            "/v1/candles?market={market}&timeframe={timeframe}&to={to_micros}&countback={countback}"
         );
         Ok(self
             .send_json::<CandlesResponse>(Method::GET, &path, None)
@@ -1014,6 +1274,35 @@ impl ArcusWebSocket {
             .send(message.to_string())
             .await
             .map_err(|_| ArcusError::InvalidRequest("WebSocket is disconnected".into()))
+    }
+
+    async fn subscribe_account_channel(
+        &self,
+        channel: &str,
+        address: &str,
+    ) -> Result<(), ArcusError> {
+        validate_address(address)?;
+        let message = serde_json::json!({
+            "type": "subscribe",
+            "channel": channel,
+            "id": address,
+        });
+        self.commands
+            .send(message.to_string())
+            .await
+            .map_err(|_| ArcusError::InvalidRequest("WebSocket is disconnected".into()))
+    }
+
+    pub async fn subscribe_orders(&self, address: &str) -> Result<(), ArcusError> {
+        self.subscribe_account_channel("orders", address).await
+    }
+
+    pub async fn subscribe_user_fills(&self, address: &str) -> Result<(), ArcusError> {
+        self.subscribe_account_channel("userFills", address).await
+    }
+
+    pub async fn subscribe_funding(&self, address: &str) -> Result<(), ArcusError> {
+        self.subscribe_account_channel("funding", address).await
     }
 
     pub fn receiver(&self) -> broadcast::Receiver<ArcusWsEvent> {

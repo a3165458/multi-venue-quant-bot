@@ -41,6 +41,7 @@ impl Strategy for EdgeSignal {
             timestamp: ts,
             expected_edge_bps: self.edge_bps,
             risk_reducing: self.risk_reducing,
+            ..Default::default()
         }]))
     }
 

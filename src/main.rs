@@ -1,9 +1,13 @@
 // src/main.rs
+mod aster_hft_shadow;
+mod aster_live;
+mod aster_shadow;
 mod backtest;
 mod dashboard;
 mod data;
 mod env_profiles;
 mod hft;
+mod hyperliquid_live;
 mod lighter;
 mod risk;
 mod strategy;
@@ -13,10 +17,28 @@ mod utils;
 #[path = "hft_tests.rs"]
 mod hft_tests;
 
+#[cfg(test)]
+#[path = "aster_live_tests.rs"]
+mod aster_live_tests;
+
+#[cfg(test)]
+#[path = "aster_shadow_tests.rs"]
+mod aster_shadow_tests;
+
+#[cfg(test)]
+#[path = "aster_hft_shadow_tests.rs"]
+mod aster_hft_shadow_tests;
+
+#[cfg(test)]
+#[path = "hyperliquid_live_tests.rs"]
+mod hyperliquid_live_tests;
+
 use anyhow::{Context, Result};
 use chrono::Utc;
 use clap::{Parser, Subcommand};
 use config::Config;
+use parking_lot::Mutex;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{debug, error, info, warn};
@@ -57,6 +79,11 @@ enum Commands {
         /// Config file for the profitability gate (same section as live)
         #[arg(long)]
         config: Option<String>,
+        /// Maker fill model: post_only signals only fill when the candle range
+        /// crosses their quote price; no slippage. Wire commission/slippage from
+        /// the config's profitability section (maker economics).
+        #[arg(long)]
+        maker: bool,
     },
 
     /// Run parameter optimization sweep
@@ -100,6 +127,45 @@ enum Commands {
         #[arg(long, default_value = "https://mainnet.zklighter.elliot.ai")]
         url: String,
         /// 输出文件名标签（默认取 URL 推断: mainnet / rh）
+        #[arg(long)]
+        tag: Option<String>,
+    },
+
+    /// Download Arcus historical candles (paged) into a backtest CSV.
+    /// 支持多市场：--symbols "BTC-USD,NVDA-USD" 写入同一文件（按 symbol 列区分）。
+    DownloadArcus {
+        /// 逗号分隔的市场符号，如 "BTC-USD,NVDA-USD,TSLA-USD"
+        #[arg(short, long)]
+        symbols: String,
+        #[arg(short, long, default_value = "1h")]
+        interval: String,
+        #[arg(long)]
+        start: String,
+        #[arg(long)]
+        end: String,
+        /// mainnet | testnet
+        #[arg(long, default_value = "mainnet")]
+        env: String,
+        /// 输出文件名标签（默认 arcus）
+        #[arg(long)]
+        tag: Option<String>,
+    },
+
+    /// Download Aster Pro Futures V3 candles into a backtest CSV.
+    DownloadAster {
+        /// 逗号分隔的永续合约符号，如 "BTCUSDT,ETHUSDT"
+        #[arg(short, long)]
+        symbols: String,
+        #[arg(short, long, default_value = "1h")]
+        interval: String,
+        #[arg(long)]
+        start: String,
+        #[arg(long)]
+        end: String,
+        /// Aster Futures V3 REST base URL
+        #[arg(long, default_value = "https://fapi.asterdex.com")]
+        url: String,
+        /// 输出文件名标签（默认 aster）
         #[arg(long)]
         tag: Option<String>,
     },
@@ -148,6 +214,7 @@ async fn main() -> Result<()> {
             output,
             params,
             config,
+            maker,
         } => {
             run_backtest(
                 &strategy,
@@ -159,6 +226,7 @@ async fn main() -> Result<()> {
                     output,
                     params,
                     config,
+                    maker,
                 },
             )
             .await
@@ -192,6 +260,22 @@ async fn main() -> Result<()> {
             url,
             tag,
         } => download_data(&symbol, &interval, &start, &end, &url, tag.as_deref()).await,
+        Commands::DownloadArcus {
+            symbols,
+            interval,
+            start,
+            end,
+            env,
+            tag,
+        } => download_arcus_data(&symbols, &interval, &start, &end, &env, tag.as_deref()).await,
+        Commands::DownloadAster {
+            symbols,
+            interval,
+            start,
+            end,
+            url,
+            tag,
+        } => download_aster_data(&symbols, &interval, &start, &end, &url, tag.as_deref()).await,
         Commands::GenerateData { symbol, days } => generate_test_data(&symbol, days).await,
         Commands::Scan {
             url,
@@ -217,12 +301,18 @@ async fn run_live_trading(config_path: &str) -> Result<()> {
         .build()
         .context("Failed to load config")?;
 
-    if settings
+    let exchange_kind = settings
         .get_string("exchange.kind")
-        .map(|kind| kind.eq_ignore_ascii_case("arcus"))
-        .unwrap_or(false)
-    {
-        return run_arcus_live_trading(settings).await;
+        .context("exchange.kind is required for live trading")?;
+    match aster_live::LiveDispatch::parse(&exchange_kind)? {
+        aster_live::LiveDispatch::Lighter => {}
+        aster_live::LiveDispatch::Arcus => return run_arcus_live_trading(settings).await,
+        aster_live::LiveDispatch::Aster => {
+            return aster_live::run_aster_live_trading(settings).await;
+        }
+        aster_live::LiveDispatch::Hyperliquid => {
+            return hyperliquid_live::run_hyperliquid_live_trading(settings).await;
+        }
     }
 
     let chain_id = settings.get_int("lighter.chain_id").unwrap_or(304);
@@ -410,6 +500,8 @@ async fn run_live_trading(config_path: &str) -> Result<()> {
         risk_status: None,
         daily_realized_pnl: 0.0,
         total_realized_pnl: 0.0,
+        daily_funding_pnl: 0.0,
+        total_funding_pnl: 0.0,
         initial_equity: equity,
         peak_equity: equity,
         equity_history: vec![(Utc::now().timestamp(), equity)],
@@ -466,10 +558,17 @@ async fn run_live_trading(config_path: &str) -> Result<()> {
             "position_take_profit_pct": 5.0,
             "leverage_limit": 3.0,
         }),
+        dashboard_auth_token: String::new(),
         risk_update_requested: None,
         leverage_limit: 3.0,
         last_prices: std::collections::HashMap::new(),
+        shadow_metrics: None,
+        hft_shadow_metrics: None,
         quant_agent: dashboard::quant_agent::AgentLedger::load(&network_name),
+        user_add_rate_bps: None,
+        user_cross_rate_bps: None,
+        last_cross_dex_net_bps: None,
+        last_cross_dex_side: None,
     }));
 
     // Restore persistent PnL data from disk
@@ -1926,12 +2025,288 @@ async fn apply_pending_strategy_update(
     }
 }
 
+async fn load_arcus_fills_from(
+    client: &multi_venue_quant_bot::arcus::ArcusClient,
+    address: &str,
+    account_index: u8,
+    from_micros: Option<i64>,
+) -> Result<Vec<multi_venue_quant_bot::arcus::ArcusFill>> {
+    const PAGE_SIZE: u16 = 1000;
+    const MAX_PAGES: usize = 1000;
+
+    let mut fills = Vec::new();
+    let mut seen = HashSet::new();
+    let mut to = None;
+    for _ in 0..MAX_PAGES {
+        let page = client
+            .fills(address, account_index, from_micros, to, PAGE_SIZE)
+            .await
+            .context("failed to fetch Arcus fills")?;
+        if page.is_empty() {
+            break;
+        }
+        let page_len = page.len();
+        let oldest = page.iter().map(|fill| fill.created_at).min();
+        for fill in page {
+            if seen.insert(fill.trade_id.clone()) {
+                fills.push(fill);
+            }
+        }
+        if page_len < PAGE_SIZE as usize {
+            break;
+        }
+        let Some(oldest) = oldest else { break };
+        if from_micros.is_some_and(|from| oldest <= from) {
+            break;
+        }
+        let next_to = oldest.saturating_sub(1);
+        if to.is_some_and(|current| next_to >= current) {
+            anyhow::bail!("Arcus fill pagination cursor did not advance");
+        }
+        to = Some(next_to);
+    }
+    fills.sort_by_key(|fill| fill.created_at);
+    Ok(fills)
+}
+
+async fn load_all_arcus_fills(
+    client: &multi_venue_quant_bot::arcus::ArcusClient,
+    address: &str,
+    account_index: u8,
+) -> Result<Vec<multi_venue_quant_bot::arcus::ArcusFill>> {
+    load_arcus_fills_from(client, address, account_index, None).await
+}
+
+fn arcus_funding_key(payment: &multi_venue_quant_bot::arcus::ArcusFundingPayment) -> String {
+    format!(
+        "{}:{}:{}:{}",
+        payment.market_id, payment.time, payment.size, payment.payment
+    )
+}
+
+async fn load_arcus_funding_from(
+    client: &multi_venue_quant_bot::arcus::ArcusClient,
+    address: &str,
+    account_index: u8,
+    from_micros: Option<i64>,
+) -> Result<Vec<multi_venue_quant_bot::arcus::ArcusFundingPayment>> {
+    const PAGE_SIZE: u16 = 1000;
+    const MAX_PAGES: usize = 1000;
+
+    let from_ms = from_micros.map(|value| value / 1_000);
+    let mut payments = Vec::new();
+    let mut seen = HashSet::new();
+    let mut to_ms = None;
+    for _ in 0..MAX_PAGES {
+        let page = client
+            .funding_payments(address, account_index, from_ms, to_ms, PAGE_SIZE)
+            .await
+            .context("failed to fetch Arcus funding payments")?;
+        if page.is_empty() {
+            break;
+        }
+        let page_len = page.len();
+        let oldest = page.iter().map(|payment| payment.time).min();
+        for payment in page {
+            if seen.insert(arcus_funding_key(&payment)) {
+                payments.push(payment);
+            }
+        }
+        if page_len < PAGE_SIZE as usize {
+            break;
+        }
+        let Some(oldest) = oldest else { break };
+        if from_micros.is_some_and(|from| oldest <= from) {
+            break;
+        }
+        let next_to_ms = oldest.saturating_sub(1) / 1_000;
+        if to_ms.is_some_and(|current| next_to_ms >= current) {
+            anyhow::bail!("Arcus funding pagination cursor did not advance");
+        }
+        to_ms = Some(next_to_ms);
+    }
+    payments.sort_by_key(|payment| payment.time);
+    Ok(payments)
+}
+
+async fn load_all_arcus_funding(
+    client: &multi_venue_quant_bot::arcus::ArcusClient,
+    address: &str,
+    account_index: u8,
+) -> Result<Vec<multi_venue_quant_bot::arcus::ArcusFundingPayment>> {
+    load_arcus_funding_from(client, address, account_index, None).await
+}
+
+fn arcus_fill_action(fill: &multi_venue_quant_bot::arcus::ArcusFill) -> &'static str {
+    match fill.position_effect.as_deref().unwrap_or_default() {
+        effect if effect.starts_with("CLOSE_") => "Close",
+        effect if effect.starts_with("FLIP_") => "Flip Close",
+        effect if effect.starts_with("ADD_") => "Add",
+        _ => "Open",
+    }
+}
+
+fn arcus_fill_trade(fill: &multi_venue_quant_bot::arcus::ArcusFill) -> Result<serde_json::Value> {
+    let timestamp = chrono::DateTime::<Utc>::from_timestamp_micros(fill.created_at)
+        .context("Arcus fill timestamp is out of range")?;
+    let price = fill
+        .price
+        .parse::<f64>()
+        .context("invalid Arcus fill price")?;
+    let quantity = fill
+        .size
+        .parse::<f64>()
+        .context("invalid Arcus fill size")?;
+    Ok(serde_json::json!({
+        "timestamp": timestamp.to_rfc3339(),
+        "symbol": fill.market_display_name,
+        "market_id": fill.market_id,
+        "side": format!("{:?}", fill.side),
+        "price": price,
+        "quantity": quantity,
+        "pnl": fill.net_realized_pnl()?,
+        "closed_pnl": fill.closed_pnl.parse::<f64>().unwrap_or(0.0),
+        "fee": fill.fee.parse::<f64>().unwrap_or(0.0),
+        "action": arcus_fill_action(fill),
+        "position_effect": fill.position_effect,
+        "role": fill.role,
+        "trade_id": fill.trade_id,
+        "order_id": fill.order_id,
+    }))
+}
+
+fn apply_arcus_fill(
+    dashboard: &mut dashboard::server::DashboardState,
+    fill: &multi_venue_quant_bot::arcus::ArcusFill,
+) -> Result<()> {
+    let pnl = fill.net_realized_pnl()?;
+    let day = chrono::DateTime::<Utc>::from_timestamp_micros(fill.created_at)
+        .context("Arcus fill timestamp is out of range")?
+        .format("%Y-%m-%d")
+        .to_string();
+    *dashboard.daily_pnl_map.entry(day.clone()).or_insert(0.0) += pnl;
+    if day == Utc::now().format("%Y-%m-%d").to_string() {
+        dashboard.daily_realized_pnl += pnl;
+    }
+    dashboard.total_realized_pnl += pnl;
+    dashboard.push_trade(arcus_fill_trade(fill)?);
+    Ok(())
+}
+
+fn apply_arcus_funding(
+    dashboard: &mut dashboard::server::DashboardState,
+    payment: &multi_venue_quant_bot::arcus::ArcusFundingPayment,
+) -> Result<()> {
+    let pnl = payment.payment_value()?;
+    let day = chrono::DateTime::<Utc>::from_timestamp_micros(payment.time)
+        .context("Arcus funding timestamp is out of range")?
+        .format("%Y-%m-%d")
+        .to_string();
+    *dashboard.daily_pnl_map.entry(day.clone()).or_insert(0.0) += pnl;
+    dashboard.total_funding_pnl += pnl;
+    dashboard.total_realized_pnl += pnl;
+    if day == Utc::now().format("%Y-%m-%d").to_string() {
+        dashboard.daily_funding_pnl += pnl;
+        dashboard.daily_realized_pnl += pnl;
+    }
+    Ok(())
+}
+
+fn rebuild_arcus_account_history(
+    dashboard: &mut dashboard::server::DashboardState,
+    fills: &[multi_venue_quant_bot::arcus::ArcusFill],
+    funding: &[multi_venue_quant_bot::arcus::ArcusFundingPayment],
+) -> Result<()> {
+    dashboard.trade_history.clear();
+    dashboard.total_volume = 0.0;
+    dashboard.total_closed_trades = 0;
+    dashboard.total_realized_pnl = 0.0;
+    dashboard.daily_realized_pnl = 0.0;
+    dashboard.total_funding_pnl = 0.0;
+    dashboard.daily_funding_pnl = 0.0;
+    dashboard.daily_pnl_map.clear();
+    for payment in funding {
+        apply_arcus_funding(dashboard, payment)?;
+    }
+    for fill in fills {
+        apply_arcus_fill(dashboard, fill)?;
+    }
+    dashboard.total_trades = fills.len() as u64;
+    Ok(())
+}
+
+fn arcus_exchange_client_id(strategy_client_id: &str, timestamp: u64) -> String {
+    const SUFFIX_LEN: usize = 17; // '_' plus 16 hexadecimal digits.
+    const MAX_CLIENT_ID_LEN: usize = 36;
+    let prefix_len = MAX_CLIENT_ID_LEN - SUFFIX_LEN;
+    let prefix: String = strategy_client_id.chars().take(prefix_len).collect();
+    format!("{prefix}_{timestamp:016x}")
+}
+
+fn arcus_maker_quote_key(symbol: &str, side: multi_venue_quant_bot::arcus::OrderSide) -> String {
+    let side = match side {
+        multi_venue_quant_bot::arcus::OrderSide::Buy => "buy",
+        multi_venue_quant_bot::arcus::OrderSide::Sell => "sell",
+    };
+    format!("mq_{symbol}_{side}")
+}
+
+fn arcus_open_order_limit_reached(
+    reconciled_open_orders: u32,
+    local_resting_quotes: usize,
+    max_open_orders: u32,
+) -> bool {
+    reconciled_open_orders >= max_open_orders || local_resting_quotes >= max_open_orders as usize
+}
+
+fn arcus_quote_attempt_ready(
+    last_failed_attempt: Option<std::time::Instant>,
+    cooldown: std::time::Duration,
+    now: std::time::Instant,
+) -> bool {
+    last_failed_attempt
+        .map(|last| now.saturating_duration_since(last) >= cooldown)
+        .unwrap_or(true)
+}
+
+fn arcus_resting_quote_is_live(
+    quote_client_id: &str,
+    quote_order_id: Option<&str>,
+    live_client_ids: &HashSet<&str>,
+    live_order_ids: &HashSet<&str>,
+) -> bool {
+    live_client_ids.contains(quote_client_id)
+        || quote_order_id.is_some_and(|order_id| live_order_ids.contains(order_id))
+}
+
+fn arcus_signal_allowed_while_paused(
+    trading_paused: bool,
+    risk_reducing: bool,
+    post_only: bool,
+) -> bool {
+    !trading_paused || (risk_reducing && !post_only)
+}
+
 async fn run_arcus_live_trading(settings: Config) -> Result<()> {
     use multi_venue_quant_bot::arcus::{
         ArcusClient, ArcusEnvironment, ArcusKeypair, ArcusMarket, ArcusWebSocket, ArcusWsEvent,
-        DecimalGrid, OrderSide as ArcusSide, PlaceOrder, PlaceOrderRequest, TimeInForce,
+        CancelOrder, CancelOrderRequest, CancelTarget, DecimalGrid, OrderSide as ArcusSide,
+        PlaceOrder, PlaceOrderRequest, TimeInForce,
     };
     use multi_venue_quant_bot::exchange::LiveVenue;
+
+    /// 本 bot 挂出订单的镜像，供 maker 报价去重/替换与对账。
+    #[derive(Clone, Debug)]
+    struct RestingQuote {
+        client_id: String,
+        order_id: Option<String>,
+        symbol: String,
+        side: ArcusSide,
+        price: f64,
+        quantity: f64,
+        /// 最近一次下单时间，用于报价替换冷却（防 BBO 每 tick 微变触发撤单风暴）
+        last_action: std::time::Instant,
+    }
 
     let environment = match settings
         .get_string("exchange.environment")
@@ -1988,13 +2363,11 @@ async fn run_arcus_live_trading(settings: Config) -> Result<()> {
     let positions = account
         .market_positions()
         .context("invalid Arcus position response")?;
-    match client
+    client
         .cancel_all_orders(&credentials.address, credentials.account_index)
         .await
-    {
-        Ok(_) => info!("✅ Cleared existing Arcus orders before strategy startup"),
-        Err(error) => warn!("⚠️ Arcus startup cancel-all failed: {error}"),
-    }
+        .context("Arcus startup cancel-all failed; refusing to start trading")?;
+    info!("✅ Cleared existing Arcus orders before strategy startup");
 
     let raw_markets = client
         .markets()
@@ -2053,6 +2426,7 @@ async fn run_arcus_live_trading(settings: Config) -> Result<()> {
         peak_equity: equity,
         equity_history: vec![(Utc::now().timestamp(), equity)],
         active_markets: market_ids.clone(),
+        trading_paused: settings.get_bool("trading.start_paused").unwrap_or(false),
         available_markets: raw_markets
             .iter()
             .filter(|market| market.status == "ONLINE")
@@ -2063,6 +2437,55 @@ async fn run_arcus_live_trading(settings: Config) -> Result<()> {
         quant_agent: dashboard::quant_agent::AgentLedger::load(venue.as_str()),
         ..dashboard::server::DashboardState::default()
     }));
+
+    // Arcus order responses are acknowledgements, not executions. Restore chart
+    // baselines first, then rebuild all trading statistics from the exchange's
+    // authoritative fill ledger so restarts also repair legacy over-counting.
+    if let Some(saved) = dashboard::server::PersistentPnlData::load(venue.as_str()) {
+        dash_state.write().await.restore_pnl(&saved);
+    }
+    let mut known_fill_ids = HashSet::new();
+    let mut known_funding_ids = HashSet::new();
+    let mut last_fill_micros = None;
+    let mut last_funding_micros = None;
+    let mut account_history_reconciled = false;
+    let (fills, funding) = tokio::join!(
+        load_all_arcus_fills(&client, &credentials.address, credentials.account_index),
+        load_all_arcus_funding(&client, &credentials.address, credentials.account_index),
+    );
+    match (fills, funding) {
+        (Ok(fills), Ok(funding)) => {
+            account_history_reconciled = true;
+            known_fill_ids.extend(fills.iter().map(|fill| fill.trade_id.clone()));
+            known_funding_ids.extend(funding.iter().map(arcus_funding_key));
+            last_fill_micros = fills.iter().map(|fill| fill.created_at).max();
+            last_funding_micros = funding.iter().map(|payment| payment.time).max();
+            let mut dashboard = dash_state.write().await;
+            rebuild_arcus_account_history(&mut dashboard, &fills, &funding)?;
+            dashboard.save_pnl();
+            info!(
+                "📂 Reconciled {} Arcus fills and {} funding payments: volume={:.2}, net realized PnL={:+.4}",
+                fills.len(),
+                funding.len(),
+                dashboard.total_volume,
+                dashboard.total_realized_pnl
+            );
+        }
+        (fills, funding) => {
+            warn!(
+                "⚠️ Initial Arcus account reconciliation failed; fills={}, funding={}; will retry",
+                fills
+                    .err()
+                    .map(|error| error.to_string())
+                    .unwrap_or_else(|| "ok".into()),
+                funding
+                    .err()
+                    .map(|error| error.to_string())
+                    .unwrap_or_else(|| "ok".into())
+            );
+        }
+    }
+
     if let Some(saved) = dashboard::server::PersistentStrategyConfig::load(venue.as_str()) {
         info!(
             "📂 Loaded strategy config: {} params={:?}",
@@ -2132,6 +2555,9 @@ async fn run_arcus_live_trading(settings: Config) -> Result<()> {
     for market in markets.values() {
         websocket.subscribe_bbo(&market.symbol).await?;
     }
+    websocket.subscribe_orders(&credentials.address).await?;
+    websocket.subscribe_user_fills(&credentials.address).await?;
+    websocket.subscribe_funding(&credentials.address).await?;
     let mut events = websocket.receiver();
 
     let refresh_client = client.clone();
@@ -2139,24 +2565,89 @@ async fn run_arcus_live_trading(settings: Config) -> Result<()> {
     let refresh_account_index = credentials.account_index;
     let refresh_dashboard = dash_state.clone();
     let refresh_risk = risk_manager.clone();
+    // 本 bot 挂出的订单镜像（client_id → 报价），供 maker 报价去重/替换与对账。
+    // 与 10s 刷新任务共享：刷新侧用交易所 open_orders 对账移除已成交/被撤条目。
+    let resting_quotes: Arc<Mutex<HashMap<String, RestingQuote>>> =
+        Arc::new(Mutex::new(HashMap::new()));
+    let refresh_resting = resting_quotes.clone();
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(10));
         loop {
             interval.tick().await;
+
+            // Rebuild only when both authoritative ledgers are available.
+            if !account_history_reconciled {
+                let (fills, funding) = tokio::join!(
+                    load_all_arcus_fills(&refresh_client, &refresh_address, refresh_account_index,),
+                    load_all_arcus_funding(
+                        &refresh_client,
+                        &refresh_address,
+                        refresh_account_index,
+                    ),
+                );
+                match (fills, funding) {
+                    (Ok(fills), Ok(funding)) => {
+                        let mut dashboard = refresh_dashboard.write().await;
+                        if let Err(error) =
+                            rebuild_arcus_account_history(&mut dashboard, &fills, &funding)
+                        {
+                            warn!("⚠️ Arcus account ledger contains invalid data: {error}");
+                        } else {
+                            known_fill_ids =
+                                fills.iter().map(|fill| fill.trade_id.clone()).collect();
+                            known_funding_ids = funding.iter().map(arcus_funding_key).collect();
+                            last_fill_micros = fills.iter().map(|fill| fill.created_at).max();
+                            last_funding_micros = funding.iter().map(|payment| payment.time).max();
+                            dashboard.save_pnl();
+                            account_history_reconciled = true;
+                        }
+                    }
+                    (fills, funding) => warn!(
+                        "⚠️ Arcus account reconciliation retry failed: fills={}, funding={}",
+                        fills
+                            .err()
+                            .map(|error| error.to_string())
+                            .unwrap_or_else(|| "ok".into()),
+                        funding
+                            .err()
+                            .map(|error| error.to_string())
+                            .unwrap_or_else(|| "ok".into())
+                    ),
+                }
+            }
+
             let cancel_requested = refresh_dashboard.read().await.cancel_all_requested;
             if cancel_requested {
                 match refresh_client
                     .cancel_all_orders(&refresh_address, refresh_account_index)
                     .await
                 {
-                    Ok(_) => info!("✅ Arcus cancel-all accepted"),
-                    Err(error) => error!("❌ Arcus cancel-all failed: {error}"),
+                    Ok(_) => {
+                        info!("✅ Arcus cancel-all accepted");
+                        refresh_dashboard.write().await.cancel_all_requested = false;
+                        // Keep the mirror until REST/WS confirms terminal order state.
+                    }
+                    Err(error) => {
+                        error!("❌ Arcus cancel-all failed: {error}");
+                        // Keep the request armed so the next refresh retries.
+                    }
                 }
-                refresh_dashboard.write().await.cancel_all_requested = false;
             }
-            let (account, orders) = tokio::join!(
+            let (account, orders, fills, funding) = tokio::join!(
                 refresh_client.account(&refresh_address, refresh_account_index),
                 refresh_client.open_orders(&refresh_address, refresh_account_index),
+                load_arcus_fills_from(
+                    &refresh_client,
+                    &refresh_address,
+                    refresh_account_index,
+                    last_fill_micros,
+                ),
+                load_arcus_funding_from(
+                    &refresh_client,
+                    &refresh_address,
+                    refresh_account_index,
+                    last_funding_micros,
+                ),
             );
             if let Ok(account) = account {
                 if let (Ok(equity), Ok(free), Ok(positions)) = (
@@ -2164,23 +2655,162 @@ async fn run_arcus_live_trading(settings: Config) -> Result<()> {
                     account.free_collateral.parse::<f64>(),
                     account.market_positions(),
                 ) {
+                    let unrealized = positions
+                        .iter()
+                        .filter_map(|position| position.unrealized_pnl.parse::<f64>().ok())
+                        .sum();
                     refresh_risk.lock().await.update_equity(equity);
                     let mut dashboard = refresh_dashboard.write().await;
                     dashboard.equity = equity;
                     dashboard.available_balance = free;
+                    dashboard.unrealized_pnl = unrealized;
                     dashboard.positions = arcus_dashboard_positions(&positions);
-                    dashboard
-                        .last_prices
-                        .extend(positions.iter().filter_map(|position| {
-                            position
-                                .entry_price
-                                .parse::<f64>()
-                                .ok()
-                                .map(|price| (position.market_display_name.clone(), price))
-                        }));
+                    if equity > dashboard.peak_equity {
+                        dashboard.peak_equity = equity;
+                    }
+                    let now = Utc::now().timestamp();
+                    let should_record = dashboard
+                        .equity_history
+                        .last()
+                        .map(|(timestamp, _)| now - timestamp >= 60)
+                        .unwrap_or(true);
+                    if should_record {
+                        dashboard.equity_history.push((now, equity));
+                        let cumulative_pnl = equity - dashboard.initial_equity;
+                        dashboard.pnl_history.push((now, cumulative_pnl));
+                        if dashboard.equity_history.len() > 10_080 {
+                            dashboard.equity_history.remove(0);
+                            dashboard.pnl_history.remove(0);
+                        }
+                        if dashboard.equity_history.len() % 5 == 0 {
+                            dashboard.save_pnl();
+                        }
+                    }
+                }
+            }
+            match fills {
+                Ok(fills) => {
+                    let mut new_fills = 0_u64;
+                    let mut dashboard = refresh_dashboard.write().await;
+                    for fill in fills {
+                        last_fill_micros = Some(
+                            last_fill_micros
+                                .map_or(fill.created_at, |last| last.max(fill.created_at)),
+                        );
+                        if known_fill_ids.contains(&fill.trade_id) {
+                            continue;
+                        }
+                        match apply_arcus_fill(&mut dashboard, &fill) {
+                            Ok(()) => {
+                                known_fill_ids.insert(fill.trade_id);
+                                new_fills += 1;
+                            }
+                            Err(error) => warn!("⚠️ Invalid Arcus fill ignored: {error}"),
+                        }
+                    }
+                    dashboard.total_trades = known_fill_ids.len() as u64;
+                    if new_fills > 0 {
+                        info!(
+                            "💰 Reconciled {new_fills} new Arcus fills: volume={:.2}, net realized PnL={:+.4}",
+                            dashboard.total_volume, dashboard.total_realized_pnl
+                        );
+                        dashboard.save_pnl();
+                    }
+                }
+                Err(error) => warn!("⚠️ Arcus fills refresh failed: {error}"),
+            }
+            match funding {
+                Ok(payments) => {
+                    let mut new_payments = 0_u64;
+                    let mut dashboard = refresh_dashboard.write().await;
+                    for payment in payments {
+                        last_funding_micros = Some(
+                            last_funding_micros.map_or(payment.time, |last| last.max(payment.time)),
+                        );
+                        let key = arcus_funding_key(&payment);
+                        if known_funding_ids.contains(&key) {
+                            continue;
+                        }
+                        match apply_arcus_funding(&mut dashboard, &payment) {
+                            Ok(()) => {
+                                known_funding_ids.insert(key);
+                                new_payments += 1;
+                            }
+                            Err(error) => warn!("⚠️ Invalid Arcus funding ignored: {error}"),
+                        }
+                    }
+                    if new_payments > 0 {
+                        info!(
+                            "💰 Reconciled {new_payments} Arcus funding payments: funding PnL={:+.4}",
+                            dashboard.total_funding_pnl
+                        );
+                        dashboard.save_pnl();
+                    }
+                }
+                Err(error) => warn!("⚠️ Arcus funding refresh failed: {error}"),
+            }
+            let daily_realized_pnl = refresh_dashboard.read().await.daily_realized_pnl;
+            let emergency = {
+                let mut risk = refresh_risk.lock().await;
+                risk.update_daily_pnl(daily_realized_pnl);
+                if risk.should_emergency_close() && !risk.is_emergency_triggered() {
+                    risk.set_emergency_triggered();
+                    true
+                } else {
+                    false
+                }
+            };
+            if emergency {
+                {
+                    let mut dashboard = refresh_dashboard.write().await;
+                    dashboard.trading_paused = true;
+                    dashboard.cancel_all_requested = true;
+                }
+                match refresh_client
+                    .cancel_all_orders(&refresh_address, refresh_account_index)
+                    .await
+                {
+                    Ok(_) => {
+                        refresh_dashboard.write().await.cancel_all_requested = false;
+                        error!("🚨 Arcus emergency gate paused trading and accepted cancel-all");
+                    }
+                    Err(error) => {
+                        error!("🚨 Arcus emergency cancel-all failed and remains armed: {error}");
+                    }
                 }
             }
             if let Ok(orders) = orders {
+                // 对账：交易所侧已消失的挂单（成交/被撤）从本地镜像移除，
+                // 使 maker 策略经 snapshot.open_orders 感知成交并重新报价。
+                {
+                    let live_client_ids: HashSet<&str> = orders
+                        .iter()
+                        .filter_map(|order| order.client_id.as_deref())
+                        .collect();
+                    let live_order_ids: HashSet<&str> =
+                        orders.iter().map(|order| order.order_id.as_str()).collect();
+                    let mut resting = refresh_resting.lock();
+                    let removed: Vec<String> = resting
+                        .iter()
+                        .filter(|(client_id, quote)| {
+                            !arcus_resting_quote_is_live(
+                                client_id,
+                                quote.order_id.as_deref(),
+                                &live_client_ids,
+                                &live_order_ids,
+                            )
+                        })
+                        .map(|(client_id, _)| client_id.clone())
+                        .collect();
+                    for cid in removed {
+                        if let Some(q) = resting.remove(&cid) {
+                            info!(
+                                "maker quote {} {} gone from exchange (filled/cancelled)",
+                                q.symbol, cid
+                            );
+                        }
+                    }
+                }
                 let mut dashboard = refresh_dashboard.write().await;
                 dashboard.open_orders = orders.len() as u32;
                 dashboard.open_orders_list = orders
@@ -2201,32 +2831,135 @@ async fn run_arcus_live_trading(settings: Config) -> Result<()> {
         }
     });
 
-    info!("🚀 Arcus live trading active on {venue}");
-    let mut trade_count = 0_u64;
+    if dash_state.read().await.trading_paused {
+        warn!("⏸️ Arcus connected on {venue}; entry strategy is paused");
+    } else {
+        info!("🚀 Arcus live trading active on {venue}");
+    }
     let max_open_orders = settings.get_int("trading.max_open_orders").unwrap_or(8) as u32;
+    // 报价替换冷却：同 client_id 的撤旧挂新最少间隔（秒），防止 BBO 每 tick 微变触发撤单风暴。
+    // 冷却期内保持旧单在场（价格略旧可接受，30bps 宽价差下数秒漂移 < 1bp）。
+    let requote_cooldown = std::time::Duration::from_secs(
+        settings
+            .get_int("trading.strategies.maker_quote.requote_cooldown_secs")
+            .unwrap_or(5)
+            .max(1) as u64,
+    );
+    // 签名 timestamp 单调递增（Arcus 防重放：同 tick 多信号/撤单+挂新共用 now() 会被 401 拒）
+    let last_signed_timestamp = std::sync::atomic::AtomicU64::new(0);
+    // 交易所异步拒单不会进入 resting_quotes；单独保留失败时间，避免每个 BBO tick 重试。
+    let mut failed_quote_attempts = HashMap::<String, std::time::Instant>::new();
     loop {
         let event = events
             .recv()
             .await
             .context("Arcus WebSocket event stream closed")?;
-        if event == ArcusWsEvent::Disconnected {
-            let _ = client
-                .cancel_all_orders(&credentials.address, credentials.account_index)
-                .await;
-            anyhow::bail!(
-                "Arcus WebSocket disconnected; cancel-all requested and live loop stopped"
-            );
-        }
-        let ArcusWsEvent::Bbo {
-            symbol,
-            bid,
-            ask,
-            bid_size,
-            ask_size,
-            ..
-        } = event
-        else {
-            continue;
+        let (symbol, bid, ask, bid_size, ask_size) = match event {
+            ArcusWsEvent::Disconnected => {
+                client
+                    .cancel_all_orders(&credentials.address, credentials.account_index)
+                    .await
+                    .context("Arcus WebSocket disconnected and cancel-all failed")?;
+                anyhow::bail!(
+                    "Arcus WebSocket disconnected; cancel-all accepted and live loop stopped"
+                );
+            }
+            ArcusWsEvent::Orders(orders) => {
+                for order in orders {
+                    let Some(exchange_client_id) = order.client_id else {
+                        continue;
+                    };
+                    let strategy_client_id = {
+                        let resting = resting_quotes.lock();
+                        resting.iter().find_map(|(strategy_client_id, quote)| {
+                            (quote.client_id == exchange_client_id)
+                                .then(|| strategy_client_id.clone())
+                        })
+                    }
+                    .or_else(|| {
+                        exchange_client_id
+                            .starts_with("mq_")
+                            .then(|| arcus_maker_quote_key(&order.market_display_name, order.side))
+                    });
+                    let status = order.status.to_ascii_uppercase();
+                    if status == "REJECTED" {
+                        if let Some(strategy_client_id) = strategy_client_id.as_ref() {
+                            failed_quote_attempts
+                                .insert(strategy_client_id.clone(), std::time::Instant::now());
+                        }
+                        error!(
+                            "❌ Arcus order rejected: client_id={exchange_client_id}, order_id={}, reason={}",
+                            order.order_id,
+                            order.rejection_reason.as_deref().unwrap_or("unknown")
+                        );
+                    }
+                    if matches!(
+                        status.as_str(),
+                        "FILLED"
+                            | "CANCELED"
+                            | "MARGIN_CANCELED"
+                            | "REJECTED"
+                            | "TPSL_CANCELED"
+                            | "TPSL_TRIGGERED"
+                    ) {
+                        if let Some(strategy_client_id) = strategy_client_id {
+                            if let Some(quote) = resting_quotes.lock().remove(&strategy_client_id) {
+                                info!(
+                                    "maker quote {} {} reached terminal status {}",
+                                    quote.symbol, strategy_client_id, status
+                                );
+                            }
+                        }
+                    } else if status == "OPEN" && exchange_client_id.starts_with("mq_") {
+                        let strategy_client_id = strategy_client_id.expect("maker key");
+                        failed_quote_attempts.remove(&strategy_client_id);
+                        let price = order.price.parse::<f64>().unwrap_or(0.0);
+                        let quantity = order.remaining_size.parse::<f64>().unwrap_or(0.0);
+                        if price > 0.0 && quantity > 0.0 {
+                            resting_quotes
+                                .lock()
+                                .entry(strategy_client_id)
+                                .and_modify(|quote| {
+                                    quote.client_id = exchange_client_id.clone();
+                                    quote.order_id = Some(order.order_id.clone());
+                                    quote.price = price;
+                                    quote.quantity = quantity;
+                                })
+                                .or_insert_with(|| RestingQuote {
+                                    client_id: exchange_client_id,
+                                    order_id: Some(order.order_id),
+                                    symbol: order.market_display_name,
+                                    side: order.side,
+                                    price,
+                                    quantity,
+                                    last_action: std::time::Instant::now(),
+                                });
+                        }
+                    }
+                }
+                continue;
+            }
+            ArcusWsEvent::UserFills(fills) => {
+                if !fills.is_empty() {
+                    debug!("Arcus userFills received: {} fills", fills.len());
+                }
+                continue;
+            }
+            ArcusWsEvent::Funding(payments) => {
+                if !payments.is_empty() {
+                    debug!("Arcus funding received: {} payments", payments.len());
+                }
+                continue;
+            }
+            ArcusWsEvent::Bbo {
+                symbol,
+                bid,
+                ask,
+                bid_size,
+                ask_size,
+                ..
+            } => (symbol, bid, ask, bid_size, ask_size),
+            ArcusWsEvent::Ignored => continue,
         };
         let market = markets
             .values()
@@ -2267,45 +3000,143 @@ async fn run_arcus_live_trading(settings: Config) -> Result<()> {
                 .collect();
             snapshot.positions_authoritative = true;
         }
+        {
+            // 注入本 bot 的挂单视图，供 maker 策略对账（成交/被撤后重新报价）
+            let resting = resting_quotes.lock();
+            for q in resting.values() {
+                snapshot.open_orders.push(lighter::types::OpenOrderRef {
+                    symbol: q.symbol.clone(),
+                    client_id: Some(q.client_id.clone()),
+                    side: match q.side {
+                        ArcusSide::Buy => lighter::types::Side::Buy,
+                        ArcusSide::Sell => lighter::types::Side::Sell,
+                    },
+                    price: q.price,
+                    quantity: q.quantity,
+                    status: "OPEN".into(),
+                });
+            }
+            snapshot.open_orders_authoritative = true;
+        }
         dash_state
             .write()
             .await
             .last_prices
             .insert(symbol.clone(), (bid + ask) / 2.0);
         apply_pending_strategy_update(&dash_state, &strategy).await;
-        if dash_state.read().await.trading_paused {
+        let trading_paused = dash_state.read().await.trading_paused;
+        let mut signals = Vec::new();
+        let current_position = {
+            let dashboard = dash_state.read().await;
+            dashboard
+                .positions
+                .iter()
+                .find(|position| {
+                    position.get("symbol").and_then(|value| value.as_str()) == Some(symbol.as_str())
+                })
+                .cloned()
+        };
+        if let Some(position) = current_position {
+            let size = position
+                .get("size")
+                .and_then(|value| value.as_f64())
+                .unwrap_or(0.0);
+            let entry_price = position
+                .get("entry_price")
+                .and_then(|value| value.as_f64())
+                .unwrap_or(0.0);
+            let position_side =
+                if position.get("side").and_then(|value| value.as_str()) == Some("Sell") {
+                    lighter::types::Side::Sell
+                } else {
+                    lighter::types::Side::Buy
+                };
+            if size > 0.0 && entry_price > 0.0 {
+                let mark = (bid + ask) / 2.0;
+                let risk_position = lighter::types::Position {
+                    symbol: symbol.clone(),
+                    side: position_side,
+                    size,
+                    entry_price,
+                    unrealized_pnl: position
+                        .get("unrealized_pnl")
+                        .and_then(|value| value.as_f64())
+                        .unwrap_or(0.0),
+                    leverage: position
+                        .get("leverage")
+                        .and_then(|value| value.as_f64())
+                        .unwrap_or(1.0),
+                };
+                let close = {
+                    let risk = risk_manager.lock().await;
+                    if risk.is_emergency_triggered() {
+                        Some(risk::risk_manager::PositionCloseSignal {
+                            symbol: symbol.clone(),
+                            side_to_close: match position_side {
+                                lighter::types::Side::Buy => lighter::types::Side::Sell,
+                                lighter::types::Side::Sell => lighter::types::Side::Buy,
+                            },
+                            size,
+                            entry_price,
+                            current_price: mark,
+                            pnl_pct: 0.0,
+                            reason: "Emergency account close".into(),
+                        })
+                    } else {
+                        risk.check_position_stop_loss_take_profit(
+                            &[risk_position],
+                            &HashMap::from([(symbol.clone(), mark)]),
+                        )
+                        .into_iter()
+                        .next()
+                    }
+                };
+                if let Some(close) = close {
+                    let aggressive_price = match close.side_to_close {
+                        lighter::types::Side::Buy => ask * 1.005,
+                        lighter::types::Side::Sell => bid * 0.995,
+                    };
+                    signals.push(lighter::types::TradeSignal {
+                        action: lighter::types::SignalAction::Place,
+                        symbol: symbol.clone(),
+                        market_id: market.market_id as u32,
+                        side: close.side_to_close,
+                        price: aggressive_price,
+                        quantity: close.size,
+                        order_type: lighter::types::OrderType::Limit,
+                        reason: close.reason,
+                        timestamp: Utc::now(),
+                        expected_edge_bps: None,
+                        risk_reducing: true,
+                        post_only: false,
+                        client_id: Some(format!(
+                            "risk_{}_{}",
+                            market.market_id,
+                            match close.side_to_close {
+                                lighter::types::Side::Buy => "buy",
+                                lighter::types::Side::Sell => "sell",
+                            }
+                        )),
+                    });
+                }
+            }
+        }
+        if signals.is_empty() {
+            if let Some(mut strategy_signals) = strategy.read().await.evaluate(&snapshot).await? {
+                strategy_signals.retain(|signal| {
+                    arcus_signal_allowed_while_paused(
+                        trading_paused,
+                        signal.risk_reducing,
+                        signal.post_only,
+                    )
+                });
+                signals = strategy_signals;
+            }
+        }
+        if signals.is_empty() {
             continue;
         }
-        let Some(signals) = strategy.read().await.evaluate(&snapshot).await? else {
-            continue;
-        };
         for mut signal in signals {
-            {
-                let dashboard = dash_state.read().await;
-                if !signal.risk_reducing && dashboard.open_orders >= max_open_orders {
-                    warn!("Arcus max_open_orders reached; skipping new entry");
-                    continue;
-                }
-                if signal.risk_reducing {
-                    let held = dashboard
-                        .positions
-                        .iter()
-                        .find(|position| {
-                            position.get("symbol").and_then(|v| v.as_str())
-                                == Some(signal.symbol.as_str())
-                        })
-                        .and_then(|position| position.get("size"))
-                        .and_then(|value| value.as_f64())
-                        .unwrap_or(0.0);
-                    if held <= 0.0 {
-                        continue;
-                    }
-                    signal.quantity = signal.quantity.min(held);
-                }
-            }
-            if !risk_manager.lock().await.check_signal(&signal).await? {
-                continue;
-            }
             let market = markets
                 .get(&signal.market_id)
                 .context("strategy emitted unknown Arcus market")?;
@@ -2313,13 +3144,311 @@ async fn run_arcus_live_trading(settings: Config) -> Result<()> {
                 lighter::types::Side::Buy => ArcusSide::Buy,
                 lighter::types::Side::Sell => ArcusSide::Sell,
             };
+            let timestamp = {
+                let now_ns = Utc::now()
+                    .timestamp_nanos_opt()
+                    .context("system clock out of range")? as u64;
+                last_signed_timestamp
+                    .load(std::sync::atomic::Ordering::Relaxed)
+                    .max(now_ns)
+                    + 1
+            };
+            last_signed_timestamp.store(timestamp, std::sync::atomic::Ordering::Relaxed);
+            let strategy_client_id = signal
+                .client_id
+                .clone()
+                .unwrap_or_else(|| format!("qb{}_{}", market.market_id, timestamp));
+
+            if signal.action == lighter::types::SignalAction::Cancel {
+                let Some(quote) = resting_quotes.lock().get(&strategy_client_id).cloned() else {
+                    continue;
+                };
+                let (target, order_id, cancel_client_id) =
+                    if let Some(order_id) = quote.order_id.clone() {
+                        (
+                            CancelTarget::OrderId(order_id.clone()),
+                            Some(order_id),
+                            None,
+                        )
+                    } else {
+                        (
+                            CancelTarget::ClientId(quote.client_id.clone()),
+                            None,
+                            Some(quote.client_id.clone()),
+                        )
+                    };
+                let cancel = CancelOrder {
+                    address: credentials.address.clone(),
+                    account_index: credentials.account_index,
+                    market_id: market.market_id,
+                    target,
+                };
+                let request = CancelOrderRequest {
+                    address: credentials.address.clone(),
+                    market_id: market.market_id,
+                    account_index: credentials.account_index,
+                    order_id: order_id.clone(),
+                    client_id: cancel_client_id,
+                    timestamp,
+                };
+                match client.cancel_order(&cancel, &request).await {
+                    Ok(_) => {
+                        if let Some(quote) = resting_quotes.lock().get_mut(&strategy_client_id) {
+                            quote.last_action = std::time::Instant::now();
+                        }
+                        info!(
+                            "Arcus cancel accepted for {strategy_client_id}: {}",
+                            signal.reason
+                        );
+                    }
+                    Err(cancel_error) => {
+                        let orders = client
+                            .open_orders(&credentials.address, credentials.account_index)
+                            .await
+                            .context("cancel failed and Arcus open-order reconciliation failed")?;
+                        let still_live = orders.iter().any(|order| {
+                            order.client_id.as_deref() == Some(quote.client_id.as_str())
+                                || order_id.as_deref().is_some_and(|id| order.order_id == id)
+                        });
+                        if still_live {
+                            anyhow::bail!(
+                                "cancel {strategy_client_id} failed while order remains live: {cancel_error}"
+                            );
+                        }
+                        resting_quotes.lock().remove(&strategy_client_id);
+                        debug!(
+                            "cancel {strategy_client_id} failed because order is already terminal"
+                        );
+                    }
+                }
+                continue;
+            }
+
+            {
+                let dashboard = dash_state.read().await;
+                if signal.risk_reducing {
+                    let Some(position) = dashboard.positions.iter().find(|position| {
+                        position.get("symbol").and_then(|v| v.as_str())
+                            == Some(signal.symbol.as_str())
+                    }) else {
+                        continue;
+                    };
+                    let held = position
+                        .get("size")
+                        .and_then(|value| value.as_f64())
+                        .unwrap_or(0.0);
+                    let held_side = position
+                        .get("side")
+                        .and_then(|value| value.as_str())
+                        .unwrap_or("");
+                    let closes_position = matches!(
+                        (held_side, signal.side),
+                        ("Buy", lighter::types::Side::Sell) | ("Sell", lighter::types::Side::Buy)
+                    );
+                    if held <= 0.0 || !closes_position {
+                        error!(
+                            "❌ Invalid risk-reducing signal rejected: {} {:?} vs held side {}",
+                            signal.symbol, signal.side, held_side
+                        );
+                        continue;
+                    }
+                    signal.quantity = signal.quantity.min(held);
+                }
+            }
             let values = market.quantize_order(signal.price, signal.quantity, side)?;
-            let timestamp = Utc::now()
-                .timestamp_nanos_opt()
-                .context("system clock out of range")? as u64;
+            let quote_price: f64 = values.price.parse().unwrap_or(signal.price);
+            let quote_qty: f64 = values.quantity.parse().unwrap_or(signal.quantity);
             let good_til_time_us =
                 (Utc::now() + chrono::Duration::days(32)).timestamp_micros() as u64;
-            let client_id = format!("qb{}_{}", market.market_id, timestamp);
+
+            let replace = {
+                let resting = resting_quotes.lock();
+                match resting.get(&strategy_client_id) {
+                    Some(quote) if quote.price == quote_price => {
+                        debug!(
+                            "quote {strategy_client_id} already resting at {}; skip",
+                            values.price
+                        );
+                        continue;
+                    }
+                    Some(quote) if quote.last_action.elapsed() < requote_cooldown => {
+                        debug!(
+                            "quote {strategy_client_id} within requote cooldown; keep old price {}",
+                            quote.price
+                        );
+                        continue;
+                    }
+                    Some(quote) => Some(quote.clone()),
+                    None => None,
+                }
+            };
+            if let Some(quote) = replace {
+                let (target, order_id, cancel_client_id) =
+                    if let Some(order_id) = quote.order_id.clone() {
+                        (
+                            CancelTarget::OrderId(order_id.clone()),
+                            Some(order_id),
+                            None,
+                        )
+                    } else {
+                        (
+                            CancelTarget::ClientId(quote.client_id.clone()),
+                            None,
+                            Some(quote.client_id.clone()),
+                        )
+                    };
+                let cancel = CancelOrder {
+                    address: credentials.address.clone(),
+                    account_index: credentials.account_index,
+                    market_id: market.market_id,
+                    target,
+                };
+                let cancel_request = CancelOrderRequest {
+                    address: credentials.address.clone(),
+                    market_id: market.market_id,
+                    account_index: credentials.account_index,
+                    order_id: order_id.clone(),
+                    client_id: cancel_client_id,
+                    timestamp,
+                };
+                match client.cancel_order(&cancel, &cancel_request).await {
+                    Ok(_) => {
+                        if let Some(quote) = resting_quotes.lock().get_mut(&strategy_client_id) {
+                            quote.last_action = std::time::Instant::now();
+                        }
+                        debug!(
+                            "cancel accepted for stale quote {strategy_client_id}; awaiting terminal state"
+                        );
+                    }
+                    Err(cancel_error) => {
+                        let orders = client
+                            .open_orders(&credentials.address, credentials.account_index)
+                            .await
+                            .context(
+                                "replace cancel failed and open-order reconciliation failed",
+                            )?;
+                        let still_live = orders.iter().any(|order| {
+                            order.client_id.as_deref() == Some(quote.client_id.as_str())
+                                || order_id.as_deref().is_some_and(|id| order.order_id == id)
+                        });
+                        if still_live {
+                            anyhow::bail!(
+                                "replace cancel {strategy_client_id} failed while order remains live: {cancel_error}"
+                            );
+                        }
+                        resting_quotes.lock().remove(&strategy_client_id);
+                    }
+                }
+                // Await terminal confirmation before placing the replacement.
+                continue;
+            }
+
+            if !arcus_quote_attempt_ready(
+                failed_quote_attempts.get(&strategy_client_id).copied(),
+                requote_cooldown,
+                std::time::Instant::now(),
+            ) {
+                debug!("quote {strategy_client_id} rejected recently; waiting for retry cooldown");
+                continue;
+            }
+
+            if !signal.risk_reducing {
+                let reconciled_open_orders = dash_state.read().await.open_orders;
+                let local_resting_quotes = resting_quotes.lock().len();
+                if arcus_open_order_limit_reached(
+                    reconciled_open_orders,
+                    local_resting_quotes,
+                    max_open_orders,
+                ) {
+                    warn!(
+                        "Arcus max_open_orders reached (REST={}, local={}, max={}); skipping new entry",
+                        reconciled_open_orders, local_resting_quotes, max_open_orders
+                    );
+                    continue;
+                }
+            }
+
+            let exposure = {
+                let dashboard = dash_state.read().await;
+                // symbol -> (signed position, resting buys, resting sells), all in notional USD.
+                let mut by_symbol: HashMap<String, (f64, f64, f64)> = HashMap::new();
+                for position in &dashboard.positions {
+                    let Some(symbol) = position.get("symbol").and_then(|value| value.as_str())
+                    else {
+                        continue;
+                    };
+                    let size = position
+                        .get("size")
+                        .and_then(|value| value.as_f64())
+                        .unwrap_or(0.0);
+                    let mark = position
+                        .get("mark_price")
+                        .and_then(|value| value.as_f64())
+                        .unwrap_or(0.0);
+                    let signed_notional =
+                        if position.get("side").and_then(|value| value.as_str()) == Some("Sell") {
+                            -(size * mark).abs()
+                        } else {
+                            (size * mark).abs()
+                        };
+                    by_symbol.entry(symbol.to_string()).or_default().0 = signed_notional;
+                }
+                for order in &dashboard.open_orders_list {
+                    let Some(symbol) = order.get("symbol").and_then(|value| value.as_str()) else {
+                        continue;
+                    };
+                    let notional = (order
+                        .get("price")
+                        .and_then(|value| value.as_f64())
+                        .unwrap_or(0.0)
+                        * order
+                            .get("quantity")
+                            .and_then(|value| value.as_f64())
+                            .unwrap_or(0.0))
+                    .abs();
+                    let entry = by_symbol.entry(symbol.to_string()).or_default();
+                    if order.get("side").and_then(|value| value.as_str()) == Some("Sell") {
+                        entry.2 += notional;
+                    } else {
+                        entry.1 += notional;
+                    }
+                }
+                let total_worst_case_notional = by_symbol
+                    .values()
+                    .map(|(position, buys, sells)| {
+                        risk::risk_manager::worst_case_symbol_notional(*position, *buys, *sells)
+                    })
+                    .sum();
+                let (symbol_position_notional, symbol_buy_open_notional, symbol_sell_open_notional) =
+                    by_symbol.get(&signal.symbol).copied().unwrap_or_default();
+                risk::risk_manager::RiskExposure {
+                    symbol_position_notional,
+                    symbol_buy_open_notional,
+                    symbol_sell_open_notional,
+                    total_worst_case_notional,
+                }
+            };
+            if !risk_manager
+                .lock()
+                .await
+                .check_signal_with_exposure(&signal, exposure)
+                .await?
+            {
+                continue;
+            }
+
+            // Maker quotes rest as ALO. Explicit risk reductions are
+            // marketable IOC limits so a stale exit cannot become new exposure.
+            let tif = if signal.post_only {
+                TimeInForce::Alo
+            } else if signal.risk_reducing {
+                TimeInForce::Ioc
+            } else {
+                TimeInForce::Gtt
+            };
+            // Arcus rejects any client ID reused after an earlier order reaches terminal state.
+            // Keep the strategy key stable locally, but sign every exchange attempt uniquely.
+            let exchange_client_id = arcus_exchange_client_id(&strategy_client_id, timestamp);
             let signed = PlaceOrder {
                 address: credentials.address.clone(),
                 account_index: credentials.account_index,
@@ -2328,9 +3457,9 @@ async fn run_arcus_live_trading(settings: Config) -> Result<()> {
                 price_ticks: values.price_ticks,
                 quantity_quantums: values.quantity_quantums,
                 good_til_time_ns: good_til_time_us * 1_000,
-                time_in_force: TimeInForce::Gtt,
+                time_in_force: tif,
                 reduce_only: signal.risk_reducing,
-                client_id: Some(client_id.clone()),
+                client_id: Some(exchange_client_id.clone()),
             };
             let request = PlaceOrderRequest {
                 address: credentials.address.clone(),
@@ -2340,26 +3469,64 @@ async fn run_arcus_live_trading(settings: Config) -> Result<()> {
                 order_type: "LIMIT".into(),
                 quantity: values.quantity,
                 price: values.price,
-                time_in_force: TimeInForce::Gtt,
+                time_in_force: tif,
                 good_til_time: good_til_time_us.to_string(),
                 timestamp,
-                client_id: Some(client_id),
+                client_id: Some(exchange_client_id.clone()),
                 reduce_only: signal.risk_reducing,
             };
             match client.place_order(&signed, &request).await {
                 Ok(ack) => {
-                    trade_count += 1;
-                    let mut dashboard = dash_state.write().await;
-                    dashboard.total_trades = trade_count;
-                    dashboard.push_trade(serde_json::json!({
-                        "timestamp": signal.timestamp.to_rfc3339(), "symbol": signal.symbol,
-                        "market_id": signal.market_id, "side": format!("{:?}", signal.side),
-                        "price": signal.price, "quantity": signal.quantity, "pnl": 0.0,
-                        "action": if signal.risk_reducing { "Close" } else { "Open" },
-                        "reason": signal.reason, "order_id": ack.order_id,
-                    }));
+                    let status = ack.status.to_ascii_uppercase();
+                    if matches!(
+                        status.as_str(),
+                        "REJECTED" | "FILLED" | "CANCELED" | "MARGIN_CANCELED" | "TPSL_CANCELED"
+                    ) {
+                        resting_quotes.lock().remove(&strategy_client_id);
+                        if status == "REJECTED" {
+                            failed_quote_attempts
+                                .insert(strategy_client_id.clone(), std::time::Instant::now());
+                            error!(
+                                "❌ Arcus order rejected: client_id={exchange_client_id}, order_id={}, reason={}",
+                                ack.order_id,
+                                ack.rejection_reason.as_deref().unwrap_or("unknown")
+                            );
+                        } else {
+                            debug!(
+                                "Arcus order reached terminal status {status}: {}",
+                                ack.order_id
+                            );
+                        }
+                    } else {
+                        failed_quote_attempts.remove(&strategy_client_id);
+                        resting_quotes.lock().insert(
+                            strategy_client_id.clone(),
+                            RestingQuote {
+                                client_id: exchange_client_id.clone(),
+                                order_id: Some(ack.order_id.clone()),
+                                symbol: market.symbol.clone(),
+                                side,
+                                price: quote_price,
+                                quantity: quote_qty,
+                                last_action: std::time::Instant::now(),
+                            },
+                        );
+                        debug!(
+                            "Arcus order acknowledged: order_id={}, status={status}",
+                            ack.order_id
+                        );
+                    }
+                    // A 200/202 response is only an acknowledgement. The
+                    // orders/userFills channels provide definitive lifecycle.
                 }
-                Err(error) => error!("❌ Arcus order failed: {error}"),
+                Err(error) => {
+                    failed_quote_attempts
+                        .insert(strategy_client_id.clone(), std::time::Instant::now());
+                    error!(
+                        "❌ Arcus order request failed: client_id={exchange_client_id}, post_only={}, error={error}",
+                        signal.post_only
+                    );
+                }
             }
         }
     }
@@ -2372,13 +3539,25 @@ fn arcus_dashboard_positions(
         .iter()
         .filter_map(|position| {
             let signed_size = position.signed_size().ok()?;
+            let size = signed_size.abs();
+            let entry_price = position.entry_price.parse::<f64>().ok()?;
+            let unrealized_pnl = position.unrealized_pnl.parse::<f64>().ok()?;
+            let mark_price = if size > 1e-12 {
+                if signed_size >= 0.0 {
+                    entry_price + unrealized_pnl / size
+                } else {
+                    entry_price - unrealized_pnl / size
+                }
+            } else {
+                entry_price
+            };
             Some(serde_json::json!({
                 "symbol": position.market_display_name,
                 "side": if signed_size >= 0.0 { "Buy" } else { "Sell" },
-                "size": signed_size.abs(),
-                "entry_price": position.entry_price.parse::<f64>().ok()?,
-                "mark_price": position.entry_price.parse::<f64>().ok()?,
-                "unrealized_pnl": position.unrealized_pnl.parse::<f64>().ok()?,
+                "size": size,
+                "entry_price": entry_price,
+                "mark_price": mark_price,
+                "unrealized_pnl": unrealized_pnl,
             }))
         })
         .collect()
@@ -2388,6 +3567,7 @@ struct BacktestCliOpts {
     output: Option<String>,
     params: Option<String>,
     config: Option<String>,
+    maker: bool,
 }
 
 async fn run_backtest(
@@ -2425,6 +3605,82 @@ async fn run_backtest(
             "🧮 Profitability gate enabled (total cost {:.2} bps)",
             cost_bps
         );
+    }
+
+    // maker 填充模型：post_only 信号只在K线区间穿越报价价时成交、无滑点；
+    // 费率从 --config 的 profitability 段接线（maker 经济学，如 entry/exit 0 bps）。
+    if opts.maker {
+        backtest_engine = backtest_engine.with_maker_fills(true);
+        if let Some(cfg) = &opts.config {
+            let settings = Config::builder()
+                .add_source(config::File::with_name(cfg))
+                .build()
+                .context("Failed to load config")?;
+            let maker_fee_bps = settings
+                .get_float("profitability.entry_fee_bps")
+                .unwrap_or(0.0);
+            let taker_fee_bps = settings
+                .get_float("profitability.exit_fee_bps")
+                .unwrap_or(2.25);
+            let taker_slippage_bps = settings
+                .get_float("profitability.exit_slippage_bps")
+                .unwrap_or(0.0);
+            let fill_ratio = settings
+                .get_float("profitability.maker_fill_ratio")
+                .unwrap_or(0.5);
+            let min_penetration_bps = settings
+                .get_float("profitability.maker_min_penetration_bps")
+                .unwrap_or(2.0);
+            let adverse_selection_bps = settings
+                .get_float("profitability.adverse_selection_bps")
+                .unwrap_or(1.0);
+            let stop_loss = settings
+                .get_float("risk.stop_loss.position_stop_loss_percent")
+                .unwrap_or(3.0)
+                / 100.0;
+            let take_profit = settings
+                .get_float("risk.stop_loss.position_take_profit_percent")
+                .unwrap_or(5.0)
+                / 100.0;
+            let max_position_notional = settings
+                .get_float("risk.position_limit.max_position_size")
+                .unwrap_or(100.0);
+            let max_total_notional_pct = settings
+                .get_float("trading.position.max_total_position_percent")
+                .unwrap_or(25.0)
+                / 100.0;
+            backtest_engine = backtest_engine
+                .with_execution_costs(
+                    maker_fee_bps / 10_000.0,
+                    taker_fee_bps / 10_000.0,
+                    taker_slippage_bps / 10_000.0,
+                )?
+                .with_conservative_maker_model(
+                    fill_ratio,
+                    min_penetration_bps,
+                    adverse_selection_bps,
+                )?
+                .with_position_risk(stop_loss, take_profit)?
+                .with_max_position_notional(max_position_notional)?
+                .with_max_total_notional_pct(max_total_notional_pct)?;
+            info!(
+                "🛠 Maker model: maker/taker fee {:.2}/{:.2} bps, fill {:.0}%, penetration {:.2} bps, adverse {:.2} bps, stop/take {:.1}/{:.1}%, symbol/account cap ${:.2}/{:.1}%",
+                maker_fee_bps,
+                taker_fee_bps,
+                fill_ratio * 100.0,
+                min_penetration_bps,
+                adverse_selection_bps,
+                stop_loss * 100.0,
+                take_profit * 100.0,
+                max_position_notional,
+                max_total_notional_pct * 100.0,
+            );
+        } else {
+            info!(
+                "🛠 Maker fill model: fills at quote price when candle crosses; default commission {:.4}%",
+                backtest_engine.commission_rate() * 100.0
+            );
+        }
     }
 
     let bt_strategy = strategy::create_strategy_with_params(strategy_name, opts.params.as_deref())?;
@@ -2772,9 +4028,417 @@ async fn download_data(
     Ok(())
 }
 
+/// 下载 Arcus 历史蜡烛（多市场可合并到一个 CSV，按 symbol 列区分）。
+/// 走公开 /v1/candles，用 `to` 游标向前分页（单次最多 1500 根）。
+async fn download_arcus_data(
+    symbols: &str,
+    interval: &str,
+    start_date: &str,
+    end_date: &str,
+    env: &str,
+    tag: Option<&str>,
+) -> Result<()> {
+    let environment = match env.to_ascii_lowercase().as_str() {
+        "mainnet" => multi_venue_quant_bot::arcus::ArcusEnvironment::Mainnet,
+        "testnet" => multi_venue_quant_bot::arcus::ArcusEnvironment::Testnet,
+        other => anyhow::bail!("未知 env: {other}（mainnet | testnet）"),
+    };
+    let client = multi_venue_quant_bot::arcus::ArcusClient::public(environment);
+
+    let start = data::loader::parse_range_start(start_date).context("Invalid start date")?;
+    let end = match data::loader::parse_range_end(end_date).context("Invalid end date")? {
+        data::loader::RangeEnd::Inclusive(dt) => dt,
+        data::loader::RangeEnd::Exclusive(dt) => dt - chrono::Duration::seconds(1),
+    };
+    if end <= start {
+        anyhow::bail!("end 必须晚于 start");
+    }
+
+    let secs_per_candle = match interval {
+        "1m" => 60,
+        "3m" => 180,
+        "5m" => 300,
+        "15m" => 900,
+        "30m" => 1800,
+        "1h" => 3600,
+        "2h" => 7200,
+        "4h" => 14400,
+        "1d" => 86400,
+        other => anyhow::bail!("Unsupported interval: {}", other),
+    };
+
+    const PAGE: u16 = 1500;
+    let start_ts = start.timestamp();
+    let end_ts = end.timestamp();
+    let mut all: Vec<lighter::types::Candlestick> = Vec::new();
+
+    for raw in symbols.split(',') {
+        let market = raw.trim();
+        if market.is_empty() {
+            continue;
+        }
+        info!(
+            "📥 Arcus download: {} {} {} -> {}",
+            market, interval, start_date, end_date
+        );
+        let mut to_micros = (end_ts + secs_per_candle as i64) * 1_000_000; // 先多取一根再过滤
+        let mut pages = 0;
+        loop {
+            let page = client
+                .candles_before(market, interval, PAGE, to_micros)
+                .await
+                .map_err(|e| anyhow::anyhow!("{} candles 拉取失败: {}", market, e))?;
+            pages += 1;
+            info!("   页 {pages}: {} 根（to={}）", page.len(), to_micros);
+            if page.is_empty() {
+                break;
+            }
+            let oldest = page.iter().map(|c| c.open_time).min().unwrap_or(to_micros);
+            for candle in page {
+                let Some(timestamp) =
+                    chrono::DateTime::<Utc>::from_timestamp_micros(candle.open_time)
+                else {
+                    continue;
+                };
+                let ts = timestamp.timestamp();
+                if ts < start_ts || ts > end_ts {
+                    continue;
+                }
+                let parsed = || -> Option<lighter::types::Candlestick> {
+                    Some(lighter::types::Candlestick {
+                        timestamp,
+                        open: candle.open.parse().ok()?,
+                        high: candle.high.parse().ok()?,
+                        low: candle.low.parse().ok()?,
+                        close: candle.close.parse().ok()?,
+                        volume: candle.volume.parse().ok()?,
+                        symbol: candle.market_display_name.clone(),
+                    })
+                };
+                if let Some(c) = parsed() {
+                    all.push(c);
+                }
+            }
+            // 下一页从最老一根之前开始
+            to_micros = oldest - 1;
+            if to_micros < start_ts * 1_000_000 || pages >= 200 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        }
+    }
+
+    all.sort_by_key(|c| c.timestamp);
+    all.dedup_by_key(|c| (c.symbol.clone(), c.timestamp));
+    if all.is_empty() {
+        anyhow::bail!(
+            "No Arcus candles returned for {} {} -> {}",
+            symbols,
+            start_date,
+            end_date
+        );
+    }
+
+    let net_tag = tag
+        .map(|t| t.to_string())
+        .unwrap_or_else(|| "arcus".to_string());
+    let label = if symbols.contains(',') {
+        "multi".to_string()
+    } else {
+        symbols.trim().to_ascii_uppercase()
+    };
+    let output_path = format!(
+        "backtests/data/{}-{}-{}-{}-{}.csv",
+        label,
+        net_tag,
+        interval,
+        start.format("%Y%m%d"),
+        end.with_timezone(&Utc).format("%Y%m%d")
+    );
+    data::loader::write_csv_data(&output_path, &all).context("Failed to write Arcus data")?;
+    info!(
+        "✅ Arcus data download complete: {} ({} candles, {} markets)",
+        output_path,
+        all.len(),
+        symbols.split(',').filter(|s| !s.trim().is_empty()).count()
+    );
+    Ok(())
+}
+
+fn aster_interval_millis(interval: &str) -> Result<u64> {
+    let seconds = match interval {
+        "1m" => 60,
+        "3m" => 180,
+        "5m" => 300,
+        "15m" => 900,
+        "30m" => 1_800,
+        "1h" => 3_600,
+        "2h" => 7_200,
+        "4h" => 14_400,
+        "6h" => 21_600,
+        "8h" => 28_800,
+        "12h" => 43_200,
+        "1d" => 86_400,
+        other => anyhow::bail!("Unsupported Aster interval: {other}"),
+    };
+    Ok(seconds * 1_000)
+}
+
+/// 下载 Aster Pro Futures V3 历史蜡烛。公开接口不需要 API Wallet 凭据。
+async fn download_aster_data(
+    symbols: &str,
+    interval: &str,
+    start_date: &str,
+    end_date: &str,
+    url: &str,
+    tag: Option<&str>,
+) -> Result<()> {
+    let interval_ms = aster_interval_millis(interval)?;
+    let start = data::loader::parse_range_start(start_date).context("Invalid start date")?;
+    let end_exclusive = match data::loader::parse_range_end(end_date).context("Invalid end date")? {
+        data::loader::RangeEnd::Inclusive(dt) => dt + chrono::Duration::milliseconds(1),
+        data::loader::RangeEnd::Exclusive(dt) => dt,
+    };
+    if end_exclusive <= start {
+        anyhow::bail!("end 必须晚于 start");
+    }
+    let start_ms = u64::try_from(start.timestamp_millis()).context("start 日期超出范围")?;
+    let end_exclusive_ms =
+        u64::try_from(end_exclusive.timestamp_millis()).context("end 日期超出范围")?;
+    let client = multi_venue_quant_bot::aster::AsterClient::with_base_url(url);
+    let mut requested_symbols: Vec<String> = symbols
+        .split(',')
+        .map(|symbol| symbol.trim().to_ascii_uppercase())
+        .filter(|symbol| !symbol.is_empty())
+        .collect();
+    requested_symbols.sort();
+    requested_symbols.dedup();
+    if requested_symbols.is_empty() {
+        anyhow::bail!("至少需要一个 Aster symbol");
+    }
+    if requested_symbols
+        .iter()
+        .any(|symbol| symbol.len() > 32 || !symbol.bytes().all(|byte| byte.is_ascii_alphanumeric()))
+    {
+        anyhow::bail!("Aster symbol 只能包含 ASCII 字母和数字，且最长 32 字符");
+    }
+
+    const PAGE: u16 = 1_000;
+    let mut all = Vec::<lighter::types::Candlestick>::new();
+    for symbol in &requested_symbols {
+        info!(
+            "📥 Aster download: {} {} {} -> {}",
+            symbol, interval, start_date, end_date
+        );
+        let mut cursor = start_ms;
+        let mut pages = 0_u32;
+        while cursor < end_exclusive_ms {
+            let page = client
+                .klines(
+                    symbol,
+                    interval,
+                    Some(cursor),
+                    Some(end_exclusive_ms.saturating_sub(1)),
+                    Some(PAGE),
+                )
+                .await
+                .map_err(|error| anyhow::anyhow!("Aster {symbol} candles 拉取失败: {error}"))?;
+            pages += 1;
+            if page.is_empty() {
+                break;
+            }
+            let page_len = page.len();
+            let newest = page
+                .iter()
+                .map(|candle| candle.open_time)
+                .max()
+                .context("Aster kline page unexpectedly empty")?;
+            for candle in page {
+                if candle.open_time < start_ms || candle.open_time >= end_exclusive_ms {
+                    continue;
+                }
+                let timestamp =
+                    chrono::DateTime::<Utc>::from_timestamp_millis(candle.open_time as i64)
+                        .context("Aster kline timestamp is out of range")?;
+                all.push(lighter::types::Candlestick {
+                    timestamp,
+                    open: candle.open.parse().context("invalid Aster open")?,
+                    high: candle.high.parse().context("invalid Aster high")?,
+                    low: candle.low.parse().context("invalid Aster low")?,
+                    close: candle.close.parse().context("invalid Aster close")?,
+                    volume: candle.volume.parse().context("invalid Aster volume")?,
+                    symbol: symbol.clone(),
+                });
+            }
+            let next = newest.saturating_add(1);
+            if next <= cursor {
+                anyhow::bail!("Aster kline pagination cursor did not advance");
+            }
+            cursor = next;
+            if page_len < usize::from(PAGE) {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+        info!("   Aster {symbol}: {pages} pages");
+    }
+    all.sort_by_key(|candle| (candle.symbol.clone(), candle.timestamp));
+    all.dedup_by_key(|candle| (candle.symbol.clone(), candle.timestamp));
+    if all.is_empty() {
+        anyhow::bail!(
+            "No Aster candles returned for {} {} -> {}",
+            symbols,
+            start_date,
+            end_date
+        );
+    }
+    let label = if requested_symbols.len() == 1 {
+        requested_symbols[0].clone()
+    } else {
+        "multi".to_string()
+    };
+    let output_path = format!(
+        "backtests/data/{}-{}-{}-{}-{}.csv",
+        label,
+        tag.unwrap_or("aster"),
+        interval,
+        start.format("%Y%m%d"),
+        (end_exclusive - chrono::Duration::milliseconds(1)).format("%Y%m%d")
+    );
+    data::loader::write_csv_data(&output_path, &all).context("Failed to write Aster data")?;
+    info!(
+        "✅ Aster data download complete: {} ({} candles, {} markets, interval={}ms)",
+        output_path,
+        all.len(),
+        requested_symbols.len(),
+        interval_ms
+    );
+    Ok(())
+}
+
 async fn generate_test_data(symbol: &str, days: u32) -> Result<()> {
     info!("🎲 Generating test data: {} {}d", symbol, days);
     data::loader::generate_synthetic_data(symbol, days).context("Failed to generate test data")?;
     info!("✅ Test data generated");
     Ok(())
+}
+
+#[cfg(test)]
+mod arcus_open_order_limit_tests {
+    use super::{
+        arcus_exchange_client_id, arcus_maker_quote_key, arcus_open_order_limit_reached,
+        arcus_quote_attempt_ready, arcus_resting_quote_is_live, arcus_signal_allowed_while_paused,
+    };
+    use multi_venue_quant_bot::arcus::OrderSide as ArcusSide;
+    use std::collections::HashSet;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn blocks_when_local_acknowledgements_reach_the_limit_before_rest_refresh() {
+        assert!(arcus_open_order_limit_reached(12, 16, 16));
+    }
+
+    #[test]
+    fn blocks_when_reconciled_exchange_count_reaches_the_limit() {
+        assert!(arcus_open_order_limit_reached(16, 0, 16));
+    }
+
+    #[test]
+    fn permits_an_order_while_both_counts_are_below_the_limit() {
+        assert!(!arcus_open_order_limit_reached(12, 15, 16));
+    }
+
+    #[test]
+    fn throttles_a_recent_order_attempt_after_async_rejection() {
+        let now = Instant::now();
+        assert!(!arcus_quote_attempt_ready(
+            Some(now - Duration::from_secs(1)),
+            Duration::from_secs(5),
+            now,
+        ));
+    }
+
+    #[test]
+    fn retries_after_the_requote_cooldown_expires() {
+        let now = Instant::now();
+        assert!(arcus_quote_attempt_ready(
+            Some(now - Duration::from_secs(5)),
+            Duration::from_secs(5),
+            now,
+        ));
+    }
+
+    #[test]
+    fn permits_a_quote_without_a_prior_attempt() {
+        assert!(arcus_quote_attempt_ready(
+            None,
+            Duration::from_secs(5),
+            Instant::now(),
+        ));
+    }
+
+    #[test]
+    fn exchange_client_ids_are_unique_and_within_arcus_limit() {
+        let first = arcus_exchange_client_id("mq_SUPER-LONG-MARKET-NAME_buy", 1);
+        let second = arcus_exchange_client_id("mq_SUPER-LONG-MARKET-NAME_buy", 2);
+
+        assert_ne!(first, second);
+        assert!(first.starts_with("mq_"));
+        assert!(first.len() <= 36);
+        assert!(first
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-')));
+    }
+
+    #[test]
+    fn maker_quote_key_is_stable_across_exchange_attempts() {
+        assert_eq!(
+            arcus_maker_quote_key("USO-USD", ArcusSide::Sell),
+            "mq_USO-USD_sell"
+        );
+    }
+
+    #[test]
+    fn keeps_a_resting_quote_when_rest_omits_client_id_but_order_id_matches() {
+        let live_client_ids = HashSet::new();
+        let live_order_ids = HashSet::from(["order-1"]);
+        assert!(arcus_resting_quote_is_live(
+            "mq_BTC-USD_buy",
+            Some("order-1"),
+            &live_client_ids,
+            &live_order_ids,
+        ));
+    }
+
+    #[test]
+    fn keeps_a_resting_quote_when_client_id_matches() {
+        let live_client_ids = HashSet::from(["mq_BTC-USD_buy"]);
+        let live_order_ids = HashSet::new();
+        assert!(arcus_resting_quote_is_live(
+            "mq_BTC-USD_buy",
+            None,
+            &live_client_ids,
+            &live_order_ids,
+        ));
+    }
+
+    #[test]
+    fn removes_a_resting_quote_only_when_neither_identifier_matches() {
+        let live_client_ids = HashSet::new();
+        let live_order_ids = HashSet::new();
+        assert!(!arcus_resting_quote_is_live(
+            "mq_BTC-USD_buy",
+            Some("order-1"),
+            &live_client_ids,
+            &live_order_ids,
+        ));
+    }
+
+    #[test]
+    fn pause_allows_only_immediate_reduce_only_exits() {
+        assert!(!arcus_signal_allowed_while_paused(true, false, false));
+        assert!(!arcus_signal_allowed_while_paused(true, true, true));
+        assert!(arcus_signal_allowed_while_paused(true, true, false));
+        assert!(arcus_signal_allowed_while_paused(false, false, true));
+    }
 }

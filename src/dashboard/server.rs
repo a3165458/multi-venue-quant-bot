@@ -1,10 +1,13 @@
-use anyhow::Result;
+use anyhow::{bail, Result};
 use axum::{
+    body::Body,
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
-        Path, State,
+        Path, Query, State,
     },
-    response::{Html, IntoResponse},
+    http::{header, HeaderMap, Request, StatusCode},
+    middleware::{self, Next},
+    response::{Html, IntoResponse, Redirect, Response},
     routing::{get, post},
     Router,
 };
@@ -16,10 +19,10 @@ use std::sync::Arc;
 use tokio::process::Command;
 use tokio::sync::RwLock;
 use tokio::time::{timeout, Duration};
-use tower_http::cors::CorsLayer;
 use tracing::{info, warn};
 
 const PNL_STATE_FILE: &str = "pnl_state.json";
+const OMP_COLLAB_URL_FILE: &str = ".omp/collab-url";
 
 /// Max fills kept in the live trade history buffer (also used by /api/pnl).
 /// Order-placement and close-event paths must share this constant — previously
@@ -30,6 +33,11 @@ pub const TRADE_HISTORY_LIMIT: usize = 500;
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct PersistentPnlData {
     pub total_realized_pnl: f64,
+    /// Funding payments included in total realized PnL.
+    #[serde(default)]
+    pub total_funding_pnl: f64,
+    #[serde(default)]
+    pub daily_funding_pnl: f64,
     pub initial_equity: f64,
     pub peak_equity: f64,
     pub equity_history: Vec<(i64, f64)>,
@@ -133,6 +141,12 @@ impl PersistentStrategyConfig {
             }
         }
     }
+
+    pub fn exists(network: &str) -> bool {
+        super::runtime_paths::data_file(network, STRATEGY_CONFIG_FILE)
+            .map(|path| path.is_file())
+            .unwrap_or(false)
+    }
 }
 
 /// Persistent risk configuration that survives restarts
@@ -206,6 +220,8 @@ pub struct DashboardState {
     // PnL tracking
     pub daily_realized_pnl: f64,
     pub total_realized_pnl: f64,
+    pub daily_funding_pnl: f64,
+    pub total_funding_pnl: f64,
     pub initial_equity: f64,
     pub peak_equity: f64,
     pub equity_history: Vec<(i64, f64)>, // (unix_ts, equity) — for chart
@@ -226,13 +242,26 @@ pub struct DashboardState {
     pub available_markets: Vec<(u32, String)>, // All known markets: (id, symbol)
     // Risk config (runtime-editable from dashboard)
     pub risk_config: serde_json::Value, // Cached risk config for display
+    /// Random per-process credential used by mutation-route middleware.
+    pub dashboard_auth_token: String,
     pub risk_update_requested: Option<serde_json::Value>, // Pending risk update
-    pub leverage_limit: f64,            // Runtime leverage limit (used by main loop)
+    pub leverage_limit: f64, // Runtime leverage limit (used by main loop)
     /// symbol -> 最新盘口中间价。由主循环每个 tick 从 `snapshot.order_books` 注入。
     /// 独立于 positions：空仓时 positions 里没有任何价格，面板就没有行情可显示。
     pub last_prices: std::collections::HashMap<String, f64>,
+    /// Aster maker shadow-mode metrics. No exchange orders are represented here.
+    pub shadow_metrics: Option<serde_json::Value>,
+    /// Multi-profile near-BBO HFT shadow comparison.
+    pub hft_shadow_metrics: Option<serde_json::Value>,
     /// Server-side proposal ledger. The model cannot mutate live strategy state directly.
     pub quant_agent: super::quant_agent::AgentLedger,
+    /// Hyperliquid userAddRate in bps when known.
+    pub user_add_rate_bps: Option<f64>,
+    /// Hyperliquid userCrossRate in bps when known.
+    pub user_cross_rate_bps: Option<f64>,
+    /// Last io vs xyz SNDK net bps that cleared the tradeable floor (not armed).
+    pub last_cross_dex_net_bps: Option<f64>,
+    pub last_cross_dex_side: Option<String>,
 }
 
 impl DashboardState {
@@ -244,6 +273,8 @@ impl DashboardState {
 
         let persistent = PersistentPnlData {
             total_realized_pnl: self.total_realized_pnl,
+            total_funding_pnl: self.total_funding_pnl,
+            daily_funding_pnl: self.daily_funding_pnl,
             initial_equity: self.initial_equity,
             peak_equity: self.peak_equity,
             equity_history: self.equity_history.clone(),
@@ -259,6 +290,8 @@ impl DashboardState {
     /// Restore PnL state from persistent data
     pub fn restore_pnl(&mut self, data: &PersistentPnlData) {
         self.total_realized_pnl = data.total_realized_pnl;
+        self.total_funding_pnl = data.total_funding_pnl;
+        self.daily_funding_pnl = data.daily_funding_pnl;
         // Only restore initial_equity if it was set (non-zero)
         if data.initial_equity > 0.0 {
             self.initial_equity = data.initial_equity;
@@ -369,51 +402,68 @@ pub async fn start(host: &str, port: u16) -> Result<()> {
 }
 
 pub async fn start_with_state(host: &str, port: u16, state: SharedDashboardState) -> Result<()> {
+    let configured_token = std::env::var("DASHBOARD_AUTH_TOKEN").ok();
+    if configured_token
+        .as_deref()
+        .is_some_and(|token| token.len() < 32)
+    {
+        bail!("DASHBOARD_AUTH_TOKEN must contain at least 32 characters");
+    }
+    let auth_token = configured_token.unwrap_or_else(|| {
+        rand::thread_rng()
+            .sample_iter(&Alphanumeric)
+            .take(48)
+            .map(char::from)
+            .collect()
+    });
+    state.write().await.dashboard_auth_token = auth_token;
     super::event_log::restore_event_history(&state).await;
     super::event_log::spawn_event_monitor(state.clone());
 
-    let app = Router::new()
-        .route("/", get(index_handler))
-        .route("/app.js", get(js_handler))
-        .route("/ai", get(ai_page_handler))
-        .route("/ai.js", get(ai_js_handler))
-        .route("/quant_agent.js", get(quant_agent_js_handler))
-        .route(
-            "/quant_agent_protocol.js",
-            get(quant_agent_protocol_js_handler),
-        )
-        .route("/health", get(health_handler))
-        .route("/ws", get(ws_handler))
-        .route("/api/status", get(status_handler))
-        .route("/api/positions", get(positions_handler))
-        .route("/api/trades", get(trades_handler))
-        .route("/api/events", get(events_handler))
-        .route("/api/env", get(env_get_handler))
+    let protected = Router::new()
         .route("/api/env", post(env_update_handler))
-        .route("/api/network", get(network_get_handler))
         .route("/api/network", post(network_update_handler))
-        .route("/api/pnl", get(pnl_handler))
-        .route("/api/strategy", get(strategy_get_handler))
         .route("/api/strategy", post(strategy_update_handler))
         .route("/api/backtest", post(backtest_handler))
-        .route("/api/backtest/datasets", get(backtest_datasets_handler))
         .route("/api/backtest/optimize", post(backtest_optimize_handler))
-        .route("/api/agent/status", get(agent_status_handler))
-        .route("/api/agent/audit", get(agent_audit_handler))
         .route("/api/agent/proposals", post(agent_proposal_handler))
         .route("/api/agent/proposals/:id/apply", post(agent_apply_handler))
         .route(
             "/api/backtest/opencode-optimize",
             post(opencode_optimize_handler),
         )
-        .route("/api/trading/markets", get(markets_get_handler))
         .route("/api/trading/markets", post(markets_update_handler))
         .route("/api/trading/pause", post(trading_pause_handler))
         .route("/api/trading/resume", post(trading_resume_handler))
         .route("/api/trading/cancel-all", post(cancel_all_handler))
-        .route("/api/risk/config", get(risk_config_get_handler))
         .route("/api/risk/config", post(risk_config_update_handler))
-        .layer(CorsLayer::permissive())
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            require_mutation_auth,
+        ));
+
+    let app = Router::new()
+        .route("/", get(index_handler))
+        .route("/app.js", get(js_handler))
+        .route("/ai", get(ai_page_handler))
+        .route("/health", get(health_handler))
+        .route("/ws", get(ws_handler))
+        .route("/api/status", get(status_handler))
+        .route("/api/positions", get(positions_handler))
+        .route("/api/trades", get(trades_handler))
+        .route("/api/shadow", get(shadow_handler))
+        .route("/api/hft-shadow", get(hft_shadow_handler))
+        .route("/api/events", get(events_handler))
+        .route("/api/env", get(env_get_handler))
+        .route("/api/network", get(network_get_handler))
+        .route("/api/pnl", get(pnl_handler))
+        .route("/api/strategy", get(strategy_get_handler))
+        .route("/api/backtest/datasets", get(backtest_datasets_handler))
+        .route("/api/agent/status", get(agent_status_handler))
+        .route("/api/agent/audit", get(agent_audit_handler))
+        .route("/api/trading/markets", get(markets_get_handler))
+        .route("/api/risk/config", get(risk_config_get_handler))
+        .merge(protected)
         .with_state(state);
 
     let addr: SocketAddr = format!("{}:{}", host, port).parse()?;
@@ -425,8 +475,60 @@ pub async fn start_with_state(host: &str, port: u16, state: SharedDashboardState
     Ok(())
 }
 
-async fn index_handler() -> Html<&'static str> {
-    Html(include_str!("ui/index.html"))
+fn constant_time_eq(left: &str, right: &str) -> bool {
+    if left.len() != right.len() {
+        return false;
+    }
+    left.bytes()
+        .zip(right.bytes())
+        .fold(0_u8, |difference, (a, b)| difference | (a ^ b))
+        == 0
+}
+
+fn request_is_authorized(headers: &HeaderMap, token: &str) -> bool {
+    let bearer = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "));
+    if bearer.is_some_and(|candidate| constant_time_eq(candidate, token)) {
+        return true;
+    }
+    headers
+        .get(header::COOKIE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|cookies| {
+            cookies.split(';').find_map(|cookie| {
+                let (name, value) = cookie.trim().split_once('=')?;
+                (name == "quant_bot_auth").then_some(value)
+            })
+        })
+        .is_some_and(|candidate| constant_time_eq(candidate, token))
+}
+
+async fn require_mutation_auth(
+    State(state): State<SharedDashboardState>,
+    request: Request<Body>,
+    next: Next,
+) -> Response {
+    let token = state.read().await.dashboard_auth_token.clone();
+    if token.is_empty() || !request_is_authorized(request.headers(), &token) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    next.run(request).await
+}
+
+async fn authenticated_html(state: SharedDashboardState, html: &'static str) -> impl IntoResponse {
+    let token = state.read().await.dashboard_auth_token.clone();
+    (
+        [(
+            header::SET_COOKIE,
+            format!("quant_bot_auth={token}; HttpOnly; SameSite=Strict; Path=/"),
+        )],
+        Html(html),
+    )
+}
+async fn index_handler(State(state): State<SharedDashboardState>) -> impl IntoResponse {
+    authenticated_html(state, include_str!("ui/index.html")).await
 }
 
 async fn js_handler() -> impl IntoResponse {
@@ -489,6 +591,15 @@ async fn handle_ws_connection(mut socket: WebSocket, state: SharedDashboardState
                     "trading_paused": ds.trading_paused,
                     "active_markets": ds.active_markets,
                     "last_prices": ds.last_prices,
+                    "network": ds.network_name,
+                    "user_add_rate_bps": ds.user_add_rate_bps,
+                    "user_cross_rate_bps": ds.user_cross_rate_bps,
+                    "fee_tier_is_t4": ds.user_add_rate_bps.map(|bps| bps <= 0.0),
+                    "last_cross_dex_net_bps": ds.last_cross_dex_net_bps,
+                    "last_cross_dex_side": ds.last_cross_dex_side.clone(),
+                    "strategy_overlay": PersistentStrategyConfig::exists(&ds.network_name),
+                    "quote_mode": ds.strategy_params.get("quote_mode"),
+                    "flatten_only": ds.strategy_params.get("flatten_only"),
                 }
             });
             let positions_msg = serde_json::json!({
@@ -565,16 +676,30 @@ async fn status_handler(State(state): State<SharedDashboardState>) -> impl IntoR
         "status": "running",
         "version": env!("CARGO_PKG_VERSION"),
         "strategy": ds.strategy_name,
+        "trading_paused": ds.trading_paused,
+        "open_orders": ds.open_orders,
         "total_trades": ds.total_trades,
         "equity": ds.equity,
-        "total_pnl": ds.unrealized_pnl,
+        "total_pnl": ds.total_realized_pnl + ds.unrealized_pnl,
         "daily_realized_pnl": ds.daily_realized_pnl,
         "total_realized_pnl": ds.total_realized_pnl,
+        "daily_funding_pnl": ds.daily_funding_pnl,
+        "total_funding_pnl": ds.total_funding_pnl,
         "last_prices": ds.last_prices,
         "network": ds.network_name,
         "rest_url": ds.rest_url,
         "ws_url": ds.ws_url,
         "chain_id": ds.chain_id,
+        "shadow": ds.shadow_metrics,
+        "hft_shadow": ds.hft_shadow_metrics,
+        "user_add_rate_bps": ds.user_add_rate_bps,
+        "user_cross_rate_bps": ds.user_cross_rate_bps,
+        "fee_tier_is_t4": ds.user_add_rate_bps.map(|bps| bps <= 0.0),
+        "last_cross_dex_net_bps": ds.last_cross_dex_net_bps,
+        "last_cross_dex_side": ds.last_cross_dex_side,
+        "strategy_overlay": PersistentStrategyConfig::exists(&ds.network_name),
+        "quote_mode": ds.strategy_params.get("quote_mode"),
+        "flatten_only": ds.strategy_params.get("flatten_only"),
     }))
 }
 
@@ -592,19 +717,115 @@ async fn trades_handler(State(state): State<SharedDashboardState>) -> impl IntoR
     }))
 }
 
-/// `.env` 里可以从面板编辑的键。
-///
-/// **LIGHTER_SECRET_KEY 是只写的** —— 它是交易所 API 私钥，拿到就能操作账户。
-/// GET 只回报"是否已配置 / 长度 / 后 4 位"，永远不回明文；POST 允许覆盖。
-/// 面板本身没有鉴权（见 main.rs 里写死的 "0.0.0.0"），所以把明文回给前端
-/// 等于把账户控制权挂在任何能访问该端口的人面前。
-const ENV_CREDENTIAL_PUBLIC_KEYS: [&str; 3] = [
-    "EXCHANGE_ACCOUNT_INDEX",
-    "LIGHTER_API_KEY_INDEX",
-    "ARCUS_ADDRESS",
-];
+async fn shadow_handler(State(state): State<SharedDashboardState>) -> impl IntoResponse {
+    let ds = state.read().await;
+    axum::Json(
+        ds.shadow_metrics
+            .clone()
+            .unwrap_or_else(|| serde_json::json!({"enabled": false})),
+    )
+}
+
+async fn hft_shadow_handler(State(state): State<SharedDashboardState>) -> impl IntoResponse {
+    let ds = state.read().await;
+    axum::Json(
+        ds.hft_shadow_metrics
+            .clone()
+            .unwrap_or_else(|| serde_json::json!({"enabled": false})),
+    )
+}
+
 const ENV_SHARED_PUBLIC_KEYS: [&str; 2] = ["RUST_LOG", "TOKIO_WORKER_THREADS"];
-const ENV_SECRET_KEYS: [&str; 1] = ["EXCHANGE_SECRET_KEY"];
+
+#[derive(Clone, Copy)]
+struct CredentialField {
+    api_key: &'static str,
+    suffix: &'static str,
+    secret: bool,
+}
+
+const LIGHTER_CREDENTIAL_FIELDS: [CredentialField; 3] = [
+    CredentialField {
+        api_key: "LIGHTER_ACCOUNT_INDEX",
+        suffix: "ACCOUNT_INDEX",
+        secret: false,
+    },
+    CredentialField {
+        api_key: "LIGHTER_API_KEY_INDEX",
+        suffix: "API_KEY_INDEX",
+        secret: false,
+    },
+    CredentialField {
+        api_key: "LIGHTER_SECRET_KEY",
+        suffix: "SECRET_KEY",
+        secret: true,
+    },
+];
+const ARCUS_CREDENTIAL_FIELDS: [CredentialField; 4] = [
+    CredentialField {
+        api_key: "ARCUS_API_KEY",
+        suffix: "API_KEY",
+        secret: false,
+    },
+    CredentialField {
+        api_key: "ARCUS_ADDRESS",
+        suffix: "ADDRESS",
+        secret: false,
+    },
+    CredentialField {
+        api_key: "ARCUS_ACCOUNT_INDEX",
+        suffix: "ACCOUNT_INDEX",
+        secret: false,
+    },
+    CredentialField {
+        api_key: "ARCUS_SIGNING_KEY",
+        suffix: "SIGNING_KEY",
+        secret: true,
+    },
+];
+const ASTER_CREDENTIAL_FIELDS: [CredentialField; 2] = [
+    CredentialField {
+        api_key: "ASTER_SIGNER_ADDRESS",
+        suffix: "SIGNER_ADDRESS",
+        secret: false,
+    },
+    CredentialField {
+        api_key: "ASTER_SIGNER_PRIVATE_KEY",
+        suffix: "SIGNER_PRIVATE_KEY",
+        secret: true,
+    },
+];
+
+static HYPERLIQUID_CREDENTIAL_FIELDS: [CredentialField; 2] = [
+    CredentialField {
+        api_key: "HYPERLIQUID_ACCOUNT_ADDRESS",
+        suffix: "ACCOUNT_ADDRESS",
+        secret: false,
+    },
+    CredentialField {
+        api_key: "HYPERLIQUID_SIGNER_PRIVATE_KEY",
+        suffix: "SIGNER_PRIVATE_KEY",
+        secret: true,
+    },
+];
+
+fn credential_fields(
+    venue: multi_venue_quant_bot::exchange::LiveVenue,
+) -> &'static [CredentialField] {
+    use multi_venue_quant_bot::exchange::ExchangeKind;
+    match venue.exchange() {
+        ExchangeKind::Lighter => &LIGHTER_CREDENTIAL_FIELDS,
+        ExchangeKind::Arcus => &ARCUS_CREDENTIAL_FIELDS,
+        ExchangeKind::Aster => &ASTER_CREDENTIAL_FIELDS,
+        ExchangeKind::Hyperliquid => &HYPERLIQUID_CREDENTIAL_FIELDS,
+    }
+}
+
+fn masked_secret(value: &str) -> serde_json::Value {
+    serde_json::json!({
+        "configured": !value.is_empty(),
+    })
+}
 
 fn shared_env_file_path() -> std::path::PathBuf {
     std::path::PathBuf::from(".env")
@@ -614,20 +835,49 @@ fn selected_credential_env_path() -> std::path::PathBuf {
     std::path::PathBuf::from(".env")
 }
 
-fn selected_credential_key(key: &str) -> String {
-    let suffix = match key {
-        "EXCHANGE_ACCOUNT_INDEX" => "ACCOUNT_INDEX",
-        "EXCHANGE_SECRET_KEY" => "SECRET_KEY",
-        "LIGHTER_API_KEY_INDEX" => "API_KEY_INDEX",
-        "ARCUS_ADDRESS" => "ADDRESS",
-        other => other,
-    };
-    crate::env_profiles::selected_venue().credential_key(suffix)
+fn venue_label(venue: multi_venue_quant_bot::exchange::LiveVenue) -> &'static str {
+    use multi_venue_quant_bot::exchange::LiveVenue;
+    match venue {
+        LiveVenue::LighterMainnet => "Lighter Mainnet",
+        LiveVenue::LighterRobinhood => "Robinhood Chain",
+        LiveVenue::ArcusMainnet => "Arcus Mainnet",
+        LiveVenue::ArcusTestnet => "Arcus Testnet",
+        LiveVenue::AsterMainnet => "Aster Mainnet",
+        LiveVenue::HyperliquidMainnet => "Hyperliquid Mainnet",
+        LiveVenue::HyperliquidTestnet => "Hyperliquid Testnet",
+    }
+}
+
+fn venue_quote_asset(venue: multi_venue_quant_bot::exchange::LiveVenue) -> &'static str {
+    use multi_venue_quant_bot::exchange::LiveVenue;
+    match venue {
+        LiveVenue::LighterMainnet => "USDC",
+        LiveVenue::LighterRobinhood => "USDG",
+        LiveVenue::ArcusMainnet | LiveVenue::ArcusTestnet => "USD",
+        LiveVenue::AsterMainnet => "USDT",
+        LiveVenue::HyperliquidMainnet | LiveVenue::HyperliquidTestnet => "USDC",
+    }
 }
 
 async fn network_get_handler(State(state): State<SharedDashboardState>) -> impl IntoResponse {
+    use multi_venue_quant_bot::exchange::LiveVenue;
     let ds = state.read().await;
     let selected = crate::env_profiles::selected_network();
+    let profiles = LiveVenue::ALL
+        .into_iter()
+        .map(|venue| {
+            (
+                venue.as_str().to_string(),
+                serde_json::json!({
+                    "label": venue_label(venue),
+                    "quote_asset": venue_quote_asset(venue),
+                    "rest_url": venue.rest_url(),
+                    "ws_url": venue.websocket_url(),
+                    "chain_id": venue.chain_id(),
+                }),
+            )
+        })
+        .collect::<serde_json::Map<_, _>>();
     axum::Json(serde_json::json!({
         "active": ds.network_name,
         "selected": selected,
@@ -635,28 +885,7 @@ async fn network_get_handler(State(state): State<SharedDashboardState>) -> impl 
         "ws_url": ds.ws_url,
         "chain_id": ds.chain_id,
         "requires_restart": true,
-        "profiles": {
-            "lighter-mainnet": {
-                "label": "Lighter Mainnet", "quote_asset": "USDC",
-                "rest_url": "https://mainnet.zklighter.elliot.ai",
-                "ws_url": "wss://mainnet.zklighter.elliot.ai/stream", "chain_id": 304
-            },
-            "lighter-robinhood": {
-                "label": "Robinhood Chain", "quote_asset": "USDG",
-                "rest_url": "https://api.rh.lighter.xyz",
-                "ws_url": "wss://api.rh.lighter.xyz/stream", "chain_id": 466324
-            },
-            "arcus-mainnet": {
-                "label": "Arcus Mainnet", "quote_asset": "USD",
-                "rest_url": "https://api.arcus.xyz",
-                "ws_url": "wss://api.arcus.xyz/v1/ws", "chain_id": null
-            },
-            "arcus-testnet": {
-                "label": "Arcus Testnet", "quote_asset": "USD",
-                "rest_url": "https://api.testnet.arcus.xyz",
-                "ws_url": "wss://api.testnet.arcus.xyz/v1/ws", "chain_id": null
-            }
-        }
+        "profiles": profiles
     }))
 }
 
@@ -664,19 +893,17 @@ async fn network_update_handler(
     axum::Json(body): axum::Json<serde_json::Value>,
 ) -> impl IntoResponse {
     let network = body.get("network").and_then(|v| v.as_str()).unwrap_or("");
-    if !matches!(
-        network,
-        "lighter-mainnet" | "lighter-robinhood" | "arcus-mainnet" | "arcus-testnet"
-    ) {
+    let Ok(venue) = network.parse::<multi_venue_quant_bot::exchange::LiveVenue>() else {
         return axum::Json(serde_json::json!({
             "status":"error", "message":"unsupported live venue"
         }));
-    }
+    };
+    let normalized = venue.as_str();
     let updates =
-        std::collections::HashMap::from([("TRADING_VENUE".to_string(), network.to_string())]);
+        std::collections::HashMap::from([("TRADING_VENUE".to_string(), normalized.to_string())]);
     match write_env_keys_to(&shared_env_file_path(), &updates) {
         Ok(()) => axum::Json(serde_json::json!({
-            "status":"ok", "network":network, "requires_restart":true
+            "status":"ok", "network":normalized, "requires_restart":true
         })),
         Err(e) => axum::Json(serde_json::json!({"status":"error","message":e.to_string()})),
     }
@@ -741,19 +968,44 @@ fn write_env_keys_to(
     }
 }
 
-async fn env_get_handler() -> impl IntoResponse {
+#[derive(Default, Deserialize)]
+struct EnvQuery {
+    venue: Option<String>,
+}
+
+fn parse_credential_venue(
+    requested: Option<&str>,
+) -> std::result::Result<multi_venue_quant_bot::exchange::LiveVenue, String> {
+    requested.map_or_else(
+        || Ok(crate::env_profiles::selected_venue()),
+        |value| {
+            value
+                .parse::<multi_venue_quant_bot::exchange::LiveVenue>()
+                .map_err(|error| error.to_string())
+        },
+    )
+}
+
+async fn env_get_handler(Query(query): Query<EnvQuery>) -> impl IntoResponse {
+    let Ok(venue) = parse_credential_venue(query.venue.as_deref()) else {
+        return axum::Json(serde_json::json!({
+            "status": "error",
+            "message": "unsupported live venue"
+        }));
+    };
     let credential_path = selected_credential_env_path();
     let shared_path = shared_env_file_path();
     let mut public = serde_json::Map::new();
-    for key in ENV_CREDENTIAL_PUBLIC_KEYS {
-        let stored_key = selected_credential_key(key);
-        public.insert(
-            key.to_string(),
-            serde_json::json!(
-                crate::env_profiles::read_env_value(&credential_path, &stored_key)
-                    .unwrap_or_default()
-            ),
-        );
+    let mut secrets = serde_json::Map::new();
+    for field in credential_fields(venue) {
+        let stored_key = venue.credential_key(field.suffix);
+        let value =
+            crate::env_profiles::read_env_value(&credential_path, &stored_key).unwrap_or_default();
+        if field.secret {
+            secrets.insert(field.api_key.to_string(), masked_secret(&value));
+        } else {
+            public.insert(field.api_key.to_string(), serde_json::json!(value));
+        }
     }
     for key in ENV_SHARED_PUBLIC_KEYS {
         public.insert(
@@ -763,22 +1015,8 @@ async fn env_get_handler() -> impl IntoResponse {
             ),
         );
     }
-    let mut secrets = serde_json::Map::new();
-    for key in ENV_SECRET_KEYS {
-        let stored_key = selected_credential_key(key);
-        let val =
-            crate::env_profiles::read_env_value(&credential_path, &stored_key).unwrap_or_default();
-        secrets.insert(
-            key.to_string(),
-            serde_json::json!({
-                "configured": !val.is_empty(),
-                "length": val.len(),
-                // 只回后 4 位，够核对"是不是我以为的那把"，又不足以复原
-                "tail": if val.len() >= 4 { val[val.len() - 4..].to_string() } else { String::new() },
-            }),
-        );
-    }
     axum::Json(serde_json::json!({
+        "venue": venue.as_str(),
         "public": public,
         "secrets": secrets,
         "env_path": credential_path.to_string_lossy(),
@@ -793,12 +1031,22 @@ async fn env_update_handler(axum::Json(body): axum::Json<serde_json::Value>) -> 
             serde_json::json!({"status":"error","message":"body must be an object"}),
         );
     };
+    let requested_venue = obj.get("venue").and_then(|value| value.as_str());
+    let Ok(venue) = parse_credential_venue(requested_venue) else {
+        return axum::Json(serde_json::json!({
+            "status": "error",
+            "message": "unsupported live venue"
+        }));
+    };
+    let fields = credential_fields(venue);
     let mut updates = std::collections::HashMap::new();
     let mut rejected = Vec::new();
     for (k, v) in obj {
-        let allowed = ENV_CREDENTIAL_PUBLIC_KEYS.contains(&k.as_str())
-            || ENV_SHARED_PUBLIC_KEYS.contains(&k.as_str())
-            || ENV_SECRET_KEYS.contains(&k.as_str());
+        if k == "venue" {
+            continue;
+        }
+        let allowed = fields.iter().any(|field| field.api_key == k)
+            || ENV_SHARED_PUBLIC_KEYS.contains(&k.as_str());
         if !allowed {
             rejected.push(k.clone());
             continue;
@@ -816,11 +1064,12 @@ async fn env_update_handler(axum::Json(body): axum::Json<serde_json::Value>) -> 
     }
     let credential_updates: std::collections::HashMap<_, _> = updates
         .iter()
-        .filter(|(key, _)| {
-            ENV_CREDENTIAL_PUBLIC_KEYS.contains(&key.as_str())
-                || ENV_SECRET_KEYS.contains(&key.as_str())
+        .filter_map(|(key, value)| {
+            fields
+                .iter()
+                .find(|field| field.api_key == key)
+                .map(|field| (venue.credential_key(field.suffix), value.clone()))
         })
-        .map(|(key, value)| (selected_credential_key(key), value.clone()))
         .collect();
     let shared_updates: std::collections::HashMap<_, _> = updates
         .iter()
@@ -846,6 +1095,7 @@ async fn env_update_handler(axum::Json(body): axum::Json<serde_json::Value>) -> 
             info!("环境变量已写入网络隔离配置: {:?}（重启后生效）", keys);
             axum::Json(serde_json::json!({
                 "status":"ok",
+                "venue": venue.as_str(),
                 "updated": keys,
                 "rejected": rejected,
                 "requires_restart": true,
@@ -882,12 +1132,15 @@ async fn pnl_handler(State(state): State<SharedDashboardState>) -> impl IntoResp
     axum::Json(serde_json::json!({
         "daily_realized_pnl": ds.daily_realized_pnl,
         "total_realized_pnl": ds.total_realized_pnl,
+        "daily_funding_pnl": ds.daily_funding_pnl,
+        "total_funding_pnl": ds.total_funding_pnl,
         "unrealized_pnl": ds.unrealized_pnl,
         "equity": ds.equity,
         "initial_equity": ds.initial_equity,
         "peak_equity": ds.peak_equity,
         "total_volume": total_volume,
         "total_closed_trades": total_closed_trades,
+        "total_trades": ds.total_trades,
         "trade_history_limit": TRADE_HISTORY_LIMIT,
         "trade_history_len": ds.trade_history.len(),
         "total_return_pct": if ds.initial_equity > 0.0 {
@@ -946,7 +1199,7 @@ async fn agent_status_handler(State(state): State<SharedDashboardState>) -> impl
         .filter(|proposal| proposal.status == "pending")
         .count();
     axum::Json(serde_json::json!({
-        "status": if policy.trading_paused || policy.emergency_triggered { "blocked" } else { "ready" },
+        "status": if policy.emergency_triggered || !policy.equity.is_finite() || policy.equity <= 0.0 { "blocked" } else { "ready" },
         "mode": "proposal_only",
         "model_authority": "research_and_propose",
         "execution_authority": "human_approval_required",
@@ -986,7 +1239,7 @@ async fn agent_proposal_handler(
         .collect::<Vec<_>>();
     param_pairs.sort();
     let params = param_pairs.join(",");
-    let verified = match run_backtest_result(
+    let verified = match run_validated_backtest_result(
         &input.strategy,
         &params,
         &input.evidence.data_file,
@@ -1007,6 +1260,34 @@ async fn agent_proposal_handler(
     input.evidence.sharpe_ratio = verified["sharpe_ratio"].as_f64().unwrap_or(f64::NAN);
     input.evidence.max_drawdown_pct = verified["max_drawdown_pct"].as_f64().unwrap_or(f64::NAN);
     input.evidence.total_trades = verified["total_trades"].as_u64().unwrap_or(0);
+    input.evidence.peak_notional_pct = verified["peak_notional_pct"].as_f64().unwrap_or(f64::NAN);
+    input.evidence.validation_return_pct = verified["validation_return_pct"]
+        .as_f64()
+        .unwrap_or(f64::NAN);
+    input.evidence.validation_sharpe_ratio = verified["validation_sharpe_ratio"]
+        .as_f64()
+        .unwrap_or(f64::NAN);
+    input.evidence.validation_max_drawdown_pct = verified["validation_max_drawdown_pct"]
+        .as_f64()
+        .unwrap_or(f64::NAN);
+    input.evidence.validation_total_trades =
+        verified["validation_total_trades"].as_u64().unwrap_or(0);
+    input.evidence.validation_peak_notional_pct = verified["validation_peak_notional_pct"]
+        .as_f64()
+        .unwrap_or(f64::NAN);
+    input.evidence.rolling_days = verified["rolling_days"].as_u64().unwrap_or(0);
+    input.evidence.rolling_profitable_days =
+        verified["rolling_profitable_days"].as_u64().unwrap_or(0);
+    input.evidence.cash_open_return_pct = verified["cash_open_return_pct"]
+        .as_f64()
+        .unwrap_or(f64::NAN);
+    input.evidence.cash_open_trades = verified["cash_open_trades"].as_u64().unwrap_or(0);
+    input.evidence.validation_market_count =
+        verified["validation_market_count"].as_u64().unwrap_or(0);
+    input.evidence.validation_profitable_market_count = verified
+        ["validation_profitable_market_count"]
+        .as_u64()
+        .unwrap_or(0);
 
     let mut ds = state.write().await;
     let policy = agent_policy(&ds);
@@ -1128,6 +1409,7 @@ async fn strategy_update_handler(
                 k.clone(),
                 v.as_str()
                     .map(|s| s.to_string())
+                    .or_else(|| v.as_bool().map(|b| b.to_string()))
                     .or_else(|| v.as_f64().map(|n| n.to_string()))
                     .or_else(|| v.as_i64().map(|n| n.to_string()))
                     .unwrap_or_default(),
@@ -1246,7 +1528,7 @@ async fn backtest_handler(axum::Json(body): axum::Json<serde_json::Value>) -> im
         .and_then(|s| s.as_str())
         .unwrap_or("");
 
-    match run_backtest_result(strategy, params, data_file, capital, start, end).await {
+    match run_validated_backtest_result(strategy, params, data_file, capital, start, end).await {
         Ok(result) => axum::Json(result),
         Err(e) => axum::Json(serde_json::json!({"status": "error", "message": e.to_string()})),
     }
@@ -1321,27 +1603,175 @@ fn normalize_backtest_params(strategy: &str, params: &str, capital: f64) -> Stri
         .join(",")
 }
 
-async fn run_backtest_result(
-    strategy: &str,
-    params: &str,
-    data_file: &str,
-    capital: f64,
-    start: &str,
-    end: &str,
-) -> Result<serde_json::Value> {
-    if data_file.is_empty() || start.is_empty() || end.is_empty() {
-        anyhow::bail!("Missing required fields: data_file, start, end");
-    }
+fn strategy_uses_maker_execution_model(strategy: &str) -> bool {
+    matches!(strategy, "maker_quote" | "maker")
+}
 
-    let data_path = if data_file.starts_with('/') || data_file.starts_with("backtests/") {
+fn backtest_data_path(data_file: &str) -> String {
+    if data_file.starts_with('/') || data_file.starts_with("backtests/") {
         data_file.to_string()
     } else {
-        format!("backtests/data/{}", data_file)
-    };
+        format!("backtests/data/{data_file}")
+    }
+}
 
-    let historical_data = crate::data::loader::load_csv_data_in_range(&data_path, start, end)
-        .map_err(|e| anyhow::anyhow!("Data load failed: {}", e))?;
-    let candle_count = historical_data.len();
+fn split_chronological_holdout(
+    candles: &[crate::lighter::types::Candlestick],
+    train_ratio: f64,
+) -> Result<(
+    Vec<crate::lighter::types::Candlestick>,
+    Vec<crate::lighter::types::Candlestick>,
+)> {
+    if candles.len() < 4 || !(0.5..0.9).contains(&train_ratio) {
+        anyhow::bail!("At least four candles and a 0.5–0.9 train ratio are required");
+    }
+    if candles
+        .windows(2)
+        .any(|pair| pair[0].timestamp > pair[1].timestamp)
+    {
+        anyhow::bail!("Candles must be sorted chronologically");
+    }
+    let target = ((candles.len() as f64) * train_ratio).floor() as usize;
+    let target = target.clamp(1, candles.len() - 1);
+    let validation_timestamp = candles[target].timestamp;
+    let split = candles.partition_point(|candle| candle.timestamp < validation_timestamp);
+    if split == 0 || split == candles.len() {
+        anyhow::bail!("Dataset does not contain enough distinct timestamps for holdout validation");
+    }
+    Ok((candles[..split].to_vec(), candles[split..].to_vec()))
+}
+
+#[derive(Clone, Copy, Debug)]
+struct CashOpenSummary {
+    trades: u64,
+    net_pnl: f64,
+    return_pct: f64,
+}
+
+fn group_candles_by_new_york_date(
+    candles: &[crate::lighter::types::Candlestick],
+) -> Vec<Vec<crate::lighter::types::Candlestick>> {
+    use chrono_tz::America::New_York;
+    let mut days = std::collections::BTreeMap::new();
+    for candle in candles {
+        let date = candle.timestamp.with_timezone(&New_York).date_naive();
+        days.entry(date)
+            .or_insert_with(Vec::new)
+            .push(candle.clone());
+    }
+    days.into_values().collect()
+}
+
+fn summarize_cash_open_trades(
+    trades: &[crate::backtest::results::BacktestTrade],
+    initial_capital: f64,
+) -> CashOpenSummary {
+    use chrono::{Datelike, Timelike, Weekday};
+    use chrono_tz::America::New_York;
+
+    let mut summary = CashOpenSummary {
+        trades: 0,
+        net_pnl: 0.0,
+        return_pct: 0.0,
+    };
+    for trade in trades {
+        let local = trade.timestamp.with_timezone(&New_York);
+        if matches!(local.weekday(), Weekday::Sat | Weekday::Sun) {
+            continue;
+        }
+        let minute = local.hour() * 60 + local.minute();
+        if (9 * 60 + 25..=9 * 60 + 50).contains(&minute) {
+            summary.trades += 1;
+            summary.net_pnl += trade.pnl - trade.commission;
+        }
+    }
+    if initial_capital > 0.0 {
+        summary.return_pct = summary.net_pnl / initial_capital * 100.0;
+    }
+    summary
+}
+
+/// HIP-3 growth-mode all-in rates for this wallet:
+/// maker 0.29 bps = 1.5 * 0.1 * 2.0 * 0.96, taker 0.86 bps likewise.
+/// Adverse 0.73 bps is the observed maker residual after fees on io: fills.
+/// Live yaml fee numbers stay 1.5/4.5 (operator-confirmed); only the maker
+/// backtest cost model uses the growth-mode effective rates.
+fn maker_backtest_fee_bps(config_path: &str, settings: &config::Config) -> (f64, f64, f64) {
+    let yaml_maker = settings
+        .get_float("profitability.entry_fee_bps")
+        .unwrap_or(0.0);
+    let yaml_taker = settings
+        .get_float("profitability.exit_fee_bps")
+        .unwrap_or(2.25);
+    let yaml_adverse = settings
+        .get_float("profitability.adverse_selection_bps")
+        .unwrap_or(1.0);
+    if config_path.contains("hyperliquid") {
+        (
+            crate::risk::profitability::HIP3_GROWTH_MAKER_FEE_BPS,
+            crate::risk::profitability::HIP3_GROWTH_TAKER_FEE_BPS,
+            crate::risk::profitability::HIP3_GROWTH_ADVERSE_BPS,
+        )
+    } else {
+        (yaml_maker, yaml_taker, yaml_adverse)
+    }
+}
+
+fn configure_maker_backtest_engine(
+    engine: crate::backtest::engine::BacktestEngine,
+) -> Result<crate::backtest::engine::BacktestEngine> {
+    let path = crate::env_profiles::selected_venue().config_path();
+    let settings = config::Config::builder()
+        .add_source(config::File::with_name(path))
+        .build()
+        .map_err(|error| anyhow::anyhow!("Failed to load maker backtest config: {error}"))?;
+    let (maker_fee, taker_fee, adverse) = maker_backtest_fee_bps(path, &settings);
+    let taker_slippage = settings
+        .get_float("profitability.exit_slippage_bps")
+        .unwrap_or(0.0);
+    let fill_ratio = settings
+        .get_float("profitability.maker_fill_ratio")
+        .unwrap_or(0.5);
+    let penetration = settings
+        .get_float("profitability.maker_min_penetration_bps")
+        .unwrap_or(2.0);
+    let stop_loss = settings
+        .get_float("risk.stop_loss.position_stop_loss_percent")
+        .unwrap_or(3.0)
+        / 100.0;
+    let take_profit = settings
+        .get_float("risk.stop_loss.position_take_profit_percent")
+        .unwrap_or(5.0)
+        / 100.0;
+    let max_position_notional = settings
+        .get_float("risk.position_limit.max_position_size")
+        .unwrap_or(100.0);
+    let max_total_notional_pct = settings
+        .get_float("trading.position.max_total_position_percent")
+        .unwrap_or(25.0)
+        / 100.0;
+
+    engine
+        .with_execution_costs(
+            maker_fee / 10_000.0,
+            taker_fee / 10_000.0,
+            taker_slippage / 10_000.0,
+        )?
+        .with_conservative_maker_model(fill_ratio, penetration, adverse)?
+        .with_position_risk(stop_loss, take_profit)?
+        .with_max_position_notional(max_position_notional)?
+        .with_max_total_notional_pct(max_total_notional_pct)
+}
+
+async fn execute_backtest_on_data(
+    strategy: &str,
+    params: &str,
+    capital: f64,
+    historical_data: Vec<crate::lighter::types::Candlestick>,
+) -> Result<(String, crate::backtest::results::BacktestResults)> {
+    if historical_data.is_empty() {
+        anyhow::bail!("No candles available for backtest");
+    }
     let normalized = normalize_backtest_params(strategy, params, capital);
     let bt_strategy = crate::strategy::create_strategy_with_params(
         strategy,
@@ -1351,13 +1781,29 @@ async fn run_backtest_result(
             Some(normalized.as_str())
         },
     )
-    .map_err(|e| anyhow::anyhow!("Invalid strategy: {}", e))?;
-
+    .map_err(|error| anyhow::anyhow!("Invalid strategy: {error}"))?;
     let mut engine = crate::backtest::engine::BacktestEngine::new(capital, historical_data);
+    if strategy_uses_maker_execution_model(strategy) {
+        engine = configure_maker_backtest_engine(engine.with_maker_fills(true))?;
+    }
     let results = engine
         .run(bt_strategy)
         .await
-        .map_err(|e| anyhow::anyhow!("Backtest failed: {}", e))?;
+        .map_err(|error| anyhow::anyhow!("Backtest failed: {error}"))?;
+    Ok((normalized, results))
+}
+
+async fn run_backtest_on_data(
+    strategy: &str,
+    params: &str,
+    data_file: &str,
+    capital: f64,
+    historical_data: Vec<crate::lighter::types::Candlestick>,
+) -> Result<serde_json::Value> {
+    let candle_count = historical_data.len();
+    let (normalized, results) =
+        execute_backtest_on_data(strategy, params, capital, historical_data).await?;
+    let cash_open = summarize_cash_open_trades(&results.trades, results.initial_capital);
 
     Ok(serde_json::json!({
         "status": "ok",
@@ -1365,6 +1811,11 @@ async fn run_backtest_result(
         "data_file": data_file,
         "params": normalized,
         "candles": candle_count,
+        "execution_model": if strategy_uses_maker_execution_model(strategy) {
+            "maker_next_bar_cross"
+        } else {
+            "market_at_close"
+        },
         "total_return_pct": results.total_return * 100.0,
         "sharpe_ratio": results.sharpe_ratio,
         "max_drawdown_pct": results.max_drawdown * 100.0,
@@ -1377,21 +1828,148 @@ async fn run_backtest_result(
         "avg_loss": results.avg_loss,
         "initial_capital": results.initial_capital,
         "final_capital": results.final_capital,
+        "total_commission": results.total_commission,
+        "total_adverse_selection": results.total_adverse_selection,
+        "peak_notional": results.peak_notional,
+        "peak_notional_pct": results.peak_leverage * 100.0,
+        "blocked_by_position_limit": results.blocked_by_position_limit,
+        "blocked_by_total_position_limit": results.blocked_by_total_position_limit,
+        "stop_loss_exits": results.stop_loss_exits,
+        "take_profit_exits": results.take_profit_exits,
+        "cash_open_return_pct": cash_open.return_pct,
+        "cash_open_trades": cash_open.trades,
         "equity_curve": results.equity_curve.iter()
             .map(|(ts, eq)| serde_json::json!({"t": ts.timestamp(), "v": eq}))
             .collect::<Vec<_>>(),
         "trades": results.trades.iter().take(100)
-            .map(|t| serde_json::json!({
-                "timestamp": t.timestamp.to_rfc3339(),
-                "symbol": t.symbol,
-                "side": format!("{:?}", t.side),
-                "price": t.price,
-                "quantity": t.quantity,
-                "pnl": t.pnl,
-                "commission": t.commission,
+            .map(|trade| serde_json::json!({
+                "timestamp": trade.timestamp.to_rfc3339(),
+                "symbol": trade.symbol,
+                "side": format!("{:?}", trade.side),
+                "price": trade.price,
+                "quantity": trade.quantity,
+                "pnl": trade.pnl,
+                "commission": trade.commission,
             }))
             .collect::<Vec<_>>(),
     }))
+}
+
+async fn run_validated_backtest_result(
+    strategy: &str,
+    params: &str,
+    data_file: &str,
+    capital: f64,
+    start: &str,
+    end: &str,
+) -> Result<serde_json::Value> {
+    if data_file.is_empty() || start.is_empty() || end.is_empty() {
+        anyhow::bail!("Missing required fields: data_file, start, end");
+    }
+    let historical_data =
+        crate::data::loader::load_csv_data_in_range(&backtest_data_path(data_file), start, end)
+            .map_err(|error| anyhow::anyhow!("Data load failed: {error}"))?;
+    let (_, validation_data) = split_chronological_holdout(&historical_data, 0.70)?;
+    let validation_days = if strategy_uses_maker_execution_model(strategy) {
+        let days = group_candles_by_new_york_date(&validation_data);
+        days.into_iter()
+            .rev()
+            .take(10)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect::<Vec<_>>()
+    } else {
+        Vec::new()
+    };
+    let validation_markets = if strategy_uses_maker_execution_model(strategy) {
+        let mut markets = std::collections::BTreeMap::new();
+        for candle in &validation_data {
+            markets
+                .entry(candle.symbol.clone())
+                .or_insert_with(Vec::new)
+                .push(candle.clone());
+        }
+        markets.into_values().collect::<Vec<_>>()
+    } else {
+        Vec::new()
+    };
+
+    let mut full =
+        run_backtest_on_data(strategy, params, data_file, capital, historical_data).await?;
+    let validation = run_backtest_on_data(
+        strategy,
+        params,
+        data_file,
+        capital,
+        validation_data.clone(),
+    )
+    .await?;
+
+    let mut rolling_profitable_days = 0_u64;
+    for day in &validation_days {
+        let (_, result) = execute_backtest_on_data(strategy, params, capital, day.clone()).await?;
+        if result.total_return > 0.0 {
+            rolling_profitable_days += 1;
+        }
+    }
+    let mut validation_profitable_market_count = 0_u64;
+    for market in &validation_markets {
+        let (_, result) =
+            execute_backtest_on_data(strategy, params, capital, market.clone()).await?;
+        if result.total_return > 0.0 {
+            validation_profitable_market_count += 1;
+        }
+    }
+    let object = full
+        .as_object_mut()
+        .ok_or_else(|| anyhow::anyhow!("Backtest result was not an object"))?;
+    object.insert("validation".to_string(), validation.clone());
+    object.insert(
+        "validation_return_pct".to_string(),
+        validation["total_return_pct"].clone(),
+    );
+    object.insert(
+        "validation_sharpe_ratio".to_string(),
+        validation["sharpe_ratio"].clone(),
+    );
+    object.insert(
+        "validation_max_drawdown_pct".to_string(),
+        validation["max_drawdown_pct"].clone(),
+    );
+    object.insert(
+        "validation_total_trades".to_string(),
+        validation["total_trades"].clone(),
+    );
+    object.insert(
+        "validation_peak_notional_pct".to_string(),
+        validation["peak_notional_pct"].clone(),
+    );
+    object.insert(
+        "rolling_days".to_string(),
+        serde_json::json!(validation_days.len()),
+    );
+    object.insert(
+        "rolling_profitable_days".to_string(),
+        serde_json::json!(rolling_profitable_days),
+    );
+    object.insert(
+        "cash_open_return_pct".to_string(),
+        validation["cash_open_return_pct"].clone(),
+    );
+    object.insert(
+        "cash_open_trades".to_string(),
+        validation["cash_open_trades"].clone(),
+    );
+    object.insert(
+        "validation_market_count".to_string(),
+        serde_json::json!(validation_markets.len()),
+    );
+    object.insert(
+        "validation_profitable_market_count".to_string(),
+        serde_json::json!(validation_profitable_market_count),
+    );
+    Ok(full)
 }
 
 /// Score a sweep row for ranking. Higher is better for all goals.
@@ -1501,6 +2079,44 @@ fn build_param_grid(strategy: &str, mode: &str, capital: f64) -> Result<Vec<Stri
             }
             Ok(sets)
         }
+        "maker_quote" | "maker" => {
+            let spreads: &[f64] = if quick {
+                &[4.0, 6.0, 8.0, 12.0]
+            } else {
+                &[3.0, 4.0, 6.0, 8.0, 10.0, 12.0, 16.0]
+            };
+            let volatility_multipliers: &[f64] = if quick {
+                &[0.0, 0.5]
+            } else {
+                &[0.0, 0.25, 0.5, 1.0]
+            };
+            let trend_blocks: &[f64] = if quick {
+                &[3.0, 6.0]
+            } else {
+                &[3.0, 6.0, 10.0]
+            };
+            let policy_budget = (capital * 0.20).max(5.0);
+            let quote_sizes = [
+                (policy_budget * 0.25).max(5.0).min(policy_budget),
+                (policy_budget * 0.50).max(5.0).min(policy_budget),
+            ];
+            let soft_cap = policy_budget * 0.60;
+            let hard_cap = policy_budget * 0.80;
+            let min_quote = 5.0_f64.min(quote_sizes[0]);
+            let mut sets = Vec::new();
+            for spread in spreads {
+                for quote in quote_sizes {
+                    for volatility_multiplier in volatility_multipliers {
+                        for trend_block in trend_blocks {
+                            sets.push(format!(
+                                "spread_bps={spread},per_quote_notional={quote:.2},requote_threshold_bps=2,requote_cooldown_secs=5,soft_cap_notional={soft_cap:.2},hard_cap_notional={hard_cap:.2},trend_filter=1,ema_period=20,trend_block_bps={trend_block},min_quote_notional={min_quote:.2},feature_interval_secs=60,total_quote_budget={policy_budget:.2},vol_window=24,vol_multiplier={volatility_multiplier},max_skew_bps=3"
+                            ));
+                        }
+                    }
+                }
+            }
+            Ok(sets)
+        }
         "dca" => {
             // DCA has fewer knobs; keep a compact grid.
             let intervals = [2.0, 4.0, 8.0, 12.0];
@@ -1572,11 +2188,7 @@ async fn backtest_optimize_handler(
         }
     };
 
-    let data_path = if data_file.starts_with('/') || data_file.starts_with("backtests/") {
-        data_file.to_string()
-    } else {
-        format!("backtests/data/{data_file}")
-    };
+    let data_path = backtest_data_path(data_file);
     let historical_data = match crate::data::loader::load_csv_data_in_range(&data_path, start, end)
     {
         Ok(d) if !d.is_empty() => d,
@@ -1594,12 +2206,29 @@ async fn backtest_optimize_handler(
         }
     };
     let candle_count = historical_data.len();
+    let (training_data, validation_data) = match split_chronological_holdout(&historical_data, 0.70)
+    {
+        Ok(parts) => parts,
+        Err(error) => {
+            return axum::Json(serde_json::json!({
+                "status": "error",
+                "message": format!("Holdout split failed: {error}")
+            }))
+        }
+    };
 
     // Optional baseline (user's current params)
     let mut baseline_json = None;
     if !baseline_params.trim().is_empty() {
-        if let Ok(base) =
-            run_backtest_result(strategy, &baseline_params, data_file, capital, start, end).await
+        if let Ok(base) = run_validated_backtest_result(
+            strategy,
+            &baseline_params,
+            data_file,
+            capital,
+            start,
+            end,
+        )
+        .await
         {
             baseline_json = Some(base);
         }
@@ -1608,6 +2237,10 @@ async fn backtest_optimize_handler(
     #[derive(Clone)]
     struct Row {
         params: String,
+        training_return_pct: f64,
+        training_sharpe_ratio: f64,
+        training_max_drawdown_pct: f64,
+        training_total_trades: u64,
         total_return_pct: f64,
         sharpe_ratio: f64,
         max_drawdown_pct: f64,
@@ -1619,32 +2252,64 @@ async fn backtest_optimize_handler(
 
     let mut rows: Vec<Row> = Vec::with_capacity(param_sets.len());
     for params in &param_sets {
-        let normalized = normalize_backtest_params(strategy, params, capital);
-        let bt_strategy =
-            match crate::strategy::create_strategy_with_params(strategy, Some(normalized.as_str()))
-            {
-                Ok(s) => s,
-                Err(_) => continue,
-            };
-        let mut engine =
-            crate::backtest::engine::BacktestEngine::new(capital, historical_data.clone());
-        let results = match engine.run(bt_strategy).await {
-            Ok(r) => r,
+        let (normalized, training) = match execute_backtest_on_data(
+            strategy,
+            params,
+            capital,
+            training_data.clone(),
+        )
+        .await
+        {
+            Ok(result) => result,
             Err(_) => continue,
         };
-        let ret = results.total_return * 100.0;
-        let dd = results.max_drawdown * 100.0;
-        let sharpe = results.sharpe_ratio;
-        let trades = results.total_trades as u64;
+        let (_, validation) =
+            match execute_backtest_on_data(strategy, &normalized, capital, validation_data.clone())
+                .await
+            {
+                Ok(result) => result,
+                Err(_) => continue,
+            };
+        let training_return_pct = training.total_return * 100.0;
+        let training_max_drawdown_pct = training.max_drawdown * 100.0;
+        let training_trades = training.total_trades as u64;
+        let validation_return_pct = validation.total_return * 100.0;
+        let validation_max_drawdown_pct = validation.max_drawdown * 100.0;
+        let validation_trades = validation.total_trades as u64;
+        let eligible = training_return_pct.is_finite()
+            && training_return_pct > 0.0
+            && training.sharpe_ratio.is_finite()
+            && training.sharpe_ratio > 0.0
+            && training_trades >= 3
+            && validation_return_pct.is_finite()
+            && validation_return_pct > 0.0
+            && validation.sharpe_ratio.is_finite()
+            && validation.sharpe_ratio > 0.0
+            && validation_trades >= 3;
+        let score = if eligible {
+            score_optimize_row(
+                goal,
+                validation_return_pct,
+                validation.sharpe_ratio,
+                validation_max_drawdown_pct,
+                validation_trades,
+            )
+        } else {
+            f64::NEG_INFINITY
+        };
         rows.push(Row {
             params: normalized,
-            total_return_pct: ret,
-            sharpe_ratio: sharpe,
-            max_drawdown_pct: dd,
-            total_trades: trades,
-            win_rate_pct: results.win_rate * 100.0,
-            profit_factor: results.profit_factor,
-            score: score_optimize_row(goal, ret, sharpe, dd, trades),
+            training_return_pct,
+            training_sharpe_ratio: training.sharpe_ratio,
+            training_max_drawdown_pct,
+            training_total_trades: training_trades,
+            total_return_pct: validation_return_pct,
+            sharpe_ratio: validation.sharpe_ratio,
+            max_drawdown_pct: validation_max_drawdown_pct,
+            total_trades: validation_trades,
+            win_rate_pct: validation.win_rate * 100.0,
+            profit_factor: validation.profit_factor,
+            score,
         });
     }
 
@@ -1663,6 +2328,11 @@ async fn backtest_optimize_handler(
             serde_json::json!({
                 "rank": i + 1,
                 "params": r.params,
+                "eligible": r.score.is_finite(),
+                "training_return_pct": r.training_return_pct,
+                "training_sharpe_ratio": r.training_sharpe_ratio,
+                "training_max_drawdown_pct": r.training_max_drawdown_pct,
+                "training_total_trades": r.training_total_trades,
                 "total_return_pct": r.total_return_pct,
                 "sharpe_ratio": r.sharpe_ratio,
                 "max_drawdown_pct": r.max_drawdown_pct,
@@ -1674,17 +2344,20 @@ async fn backtest_optimize_handler(
         })
         .collect();
 
-    let best_params = rows.first().map(|r| r.params.clone());
+    let best_params = rows
+        .iter()
+        .find(|row| row.score.is_finite())
+        .map(|row| row.params.clone());
     let best_detail = if let Some(ref p) = best_params {
-        run_backtest_result(strategy, p, data_file, capital, start, end)
+        run_validated_backtest_result(strategy, p, data_file, capital, start, end)
             .await
             .ok()
     } else {
         None
     };
 
-    let profitable = rows.iter().filter(|r| r.total_return_pct > 0.0).count();
-    let with_trades = rows.iter().filter(|r| r.total_trades > 0).count();
+    let profitable = rows.iter().filter(|row| row.score.is_finite()).count();
+    let with_trades = rows.iter().filter(|row| row.total_trades > 0).count();
 
     axum::Json(serde_json::json!({
         "status": "ok",
@@ -1797,7 +2470,9 @@ async fn opencode_optimize_handler(
         }));
     };
 
-    let base = match run_backtest_result(strategy, params, data_file, capital, start, end).await {
+    let base = match run_validated_backtest_result(strategy, params, data_file, capital, start, end)
+        .await
+    {
         Ok(result) => result,
         Err(e) => {
             return axum::Json(serde_json::json!({"status": "error", "message": e.to_string()}))
@@ -1852,7 +2527,8 @@ async fn opencode_optimize_handler(
         }
     };
 
-    match run_backtest_result(strategy, &suggested, data_file, capital, start, end).await {
+    match run_validated_backtest_result(strategy, &suggested, data_file, capital, start, end).await
+    {
         Ok(optimized) => axum::Json(serde_json::json!({
             "status": "ok",
             "model": model,
@@ -1871,29 +2547,59 @@ async fn opencode_optimize_handler(
     }
 }
 
-async fn ai_page_handler() -> Html<&'static str> {
-    Html(include_str!("ui/ai.html"))
+fn normalize_omp_collab_url(raw: &str) -> Option<String> {
+    const PREFIX: &str = "https://my.omp.sh/#";
+
+    let url = raw.trim();
+    let room = url.strip_prefix(PREFIX)?;
+    let (room_id, room_key) = room.split_once('.')?;
+    let valid_part = |part: &str| {
+        !part.is_empty()
+            && part
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    };
+    if valid_part(room_id) && valid_part(room_key) {
+        Some(url.to_owned())
+    } else {
+        None
+    }
 }
 
-async fn ai_js_handler() -> impl IntoResponse {
-    (
-        [(axum::http::header::CONTENT_TYPE, "application/javascript")],
-        include_str!("ui/ai.js"),
-    )
+fn select_omp_collab_url(environment: Option<&str>, runtime_file: Option<&str>) -> Option<String> {
+    environment
+        .and_then(normalize_omp_collab_url)
+        .or_else(|| runtime_file.and_then(normalize_omp_collab_url))
 }
 
-async fn quant_agent_js_handler() -> impl IntoResponse {
-    (
-        [(axum::http::header::CONTENT_TYPE, "application/javascript")],
-        include_str!("ui/quant_agent.js"),
-    )
+fn omp_collab_url() -> Option<String> {
+    let environment = std::env::var("OMP_COLLAB_WEB_URL").ok();
+    let runtime_file = std::fs::read_to_string(OMP_COLLAB_URL_FILE).ok();
+    select_omp_collab_url(environment.as_deref(), runtime_file.as_deref())
 }
 
-async fn quant_agent_protocol_js_handler() -> impl IntoResponse {
-    (
-        [(axum::http::header::CONTENT_TYPE, "application/javascript")],
-        include_str!("ui/quant_agent_protocol.js"),
-    )
+async fn ai_page_handler() -> Response {
+    match omp_collab_url() {
+        Some(url) => (
+            [
+                (header::CACHE_CONTROL, "no-store"),
+                (header::REFERRER_POLICY, "no-referrer"),
+            ],
+            Redirect::temporary(&url),
+        )
+            .into_response(),
+        None => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            [(header::CACHE_CONTROL, "no-store")],
+            Html(
+                "<!doctype html><meta charset=\"utf-8\"><title>OMP Web unavailable</title>\
+                 <h1>OMP Web session unavailable</h1>\
+                 <p>Start the repository OMP host with <code>/collab</code>, then write its \
+                 browser URL to <code>.omp/collab-url</code>.</p>",
+            ),
+        )
+            .into_response(),
+    }
 }
 
 // ── Trading Control Endpoints ──
@@ -1944,7 +2650,7 @@ async fn trading_pause_handler(
     info!("⏸️ Trading PAUSED via dashboard");
     axum::Json(serde_json::json!({
         "status": "ok",
-        "message": "Trading paused. No new orders will be placed.",
+        "message": "Trading paused. New entries are blocked; explicit risk-reducing exits remain active.",
         "trading_paused": true,
     }))
 }
@@ -1953,8 +2659,35 @@ async fn trading_resume_handler(
     State(state): State<SharedDashboardState>,
 ) -> axum::Json<serde_json::Value> {
     let mut ds = state.write().await;
+    let policy = agent_policy(&ds);
+    let params = ds
+        .strategy_params
+        .iter()
+        .map(|(key, value)| (key.clone(), serde_json::Value::String(value.clone())))
+        .collect();
+    let mut violations =
+        super::quant_agent::validate_strategy_params(&ds.strategy_name, &params, &policy);
+    if policy.emergency_triggered {
+        violations.push("risk emergency is active".to_string());
+    }
+    if !policy.equity.is_finite() || policy.equity <= 0.0 {
+        violations.push("account equity is unavailable".to_string());
+    }
+    if !violations.is_empty() {
+        warn!(
+            "Trading resume blocked by runtime policy: {}",
+            violations.join("; ")
+        );
+        return axum::Json(serde_json::json!({
+            "status": "error",
+            "message": "Trading remains paused because the active strategy violates runtime policy.",
+            "violations": violations,
+            "trading_paused": true,
+        }));
+    }
+
     ds.trading_paused = false;
-    info!("▶️ Trading RESUMED via dashboard");
+    info!("▶️ Trading RESUMED via dashboard after runtime policy validation");
     axum::Json(serde_json::json!({
         "status": "ok",
         "message": "Trading resumed. Orders will be placed normally.",
@@ -2013,4 +2746,253 @@ async fn risk_config_update_handler(
         "message": "Risk parameters updated",
         "config": ds.risk_config.clone(),
     }))
+}
+
+#[cfg(test)]
+mod auth_tests {
+    use super::{credential_fields, masked_secret, request_is_authorized};
+    use axum::http::{header, HeaderMap, HeaderValue};
+    use multi_venue_quant_bot::exchange::LiveVenue;
+
+    const TOKEN: &str = "0123456789abcdef0123456789abcdef";
+
+    #[test]
+    fn dashboard_mutation_auth_accepts_bearer_or_strict_cookie() {
+        let mut bearer = HeaderMap::new();
+        bearer.insert(
+            header::AUTHORIZATION,
+            HeaderValue::from_static("Bearer 0123456789abcdef0123456789abcdef"),
+        );
+        assert!(request_is_authorized(&bearer, TOKEN));
+
+        let mut cookie = HeaderMap::new();
+        cookie.insert(
+            header::COOKIE,
+            HeaderValue::from_static("theme=dark; quant_bot_auth=0123456789abcdef0123456789abcdef"),
+        );
+        assert!(request_is_authorized(&cookie, TOKEN));
+    }
+
+    #[test]
+    fn dashboard_mutation_auth_rejects_missing_or_wrong_credentials() {
+        assert!(!request_is_authorized(&HeaderMap::new(), TOKEN));
+        let mut wrong = HeaderMap::new();
+        wrong.insert(
+            header::AUTHORIZATION,
+            HeaderValue::from_static("Bearer wrong"),
+        );
+        assert!(!request_is_authorized(&wrong, TOKEN));
+    }
+
+    #[test]
+    fn credential_fields_are_venue_specific() {
+        let lighter = credential_fields(LiveVenue::LighterMainnet);
+        assert!(lighter
+            .iter()
+            .any(|field| field.api_key == "LIGHTER_SECRET_KEY"));
+        assert!(!lighter.iter().any(|field| field.api_key == "ARCUS_API_KEY"));
+
+        let arcus = credential_fields(LiveVenue::ArcusMainnet);
+        assert!(arcus.iter().any(|field| field.api_key == "ARCUS_API_KEY"));
+        assert!(arcus
+            .iter()
+            .any(|field| field.api_key == "ARCUS_SIGNING_KEY" && field.secret));
+        assert!(!arcus
+            .iter()
+            .any(|field| field.api_key == "EXCHANGE_SECRET_KEY"));
+
+        let aster = credential_fields(LiveVenue::AsterMainnet);
+        assert!(aster
+            .iter()
+            .any(|field| field.api_key == "ASTER_SIGNER_PRIVATE_KEY" && field.secret));
+    }
+
+    #[test]
+    fn secret_mask_contains_metadata_but_never_plaintext() {
+        let masked = masked_secret("highly-sensitive-private-key");
+        assert_eq!(masked["configured"], true);
+        assert!(masked.get("length").is_none());
+        assert!(masked.get("tail").is_none());
+        assert!(!masked.to_string().contains("highly-sensitive-private-key"));
+    }
+}
+
+#[cfg(test)]
+mod omp_web_tests {
+    use super::select_omp_collab_url;
+
+    #[test]
+    fn collab_redirect_accepts_only_exact_https_omp_room_links() {
+        assert_eq!(
+            select_omp_collab_url(
+                Some("  https://my.omp.sh/#room-id.room-key  "),
+                Some("https://my.omp.sh/#fallback.key"),
+            )
+            .as_deref(),
+            Some("https://my.omp.sh/#room-id.room-key"),
+        );
+
+        for unsafe_url in [
+            "http://my.omp.sh/#room.key",
+            "https://evil.example/#room.key",
+            "https://my.omp.sh/path#room.key",
+            "https://my.omp.sh/#",
+            "javascript:alert(1)",
+        ] {
+            assert_eq!(select_omp_collab_url(Some(unsafe_url), None), None);
+        }
+    }
+
+    #[test]
+    fn invalid_environment_value_falls_back_to_runtime_file() {
+        assert_eq!(
+            select_omp_collab_url(
+                Some("https://evil.example/#stolen.key"),
+                Some("https://my.omp.sh/#runtime-room.runtime-key\n"),
+            )
+            .as_deref(),
+            Some("https://my.omp.sh/#runtime-room.runtime-key"),
+        );
+    }
+}
+
+#[cfg(test)]
+mod backtest_validation_tests {
+    use super::{
+        build_param_grid, group_candles_by_new_york_date, split_chronological_holdout,
+        strategy_uses_maker_execution_model, summarize_cash_open_trades,
+    };
+    use crate::lighter::types::Candlestick;
+    use chrono::{TimeZone, Utc};
+
+    fn candle(timestamp: i64, symbol: &str) -> Candlestick {
+        Candlestick {
+            timestamp: Utc.timestamp_opt(timestamp, 0).unwrap(),
+            open: 100.0,
+            high: 101.0,
+            low: 99.0,
+            close: 100.0,
+            volume: 1.0,
+            symbol: symbol.to_string(),
+        }
+    }
+
+    #[test]
+    fn hyperliquid_maker_backtest_uses_growth_mode_fees() {
+        let settings = config::Config::builder()
+            .add_source(config::File::with_name("config/settings.hyperliquid.yaml"))
+            .build()
+            .expect("yaml");
+        let (maker, taker, adverse) =
+            super::maker_backtest_fee_bps("config/settings.hyperliquid.yaml", &settings);
+        assert!((maker - 0.29).abs() < 1e-9);
+        assert!((taker - 0.86).abs() < 1e-9);
+        assert!((adverse - 0.73).abs() < 1e-9);
+        assert!(settings.get_float("profitability.entry_fee_bps").unwrap() > 1.0);
+    }
+
+    #[test]
+    fn status_and_ws_push_include_user_fee_tier_fields() {
+        let src = include_str!("server.rs");
+        assert!(src.contains("user_add_rate_bps"));
+        assert!(src.contains("user_cross_rate_bps"));
+        assert!(src.contains("fee_tier_is_t4"));
+        assert!(src.contains("last_cross_dex_net_bps"));
+        assert!(src.contains("last_cross_dex_side"));
+        assert!(src.contains("strategy_overlay"));
+        assert!(
+            src.matches("strategy_overlay").count() >= 3,
+            "exists helper plus REST status plus WS status"
+        );
+        assert!(
+            src.matches("ds.strategy_params.get(\"quote_mode\")").count() >= 2,
+            "quote_mode on REST and WS status"
+        );
+        assert!(
+            src.matches("ds.strategy_params.get(\"flatten_only\")").count() >= 2,
+            "flatten_only on REST and WS status"
+        );
+        assert!(
+            src.matches("user_add_rate_bps").count() >= 3,
+            "field plus REST status plus WS status"
+        );
+        assert!(
+            src.matches("last_cross_dex_net_bps").count() >= 3,
+            "cross-dex field plus REST status plus WS status"
+        );
+    }
+
+    #[test]
+    fn maker_quote_uses_resting_fill_model_and_has_a_bounded_grid() {
+        assert!(strategy_uses_maker_execution_model("maker_quote"));
+        let grid = build_param_grid("maker_quote", "quick", 100.0).expect("maker grid");
+        assert!(!grid.is_empty());
+        assert!(grid.iter().all(|params| {
+            params.contains("spread_bps=")
+                && params.contains("per_quote_notional=")
+                && params.contains("total_quote_budget=")
+        }));
+    }
+
+    #[test]
+    fn chronological_holdout_never_splits_one_market_timestamp() {
+        let candles = vec![
+            candle(1, "BTC"),
+            candle(1, "ETH"),
+            candle(2, "BTC"),
+            candle(2, "ETH"),
+            candle(3, "BTC"),
+            candle(3, "ETH"),
+            candle(4, "BTC"),
+            candle(4, "ETH"),
+        ];
+        let (train, validation) =
+            split_chronological_holdout(&candles, 0.70).expect("valid chronological split");
+        assert!(!train.is_empty());
+        assert!(!validation.is_empty());
+        assert!(train.last().unwrap().timestamp < validation.first().unwrap().timestamp);
+        assert_eq!(train.len() + validation.len(), candles.len());
+    }
+
+    #[test]
+    fn rolling_days_follow_new_york_calendar_across_dst() {
+        let candles = vec![
+            candle(1_786_420_740, "BTC"), // 2026-08-11 03:59 UTC = Aug 10 NY
+            candle(1_786_420_800, "BTC"), // 2026-08-11 04:00 UTC = Aug 11 NY
+            candle(1_767_589_140, "BTC"), // 2026-01-05 04:59 UTC = Jan 4 NY
+            candle(1_767_589_200, "BTC"), // 2026-01-05 05:00 UTC = Jan 5 NY
+        ];
+
+        let groups = group_candles_by_new_york_date(&candles);
+
+        assert_eq!(groups.len(), 4);
+        assert!(groups.iter().all(|day| day.len() == 1));
+    }
+
+    #[test]
+    fn cash_open_summary_is_dst_aware_and_nets_commission() {
+        use crate::backtest::results::BacktestTrade;
+        use crate::lighter::types::Side;
+
+        let trade = |timestamp, pnl, commission| BacktestTrade {
+            timestamp: Utc.timestamp_opt(timestamp, 0).unwrap(),
+            symbol: "TEST".into(),
+            side: Side::Sell,
+            price: 100.0,
+            quantity: 1.0,
+            pnl,
+            commission,
+        };
+        let trades = vec![
+            trade(1_786_455_600, -2.0, 0.1), // 2026-08-11 13:40 UTC = 09:40 EDT
+            trade(1_768_228_200, 1.0, 0.1),  // 2026-01-12 14:30 UTC = 09:30 EST
+            trade(1_768_224_600, 9.0, 0.0),  // 08:30 EST, excluded
+        ];
+
+        let summary = summarize_cash_open_trades(&trades, 1_000.0);
+
+        assert_eq!(summary.trades, 2);
+        assert!((summary.net_pnl + 1.2).abs() < 1e-12);
+        assert!((summary.return_pct + 0.12).abs() < 1e-12);
+    }
 }

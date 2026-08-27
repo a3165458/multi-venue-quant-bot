@@ -10,6 +10,9 @@ pub fn data_file(network: &str, filename: &str) -> Result<PathBuf> {
             | "lighter-robinhood"
             | "arcus-mainnet"
             | "arcus-testnet"
+            | "aster-mainnet"
+            | "hyperliquid-mainnet"
+            | "hyperliquid-testnet"
     ) {
         bail!("unsupported runtime data network: {network}");
     }
@@ -34,6 +37,18 @@ mod tests {
         assert_eq!(
             data_file("robinhood", "strategy_config.json").unwrap(),
             PathBuf::from("data/robinhood/strategy_config.json")
+        );
+        assert_eq!(
+            data_file("aster-mainnet", "pnl_state.json").unwrap(),
+            PathBuf::from("data/aster-mainnet/pnl_state.json")
+        );
+        assert_eq!(
+            data_file("hyperliquid-mainnet", "pnl_state.json").unwrap(),
+            PathBuf::from("data/hyperliquid-mainnet/pnl_state.json")
+        );
+        assert_eq!(
+            data_file("hyperliquid-testnet", "strategy_config.json").unwrap(),
+            PathBuf::from("data/hyperliquid-testnet/strategy_config.json")
         );
     }
 

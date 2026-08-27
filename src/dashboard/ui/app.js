@@ -7,6 +7,8 @@
     const EQUITY_THROTTLE = 15000;
     let ws = null;
     let reconnTimer = null;
+    let wsConnected = false;
+    let wsEverOpened = false;
     let activePage = 'dashboard';
     let equityData = [];
     let allTrades = [];
@@ -15,6 +17,8 @@
     let notifications = [];
     let ordersData = [];
     let equityRange = 'all';
+    let lastMakerParams = null;
+    let lastStrategyName = 'maker_quote';
 
     const $ = id => document.getElementById(id);
     const fmtPnl = v => (v >= 0 ? '+$' : '-$') + Math.abs(v).toFixed(2);
@@ -27,6 +31,9 @@
     const tradeAction = t => t.action || t.close_type || t.trade_type || 'Order';
     const isCloseAction = action => /Close|Stop|Emergency|Liquidat/i.test(action || '');
     const isTerminalCloseAction = action => /Full Close|Stop|Emergency|Liquidat/i.test(action || '');
+    // Hyperliquid fills are all action="Fill" but carry net realized pnl
+    // (closedPnl - fee); treat them as pnl-bearing rows for the stats pages.
+    const hasTradePnl = t => typeof t.pnl === 'number' && t.pnl !== 0;
 
     // ── i18n ──
     const i18nStrings = {
@@ -59,8 +66,8 @@
             toggleTheme: 'Toggle Theme', market: 'Market', side: 'Side', size: 'Size',
             entry: 'Entry', mark: 'Mark', price: 'Price', qty: 'Qty', filled: 'Filled',
             status: 'Status', time: 'Time', asset: 'Asset', pnl: 'PNL',
-            noPositions: 'No active positions', noOrders: 'No open orders',
-            noTrades: 'No trades yet', noHistory: 'No trade history',
+            noPositions: 'No open positions', noOrders: 'No open orders',
+            noTrades: 'No trades yet', noHistory: 'No trade history yet',
             searchPlaceholder: 'Search...', searchByAsset: 'Search by asset, side...',
             connecting: 'Connecting...', liveTrading: 'Live Trading', disconnected: 'Disconnected',
             connectionLost: 'Connection lost. Reconnecting...',
@@ -81,14 +88,203 @@
             railKicker: 'Real events only \u00b7 newest first',
             envKicker: 'Read at process start \u00b7 restart required', envTitle: 'Environment',
             networkKicker: 'Active connection \u00b7 restart to switch', networkTitle: 'Network',
-            networkCredentials: 'Mainnet and Robinhood Chain use separate account credentials. Update the account index, API key index and private key below before switching.',
+            networkCredentials: 'Each venue uses an isolated credential profile. Aster V3 uses a sub-account user address and an API Wallet signer.',
             saveNetwork: 'Use selected network after restart', networkFootL: 'Current connection stays unchanged', networkFootR: 'Selection is saved to .env',
             envWarnTag: 'Security',
-            envWarn: 'This panel has no authentication and the live process binds 0.0.0.0. Anyone who can reach this port can edit these values. The secret key is write-only \u2014 it is never sent back to the browser.',
+            envWarn: 'Mutation endpoints require the per-process dashboard credential. Keep this service on a trusted network. The secret key is write-only \u2014 it is never sent back to the browser.',
             writeOnly: '(write-only)', currentValue: 'current',
-            secretHint: 'Exchange API private key, not the wallet L1 key. Leaving this blank keeps the existing value.',
+            secretHint: 'Use exchange-issued API credentials, never a wallet L1 key. A blank secret keeps the existing value.',
             saveEnv: 'Save network credentials', envFootL: 'One file · isolated network prefixes', envFootR: 'Restart the bot to apply', eventLog: 'Event Log', thisWeek: 'This week \u00b7 realised',
             confirmCancel: 'Cancel ALL open orders? This cannot be undone.', navMenu: 'Menu',
+            makerSub: 'Mid-spread ALO market making · inventory skew, maker reduce, no IOC flatten',
+            quoteNotional: 'Quote notional ($)', requoteCooldown: 'Replace cooldown (s)',
+            joinInside: 'Join-inside ticks', flattenTimers: 'Flatten mid / IOC (s)',
+            flattenOnly: 'Flatten-only after fill', applyMaker: 'Apply maker quote',
+            noMarkets: 'No markets from this venue yet',
+            mq_quote_mode: 'Quote mode',
+            mq_per_quote_notional: 'Quote notional ($)',
+            mq_min_quote_notional: 'Min quote notional ($)',
+            mq_total_quote_budget: 'Total quote budget ($)',
+            mq_soft_cap_notional: 'Inventory soft cap ($)',
+            mq_hard_cap_notional: 'Inventory hard cap ($)',
+            mq_spread_bps: 'Spread (bps, mid_spread mode)',
+            mq_requote_threshold_bps: 'Requote threshold (bps)',
+            mq_requote_cooldown_secs: 'Replace cooldown (s)',
+            mq_join_inside_ticks: 'Join-inside ticks',
+            mq_ema_period: 'Trend EMA period',
+            mq_trend_block_bps: 'Trend block (bps)',
+            mq_max_skew_bps: 'Max inventory skew (bps)',
+            mq_vol_window: 'Vol window (bars, 0=off)',
+            mq_vol_multiplier: 'Vol spread multiplier',
+            mq_min_book_spread_bps: 'Min book spread (bps)',
+            mq_max_book_spread_bps: 'Max book spread (bps)',
+            mq_wide_book_size_mult: 'Wide-book size multiplier',
+            mq_max_bbo_imbalance: 'Max BBO imbalance (x, 0=off)',
+            mq_jump_circuit_breaker_bps: 'Jump breaker (bps)',
+            mq_circuit_breaker_cooldown_secs: 'Breaker cooldown (s)',
+            mq_feature_interval_secs: 'Feature interval (s)',
+            mq_flatten_mid_secs: 'Flatten mid after (s)',
+            mq_flatten_ioc_secs: 'Flatten take unused (ALO only, s)',
+            mq_cash_open_guard_before_minutes: 'Cash-open guard before (min)',
+            mq_cash_open_guard_after_minutes: 'Cash-open guard after (min)',
+            mq_trend_filter: 'Trend filter',
+            mq_cash_open_guard: 'Cash-open guard',
+            mq_flatten_only: 'Flatten-only after fill',
+            mqJoinBest: 'Join best bid/ask',
+            mqMidSpread: 'Mid-spread',
+            activeBadge: '● Active',
+            inactiveBadge: '○ Inactive',
+            pausedBadge: '⏸ Paused',
+            applying: 'Applying...',
+            applyFailed: 'Failed to apply',
+            applyMakerOk: 'Maker quote applied',
+            makerActivated: 'Maker quote activated',
+            gridActivated: 'Grid strategy activated',
+            dcaActivated: 'DCA strategy activated',
+            trendActivated: 'Trend following strategy activated',
+            justNow: 'just now',
+            minutesAgo: 'm ago',
+            hoursAgo: 'h ago',
+            daysAgo: 'd ago',
+            noNotifs: 'No notifications yet',
+            notifications: 'Notifications',
+            clearAll: 'Clear all',
+            rangeError: 'must be between',
+            softCapError: 'soft cap must not exceed hard cap',
+            minQuoteError: 'min quote notional must not exceed quote notional',
+            marketsUpdated: 'Markets updated',
+            marketsFailed: 'Failed to update markets',
+            tradingPausedMsg: 'Trading paused',
+            tradingResumedMsg: 'Trading resumed',
+            actionFailed: 'Failed',
+            allCancelled: 'All orders cancelled',
+            cancelFailed: 'Failed to cancel orders',
+            riskSaved: 'Risk settings saved successfully',
+            riskUpdated: 'Risk settings updated',
+            networkError: 'Network error',
+            wsConnected: 'WebSocket connected',
+            wsDisconnected: 'WebSocket disconnected, reconnecting...',
+            initLog: 'Dashboard initializing...',
+            failedPnl: 'Failed to load PnL data',
+            failedStrategy: 'Failed to load strategy config',
+            noMatching: 'No matching trades',
+            noClosed: 'No closed trades yet',
+            noDaily: 'No daily data yet',
+            noData: 'No data',
+            totalWord: 'Total',
+            closedTrades: 'Closed Trades',
+            avgHold: 'Avg Hold',
+            posSummary: 'Position P&L Summary',
+            gridStrategy: 'Grid Strategy',
+            configuration: 'Configuration',
+            gridCount: 'Grid Count',
+            live: 'Live',
+            riskSlTp: 'Risk: SL / TP',
+            maxOpenOrders: 'Max Open Orders',
+            dcaStrategy: 'DCA Strategy',
+            trendFollowing: 'Trend Following',
+            makerQuote: 'Maker Quote',
+            loading: 'Loading...',
+            loadingMarkets: 'Loading markets…',
+            ompAgent: 'OMP Agent',
+            idle: 'IDLE',
+            shadowKicker: 'Virtual quotes only · risk exits remain armed',
+            asterShadow: 'Aster shadow maker',
+            runtime: 'Runtime',
+            bboEvents: 'BBO events',
+            eventLag: 'Event lag',
+            depthLag: 'Depth lag',
+            strategyEval: 'Strategy eval',
+            queueAhead: 'Queue ahead',
+            quoteReqMin: 'Quote requests/min',
+            amendSavings: 'Amend savings',
+            virtualFills: 'Virtual fills',
+            virtualVolume: 'Virtual volume',
+            volumeHour: 'Volume/hour',
+            hftKicker: 'Multi-profile · near-BBO · no real orders',
+            hftLab: 'HFT shadow lab',
+            profile: 'Profile',
+            offset: 'Offset',
+            cooldown: 'Cooldown',
+            reqMin: 'Req/min',
+            amendSave: 'Amend save',
+            fills: 'Fills',
+            volHour: 'Volume/h',
+            markout1s: '1s markout',
+            markout5s: '5s markout',
+            markout30s: '30s markout',
+            collectingHft: 'Collecting HFT shadow data…',
+            hftFootL: 'Join vs offset · amend in place',
+            hftFootR: 'Virtual execution only',
+            action: 'Action',
+            noPositionsShort: 'No positions',
+            restApi: 'REST API',
+            feeTier: 'Fee tier',
+            crossDex: 'Cross-dex basis',
+            strategySource: 'Strategy source',
+            websocket: 'WebSocket',
+            signerChain: 'Signer chain ID',
+            running: 'Running',
+            stable: 'Stable',
+            version: 'Version',
+            venue: 'Venue',
+            leverageLimit: 'Leverage Limit',
+            maxLeverageRisk: 'Max Leverage (Risk)',
+            stopLossLabel: 'Stop Loss',
+            takeProfitLabel: 'Take Profit',
+            saveRisk: 'Save Risk Settings',
+            secretKeep: 'leaving this blank keeps the current secret',
+            hlAccount: 'Hyperliquid account address',
+            hlSigner: 'Hyperliquid signer private key',
+            lighterAccount: 'Lighter account index',
+            lighterApi: 'Lighter API key index',
+            lighterSecret: 'Lighter secret key',
+            arcusKey: 'Arcus API key',
+            arcusWallet: 'Arcus wallet address',
+            arcusIndex: 'Arcus account index',
+            arcusSign: 'Arcus signing key',
+            asterWallet: 'Aster API wallet public address',
+            asterSigner: 'Aster signer private key',
+            rustLog: 'RUST_LOG',
+            tokioThreads: 'TOKIO_WORKER_THREADS',
+            unrealizedHeader: 'Unrealized P&L',
+            applyChanges: 'Apply Changes',
+            quantEngine: 'quant engine',
+            pageTitle: 'Multi-Venue Quant Bot | Dashboard',
+            brandName: 'Multi-Venue Quant Bot',
+            noHft: 'No HFT profiles',
+            toxic: 'TOXIC',
+            lead: 'LEAD',
+            csvExported: 'Trade history exported as CSV',
+            activeMarketsChanged: 'Active markets changed',
+            pushWord: 'PUSH',
+            ordersWord: 'ORDERS',
+            loopWord: 'LOOP',
+            revWord: 'REV',
+            state3s: 'state 3s',
+            drawdownGate: 'drawdown gate',
+            openOrdersHint: 'open orders',
+            tradeHistoryHint: 'trade history',
+            dailyCap: 'DAILY',
+            openOrdersCount: 'open orders',
+            waitingShadow: 'WAITING',
+            networkLighter: 'Lighter Mainnet',
+            networkRobinhood: 'Lighter · Robinhood Chain',
+            networkArcus: 'Arcus Mainnet',
+            networkArcusTest: 'Arcus Testnet',
+            networkAster: 'Aster Mainnet',
+            networkHl: 'Hyperliquid Mainnet',
+            networkHlTest: 'Hyperliquid Testnet',
+            lighterDesc: 'USDC · Crypto perpetuals',
+            robinhoodDesc: 'USDG · Crypto & stock perpetuals',
+            arcusDesc: 'USD · Equities, crypto & commodity perps',
+            arcusTestDesc: 'Paper collateral · Integration testing',
+            asterDesc: 'USDT · Aster Pro Futures V3',
+            hlDesc: 'USDC · HIP-3 / entropy.io perps',
+            hlTestDesc: 'Testnet USDC · HIP-3 coins when listed',
+            ed25519: 'Ed25519 API key',
+            apiWalletSigner: 'API Wallet signer',
+            chainId: 'chain ID',
         },
         cn: {
             dashboard: '仪表盘', strategies: '策略', portfolio: '投资组合',
@@ -141,18 +337,207 @@
             railKicker: '只记真实事件 \u00b7 最新在上',
             envKicker: '进程启动时读入 \u00b7 需重启生效', envTitle: '环境变量',
             networkKicker: '当前连接 \u00b7 切换需重启', networkTitle: '网络',
-            networkCredentials: '主网与 Robinhood Chain 的账户凭据互不通用。切换前请同步更新下方的账户索引、API Key 索引和私钥。',
+            networkCredentials: '各 venue 使用相互隔离的凭据。Aster V3 使用子账户 user 地址和 API Wallet signer。',
             saveNetwork: '重启后使用所选网络', networkFootL: '当前连接不会立即改变', networkFootR: '选择保存到 .env',
             envWarnTag: '安全',
-            envWarn: '本面板没有任何鉴权，且实盘进程绑定在 0.0.0.0。能访问该端口的任何人都能改这些值。密钥是只写的 \u2014 后端永远不会把明文回给浏览器。',
+            envWarn: '写操作接口受进程级 Dashboard 凭据保护；仍应只在可信网络访问。密钥为只写字段，后端不会把明文返回浏览器。',
             writeOnly: '（只写）', currentValue: '当前',
-            secretHint: '这是交易所 API 私钥，不是钱包 L1 私钥。留空表示保持原值不变。',
+            secretHint: '只能填写交易所签发的 API 凭据，不要填写钱包 L1 私钥。密钥留空表示保持原值。',
             saveEnv: '保存网络凭据', envFootL: '单一文件 · 两组网络前缀隔离', envFootR: '重启机器人后生效', eventLog: '事件流', thisWeek: '本周 \u00b7 已实现',
             confirmCancel: '取消所有挂单？此操作不可撤销。', navMenu: '菜单',
+            makerSub: '中间价双边 ALO 做市 · 库存偏斜减仓，不用 IOC 强平',
+            quoteNotional: '单笔名义 ($)', requoteCooldown: '换单冷却 (秒)',
+            joinInside: '往中间收的 tick 数', flattenTimers: '平仓中间档 / IOC (秒)',
+            flattenOnly: '成交后只平仓', applyMaker: '应用做市策略',
+            noMarkets: '当前交易所还没有市场',
+            mq_quote_mode: '报价模式',
+            mq_per_quote_notional: '单笔名义 ($)',
+            mq_min_quote_notional: '最小单笔名义 ($)',
+            mq_total_quote_budget: '总报价预算 ($)',
+            mq_soft_cap_notional: '库存软上限 ($)',
+            mq_hard_cap_notional: '库存硬上限 ($)',
+            mq_spread_bps: '价差 (bps，中间价模式)',
+            mq_requote_threshold_bps: '换单阈值 (bps)',
+            mq_requote_cooldown_secs: '换单冷却 (秒)',
+            mq_join_inside_ticks: '往中间收的 tick 数',
+            mq_ema_period: '趋势 EMA 周期',
+            mq_trend_block_bps: '趋势封锁 (bps)',
+            mq_max_skew_bps: '库存偏斜上限 (bps)',
+            mq_vol_window: '波动窗口 (根, 0=关)',
+            mq_vol_multiplier: '波动价差乘数',
+            mq_min_book_spread_bps: '最小盘口价差 (bps)',
+            mq_max_book_spread_bps: '最大盘口价差 (bps)',
+            mq_wide_book_size_mult: '宽盘口尺寸乘数',
+            mq_max_bbo_imbalance: '最大买卖不平衡 (倍, 0=关)',
+            mq_jump_circuit_breaker_bps: '跳空熔断 (bps)',
+            mq_circuit_breaker_cooldown_secs: '熔断冷却 (秒)',
+            mq_feature_interval_secs: '特征采样间隔 (秒)',
+            mq_flatten_mid_secs: '中间价减仓等待 (秒)',
+            mq_flatten_ioc_secs: '吃单减仓已关闭 (秒, 仅挂单)',
+            mq_cash_open_guard_before_minutes: '美股开盘前保护 (分)',
+            mq_cash_open_guard_after_minutes: '美股开盘后保护 (分)',
+            mq_trend_filter: '趋势过滤',
+            mq_cash_open_guard: '美股开盘保护',
+            mq_flatten_only: '成交后只平仓',
+            mqJoinBest: '贴买一卖一',
+            mqMidSpread: '中间价铺开',
+            activeBadge: '● 运行中',
+            inactiveBadge: '○ 未启用',
+            pausedBadge: '⏸ 已暂停',
+            applying: '正在应用...',
+            applyFailed: '应用失败',
+            applyMakerOk: '做市参数已应用',
+            makerActivated: '做市策略已生效',
+            gridActivated: '网格策略已启用',
+            dcaActivated: '定投策略已启用',
+            trendActivated: '趋势策略已启用',
+            justNow: '刚刚',
+            minutesAgo: ' 分钟前',
+            hoursAgo: ' 小时前',
+            daysAgo: ' 天前',
+            noNotifs: '暂无通知',
+            notifications: '通知',
+            clearAll: '全部清除',
+            rangeError: '必须介于',
+            softCapError: '库存软上限不能大于硬上限',
+            minQuoteError: '最小单笔名义不能大于单笔名义',
+            marketsUpdated: '市场已更新',
+            marketsFailed: '更新市场失败',
+            tradingPausedMsg: '交易已暂停',
+            tradingResumedMsg: '交易已恢复',
+            actionFailed: '操作失败',
+            allCancelled: '已取消全部挂单',
+            cancelFailed: '取消挂单失败',
+            riskSaved: '风控设置已保存',
+            riskUpdated: '风控设置已更新',
+            networkError: '网络错误',
+            wsConnected: 'WebSocket 已连接',
+            wsDisconnected: 'WebSocket 已断开，正在重连...',
+            initLog: '仪表盘初始化中...',
+            failedPnl: '盈亏数据加载失败',
+            failedStrategy: '策略配置加载失败',
+            noMatching: '没有匹配的交易',
+            noClosed: '暂无已平仓记录',
+            noDaily: '暂无每日数据',
+            noData: '暂无数据',
+            totalWord: '合计',
+            closedTrades: '已平仓笔数',
+            avgHold: '平均持仓',
+            posSummary: '持仓盈亏汇总',
+            gridStrategy: '网格策略',
+            configuration: '参数配置',
+            gridCount: '网格数量',
+            live: '实盘',
+            riskSlTp: '风控：止损 / 止盈',
+            maxOpenOrders: '最大挂单数',
+            dcaStrategy: '定投策略',
+            trendFollowing: '趋势跟踪',
+            makerQuote: '做市报价',
+            loading: '加载中...',
+            loadingMarkets: '正在加载市场…',
+            ompAgent: 'OMP 助手',
+            idle: '空闲',
+            shadowKicker: '仅虚拟报价 · 风险平仓仍生效',
+            asterShadow: 'Aster 影子做市',
+            runtime: '运行时长',
+            bboEvents: 'BBO 事件',
+            eventLag: '事件延迟',
+            depthLag: '深度延迟',
+            strategyEval: '策略计算',
+            queueAhead: '前方排队',
+            quoteReqMin: '报价请求/分钟',
+            amendSavings: '改单节省',
+            virtualFills: '虚拟成交',
+            virtualVolume: '虚拟成交额',
+            volumeHour: '每小时成交额',
+            hftKicker: '多配置 · 近盘口 · 不下真实单',
+            hftLab: '高频影子实验室',
+            profile: '配置',
+            offset: '偏移',
+            cooldown: '冷却',
+            reqMin: '请求/分',
+            amendSave: '改单节省',
+            fills: '成交',
+            volHour: '成交额/时',
+            markout1s: '1秒标记损益',
+            markout5s: '5秒标记损益',
+            markout30s: '30秒标记损益',
+            collectingHft: '正在采集高频影子数据…',
+            hftFootL: '贴盘 vs 偏移 · 原地改单',
+            hftFootR: '仅虚拟成交',
+            action: '动作',
+            noPositionsShort: '暂无持仓',
+            restApi: 'REST 接口',
+            feeTier: '费率档位',
+            crossDex: '跨 dex 基差',
+            strategySource: '策略来源',
+            websocket: 'WebSocket',
+            signerChain: '签名链 ID',
+            running: '运行中',
+            stable: '稳定',
+            version: '版本',
+            venue: '交易所',
+            leverageLimit: '杠杆上限',
+            maxLeverageRisk: '最大杠杆（风控）',
+            stopLossLabel: '止损',
+            takeProfitLabel: '止盈',
+            saveRisk: '保存风控设置',
+            secretKeep: '留空则保持现有密钥',
+            hlAccount: 'Hyperliquid 账户地址',
+            hlSigner: 'Hyperliquid 签名私钥',
+            lighterAccount: 'Lighter 账户序号',
+            lighterApi: 'Lighter API 密钥序号',
+            lighterSecret: 'Lighter 密钥',
+            arcusKey: 'Arcus API 密钥',
+            arcusWallet: 'Arcus 钱包地址',
+            arcusIndex: 'Arcus 账户序号',
+            arcusSign: 'Arcus 签名密钥',
+            asterWallet: 'Aster API 钱包公钥',
+            asterSigner: 'Aster 签名私钥',
+            rustLog: 'RUST_LOG',
+            tokioThreads: 'TOKIO_WORKER_THREADS',
+            unrealizedHeader: '未实现盈亏',
+            applyChanges: '应用更改',
+            quantEngine: '量化引擎',
+            pageTitle: '多场所量化机器人 | 仪表盘',
+            brandName: '多场所量化机器人',
+            noHft: '暂无高频配置',
+            toxic: '有毒',
+            lead: '领先',
+            csvExported: '交易历史已导出为 CSV',
+            activeMarketsChanged: '已激活市场已变更',
+            pushWord: '推送',
+            ordersWord: '挂单',
+            loopWord: '回路',
+            revWord: '圈数',
+            state3s: '状态 3秒',
+            drawdownGate: '回撤闸门',
+            openOrdersHint: '挂单',
+            tradeHistoryHint: '成交记录',
+            dailyCap: '日亏',
+            openOrdersCount: '笔挂单',
+            waitingShadow: '等待中',
+            networkLighter: 'Lighter 主网',
+            networkRobinhood: 'Lighter · Robinhood 链',
+            networkArcus: 'Arcus 主网',
+            networkArcusTest: 'Arcus 测试网',
+            networkAster: 'Aster 主网',
+            networkHl: 'Hyperliquid 主网',
+            networkHlTest: 'Hyperliquid 测试网',
+            lighterDesc: 'USDC · 加密永续',
+            robinhoodDesc: 'USDG · 加密与股票永续',
+            arcusDesc: 'USD · 股票、加密与商品永续',
+            arcusTestDesc: '模拟保证金 · 联调测试',
+            asterDesc: 'USDT · Aster Pro 期货 V3',
+            hlDesc: 'USDC · HIP-3 / entropy.io 永续',
+            hlTestDesc: '测试网 USDC · 已上线的 HIP-3 币对',
+            ed25519: 'Ed25519 API 密钥',
+            apiWalletSigner: 'API 钱包签名器',
+            chainId: '链 ID',
         }
     };
 
-    let currentLang = localStorage.getItem('lighter-lang') || 'en';
+    let currentLang = localStorage.getItem('lighter-lang') || 'cn';
 
     function t(key) { return (i18nStrings[currentLang] || i18nStrings.en)[key] || (i18nStrings.en)[key] || key; }
 
@@ -170,9 +555,19 @@
         if (gs) gs.placeholder = t('searchPlaceholder');
         const hs = $('h-search');
         if (hs) hs.placeholder = t('searchByAsset');
+        document.querySelectorAll('[data-i18n-placeholder]').forEach(el => {
+            el.placeholder = t(el.getAttribute('data-i18n-placeholder'));
+        });
         // Update WS offline text
         const wsOff = $('ws-offline');
         if (wsOff) wsOff.textContent = t('connectionLost');
+        if (document.title) document.title = t('pageTitle');
+        renderMakerForm();
+        if (lastMakerParams) fillMakerForm(lastMakerParams);
+        if (typeof updatePauseButton === 'function') updatePauseButton();
+        if (typeof updateConnectionStatus === 'function') updateConnectionStatus();
+        if (lastStrategyName) updateStrategyBadges(lastStrategyName);
+        renderNotifications();
         // 旁路面板有一批 JS 生成的文案（NO OPEN ORDERS / % FILLED …），
         // 它们不在 DOM 里带 data-i18n，只能靠这里推一次当前语言过去。
         try { if (window.__panels && window.__panels.lang) window.__panels.lang(currentLang); } catch (e) {}
@@ -285,7 +680,7 @@
         const list = $('notif-list');
         if (!list) return;
         if (notifications.length === 0) {
-            list.innerHTML = '<div class="notif-empty">No notifications yet</div>';
+            list.innerHTML = '<div class="notif-empty">' + t('noNotifs') + '</div>';
             return;
         }
         list.innerHTML = notifications.slice(0, 20).map(n => {
@@ -300,10 +695,10 @@
 
     function timeAgo(d) {
         const s = Math.floor((Date.now() - d.getTime()) / 1000);
-        if (s < 60) return 'just now';
-        if (s < 3600) return Math.floor(s/60) + 'm ago';
-        if (s < 86400) return Math.floor(s/3600) + 'h ago';
-        return Math.floor(s/86400) + 'd ago';
+        if (s < 60) return t('justNow');
+        if (s < 3600) return Math.floor(s/60) + t('minutesAgo');
+        if (s < 86400) return Math.floor(s/3600) + t('hoursAgo');
+        return Math.floor(s/86400) + t('daysAgo');
     }
 
     if ($('btn-notif')) {
@@ -474,6 +869,11 @@
                 return;
             }
 
+            if (hasTradePnl(t)) {
+                closeStats.push({ symbol, pnl: Number(t.pnl), duration_secs: 0 });
+                return;
+            }
+
             if (/Open|Add/i.test(action)) {
                 if (!openTimes[symbol]) openTimes[symbol] = [];
                 if (action === 'Open' || openTimes[symbol].length === 0) {
@@ -510,32 +910,74 @@
     }
 
     // ── WebSocket ──
+    // status-label must NOT use data-i18n="connecting": applyI18n() would
+    // overwrite a live/paused pill back to "连接中" on every language apply.
+    function updateConnectionStatus() {
+        const dot = $('status-dot');
+        const label = $('status-label');
+        const setConn = $('set-conn');
+        const wsOff = $('ws-offline');
+        if (dot) dot.classList.toggle('live', !!wsConnected);
+        if (label) {
+            if (!wsConnected) {
+                label.textContent = wsEverOpened ? t('disconnected') : t('connecting');
+            } else if (typeof tradingPaused !== 'undefined' && tradingPaused) {
+                label.textContent = t('pausedBadge');
+            } else {
+                label.textContent = t('liveTrading');
+            }
+        }
+        if (setConn) {
+            setConn.textContent = wsConnected ? t('wsConnected') : (wsEverOpened ? t('disconnected') : t('connecting'));
+            setConn.style.color = wsConnected ? 'var(--success)' : 'var(--danger)';
+        }
+        if (wsOff) {
+            wsOff.style.display = (!wsConnected && wsEverOpened) ? 'block' : 'none';
+        }
+    }
     function connect() {
         const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-        ws = new WebSocket(`${proto}//${location.host}/ws`);
+        if (reconnTimer) { clearTimeout(reconnTimer); reconnTimer = null; }
+        let opened = false;
+        try {
+            ws = new WebSocket(`${proto}//${location.host}/ws`);
+        } catch (err) {
+            wsConnected = false;
+            wsEverOpened = true;
+            updateConnectionStatus();
+            addLog('w', t('wsDisconnected'));
+            reconnTimer = setTimeout(connect, 5000);
+            return;
+        }
+        const handshakeTimer = setTimeout(function () {
+            if (!opened && ws && ws.readyState !== WebSocket.OPEN) {
+                try { ws.close(); } catch (e) {}
+            }
+        }, 4000);
         ws.onopen = () => {
-            $('ws-offline').style.display = 'none';
-            const dot = $('status-dot');
-            const label = $('status-label');
-            if (dot) dot.classList.add('live');
-            if (label) label.textContent = 'Live Trading';
-            if ($('set-conn')) $('set-conn').textContent = 'Connected';
-            if (reconnTimer) { clearTimeout(reconnTimer); reconnTimer = null; }
-            addLog('i', 'WebSocket connected');
+            opened = true;
+            clearTimeout(handshakeTimer);
+            wsConnected = true;
+            wsEverOpened = true;
+            updateConnectionStatus();
+            addLog('i', t('wsConnected'));
             loadInitialData();
         };
         ws.onmessage = e => {
             try { handleMessage(JSON.parse(e.data)); }
             catch(err) { console.error('WS parse error:', err); }
         };
+        ws.onerror = () => {
+            wsConnected = false;
+            wsEverOpened = true;
+            updateConnectionStatus();
+        };
         ws.onclose = () => {
-            $('ws-offline').style.display = 'block';
-            const dot = $('status-dot');
-            const label = $('status-label');
-            if (dot) dot.classList.remove('live');
-            if (label) label.textContent = 'Disconnected';
-            if ($('set-conn')) { $('set-conn').textContent = 'Disconnected'; $('set-conn').style.color = 'var(--danger)'; }
-            addLog('w', 'WebSocket disconnected, reconnecting...');
+            clearTimeout(handshakeTimer);
+            wsConnected = false;
+            wsEverOpened = true;
+            updateConnectionStatus();
+            addLog('w', t('wsDisconnected'));
             reconnTimer = setTimeout(connect, 5000);
         };
     }
@@ -578,28 +1020,210 @@
                 if (el) { el.textContent = fmtPnl(data.total_realized_pnl); el.className = 'value ' + pnlClass(data.total_realized_pnl); }
                 if ($('sp-pnl')) $('sp-pnl').textContent = fmtPnl(data.total_realized_pnl);
             }
-        }).catch(e => addLog('e', 'Failed to load PnL data'));
+        }).catch(e => addLog('e', t('failedPnl')));
 
         fetch('/api/strategy').then(r => r.json()).then(data => {
             if (data.params) {
                 if ($('cfg-gc')) $('cfg-gc').value = data.params.grid_count || 6;
                 if ($('cfg-inv')) $('cfg-inv').value = data.params.investment_per_grid || 8;
                 if ($('cfg-dev')) $('cfg-dev').value = data.params.price_deviation || 0.012;
+                fillMakerForm(data.params);
             }
             if (data.strategy && $('strat-name')) $('strat-name').textContent = data.strategy;
             updateStrategyBadges(data.strategy || 'grid_trading');
-        }).catch(e => addLog('e', 'Failed to load strategy config'));
+        }).catch(e => addLog('e', t('failedStrategy')));
     }
+
+    // Refresh pnl-derived panels periodically: the full trade buffer and the
+    // daily pnl map only arrive via /api/pnl, and WS recent_trades carries
+    // just 20 rows. Deliberately does NOT refetch /api/strategy so in-flight
+    // maker form edits are never overwritten.
+    function refreshPnlStats() {
+        fetch('/api/pnl').then(r => r.json()).then(data => {
+            const pnlMap = Object.assign({}, data.daily_pnl_map || {});
+            const todayKey = new Date().toISOString().split('T')[0];
+            if (data.daily_realized_pnl !== undefined) pnlMap[todayKey] = data.daily_realized_pnl;
+            updateRevenueChart(pnlMap);
+            if (data.equity_history) {
+                equityData = data.equity_history.map(p => ({ t: p.t * 1000, v: p.v }));
+            }
+            if (data.trades) {
+                allTrades = data.trades;
+                if (activePage === 'history') { renderHistory(); renderPositionSummary(); }
+            }
+            applyServerHistoryStats(data);
+        }).catch(() => {});
+    }
+    setInterval(refreshPnlStats, 60000);
 
     // Update strategy card badges based on active strategy
     function updateStrategyBadges(active) {
+        lastStrategyName = active;
         const gridBadge = document.querySelector('#strat-name')?.closest('.card')?.querySelector('.badge');
         const dcaBadge = $('dca-status-badge');
         const trendBadge = $('trend-status-badge');
-        if (gridBadge) gridBadge.className = 'badge ' + (active === 'grid_trading' || active === 'grid' ? 'badge-up' : 'badge-warn');
-        if (gridBadge) gridBadge.textContent = (active === 'grid_trading' || active === 'grid') ? '● Active' : '○ Inactive';
-        if (dcaBadge) { dcaBadge.className = 'badge ' + (active === 'dca' ? 'badge-up' : 'badge-warn'); dcaBadge.textContent = active === 'dca' ? '● Active' : '○ Inactive'; }
-        if (trendBadge) { trendBadge.className = 'badge ' + (active === 'trend_following' || active === 'trend' ? 'badge-up' : 'badge-warn'); trendBadge.textContent = (active === 'trend_following' || active === 'trend') ? '● Active' : '○ Inactive'; }
+        const gridOn = active === 'grid_trading' || active === 'grid';
+        const makerOn = active === 'maker_quote' || active === 'maker';
+        if (gridBadge) {
+            gridBadge.className = 'badge ' + (gridOn ? 'badge-up' : 'badge-warn');
+            gridBadge.textContent = gridOn ? t('activeBadge') : t('inactiveBadge');
+        }
+        const makerBadge = $('maker-status-badge');
+        if (makerBadge) {
+            makerBadge.className = 'badge ' + (makerOn ? 'badge-up' : 'badge-warn');
+            makerBadge.textContent = makerOn ? t('activeBadge') : t('inactiveBadge');
+        }
+        if (dcaBadge) { dcaBadge.className = 'badge ' + (active === 'dca' ? 'badge-up' : 'badge-warn'); dcaBadge.textContent = active === 'dca' ? t('activeBadge') : t('inactiveBadge'); }
+        if (trendBadge) { trendBadge.className = 'badge ' + (active === 'trend_following' || active === 'trend' ? 'badge-up' : 'badge-warn'); trendBadge.textContent = (active === 'trend_following' || active === 'trend') ? t('activeBadge') : t('inactiveBadge'); }
+    }
+
+
+    // ── Maker Quote: full parameter spec (mirrors trading.strategies.maker_quote) ──
+    const MQ_PARAMS = [
+        { key: 'quote_mode', type: 'select', options: ['join_best', 'mid_spread'], def: 'mid_spread' },
+        { key: 'per_quote_notional', min: 1, max: 650, step: 1, def: 40 },
+        { key: 'min_quote_notional', min: 1, max: 650, step: 1, def: 10 },
+        { key: 'total_quote_budget', min: 10, max: 650, step: 10, def: 160 },
+        { key: 'soft_cap_notional', min: 1, max: 650, step: 10, def: 80 },
+        { key: 'hard_cap_notional', min: 1, max: 650, step: 10, def: 150 },
+        { key: 'spread_bps', min: 1, max: 100, step: 0.5, def: 30 },
+        { key: 'requote_threshold_bps', min: 0, max: 100, step: 0.1, def: 2 },
+        { key: 'requote_cooldown_secs', min: 1, max: 300, step: 1, def: 20 },
+        { key: 'join_inside_ticks', min: 0, max: 20, step: 1, def: 0 },
+        { key: 'ema_period', min: 2, max: 500, step: 1, def: 20 },
+        { key: 'trend_block_bps', min: 0, max: 100, step: 0.5, def: 8 },
+        { key: 'max_skew_bps', min: 0, max: 100, step: 0.5, def: 12 },
+        { key: 'vol_window', min: 0, max: 10000, step: 1, def: 0 },
+        { key: 'vol_multiplier', min: 0, max: 5, step: 0.1, def: 0 },
+        { key: 'min_book_spread_bps', min: 0, max: 500, step: 0.1, def: 1.5 },
+        { key: 'max_book_spread_bps', min: 1, max: 500, step: 1, def: 80 },
+        { key: 'wide_book_size_mult', min: 0, max: 10, step: 0.1, def: 1 },
+        { key: 'max_bbo_imbalance', min: 0, max: 100, step: 0.5, def: 3 },
+        { key: 'jump_circuit_breaker_bps', min: 1, max: 500, step: 1, def: 20 },
+        { key: 'circuit_breaker_cooldown_secs', min: 1, max: 3600, step: 1, def: 60 },
+        { key: 'feature_interval_secs', min: 1, max: 86400, step: 1, def: 60 },
+        { key: 'flatten_mid_secs', min: 0, max: 120, step: 1, def: 6 },
+        { key: 'flatten_ioc_secs', min: 1, max: 300, step: 1, def: 15 },
+        { key: 'cash_open_guard_before_minutes', min: 0, max: 180, step: 1, def: 5 },
+        { key: 'cash_open_guard_after_minutes', min: 0, max: 180, step: 1, def: 20 },
+        { key: 'trend_filter', type: 'bool', def: true },
+        { key: 'cash_open_guard', type: 'bool', def: true },
+        { key: 'flatten_only', type: 'bool', def: false },
+    ];
+    function mqLabel(spec) { return t('mq_' + spec.key); }
+    function mqOptionLabel(value) {
+        if (value === 'join_best') return t('mqJoinBest');
+        if (value === 'mid_spread') return t('mqMidSpread');
+        return value;
+    }
+
+    function renderMakerForm() {
+        const fields = $('mq-fields');
+        const toggles = $('mq-toggles');
+        if (!fields || !toggles) return;
+        fields.innerHTML = '';
+        toggles.innerHTML = '';
+        MQ_PARAMS.forEach(spec => {
+            const id = 'cfg-mq2-' + spec.key;
+            if (spec.type === 'bool') {
+                const label = document.createElement('label');
+                label.className = 'market-toggle';
+                label.innerHTML = '<input type="checkbox" id="' + id + '"' + (spec.def ? ' checked' : '') + '>' +
+                    '<span class="mt-slider"></span><span class="mt-label">' + mqLabel(spec) + '</span>';
+                toggles.appendChild(label);
+                return;
+            }
+            const group = document.createElement('div');
+            group.className = 'cfg-group';
+            if (spec.type === 'select') {
+                const opts = spec.options.map(o =>
+                    '<option value="' + o + '"' + (o === spec.def ? ' selected' : '') + '>' + mqOptionLabel(o) + '</option>').join('');
+                group.innerHTML = '<label class="cfg-label">' + mqLabel(spec) + '</label>' +
+                    '<select class="cfg-input" id="' + id + '">' + opts + '</select>';
+            } else {
+                group.innerHTML = '<label class="cfg-label">' + mqLabel(spec) + '</label>' +
+                    '<input type="number" class="cfg-input" id="' + id + '" value="' + spec.def +
+                    '" min="' + spec.min + '" max="' + spec.max + '" step="' + spec.step + '">';
+            }
+            fields.appendChild(group);
+        });
+    }
+
+    function fillMakerForm(params) {
+        lastMakerParams = params;
+        MQ_PARAMS.forEach(spec => {
+            const el = $('cfg-mq2-' + spec.key);
+            if (!el) return;
+            const raw = params[spec.key];
+            if (raw === undefined || raw === null || raw === '') return;
+            if (spec.type === 'bool') {
+                const on = String(raw).toLowerCase();
+                el.checked = on === 'true' || on === '1';
+            } else if (spec.type === 'select') {
+                el.value = String(raw);
+            } else {
+                const num = parseFloat(raw);
+                if (Number.isFinite(num)) el.value = num;
+            }
+        });
+    }
+
+    function collectMakerParams() {
+        const params = {};
+        const problems = [];
+        MQ_PARAMS.forEach(spec => {
+            const el = $('cfg-mq2-' + spec.key);
+            if (!el) return;
+            if (spec.type === 'bool') {
+                params[spec.key] = el.checked;
+            } else if (spec.type === 'select') {
+                params[spec.key] = el.value;
+            } else {
+                const num = parseFloat(el.value);
+                if (!Number.isFinite(num) || num < spec.min || num > spec.max) {
+                    problems.push(mqLabel(spec) + ' ' + t('rangeError') + ' ' + spec.min + '–' + spec.max);
+                } else {
+                    params[spec.key] = num;
+                }
+            }
+        });
+        const softEl = $('cfg-mq2-soft_cap_notional'), hardEl = $('cfg-mq2-hard_cap_notional');
+        if (softEl && hardEl && parseFloat(softEl.value) > parseFloat(hardEl.value)) {
+            problems.push(t('softCapError'));
+        }
+        const minEl = $('cfg-mq2-min_quote_notional'), quoteEl = $('cfg-mq2-per_quote_notional');
+        if (minEl && quoteEl && parseFloat(minEl.value) > parseFloat(quoteEl.value)) {
+            problems.push(t('minQuoteError'));
+        }
+        return { params, problems };
+    }
+
+    renderMakerForm();
+
+    const applyMakerBtn = $('btn-apply-maker');
+    if (applyMakerBtn) {
+        applyMakerBtn.addEventListener('click', function() {
+            const { params, problems } = collectMakerParams();
+            const msgEl = $('mq-msg');
+            if (problems.length > 0) {
+                msgEl.innerText = '\u2717 ' + problems[0];
+                msgEl.style.color = 'var(--danger)';
+                return;
+            }
+            const body = { strategy: 'maker_quote', params };
+            this.disabled = true;
+            fetch('/api/strategy', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+                .then(r => r.json())
+                .then(() => {
+                    msgEl.innerText = '✓ ' + t('applyMakerOk');
+                    msgEl.style.color = 'var(--success)';
+                    updateStrategyBadges('maker_quote');
+                    addNotification('trade', t('makerActivated'));
+                    setTimeout(() => msgEl.innerText = '', 3000);
+                })
+                .catch(() => { msgEl.innerText = '✗ ' + t('applyFailed'); msgEl.style.color = 'var(--danger)'; })
+                .finally(() => { this.disabled = false; });
+        });
     }
 
     // ── Strategy Apply (Grid) ──
@@ -611,7 +1235,7 @@
                 investment_per_grid: parseFloat($('cfg-inv').value),
                 price_deviation: parseFloat($('cfg-dev').value)
             }};
-            this.disabled = true; this.innerText = 'Applying...';
+            this.disabled = true; this.innerText = t('applying');
             const msgEl = $('cfg-msg');
             fetch('/api/strategy', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
                 .then(r => r.json())
@@ -619,10 +1243,10 @@
                     msgEl.innerText = '✓ Grid strategy activated';
                     msgEl.style.color = 'var(--success)';
                     updateStrategyBadges('grid_trading');
-                    addNotification('trade', 'Grid strategy activated');
+                    addNotification('trade', t('gridActivated'));
                     setTimeout(() => msgEl.innerText = '', 3000);
                 })
-                .catch(() => { msgEl.innerText = '✗ Failed to apply'; msgEl.style.color = 'var(--danger)'; })
+                .catch(() => { msgEl.innerText = '✗ ' + t('applyFailed'); msgEl.style.color = 'var(--danger)'; })
                 .finally(() => { this.disabled = false; this.innerText = 'Apply Changes'; });
         });
     }
@@ -644,7 +1268,7 @@
                     msgEl.innerText = '✓ DCA strategy activated';
                     msgEl.style.color = 'var(--success)';
                     updateStrategyBadges('dca');
-                    addNotification('trade', 'DCA strategy activated');
+                    addNotification('trade', t('dcaActivated'));
                     setTimeout(() => msgEl.innerText = '', 3000);
                 })
                 .catch(() => { msgEl.innerText = '✗ Failed'; msgEl.style.color = 'var(--danger)'; })
@@ -670,7 +1294,7 @@
                     msgEl.innerText = '✓ Trend strategy activated';
                     msgEl.style.color = 'var(--success)';
                     updateStrategyBadges('trend_following');
-                    addNotification('trade', 'Trend following strategy activated');
+                    addNotification('trade', t('trendActivated'));
                     setTimeout(() => msgEl.innerText = '', 3000);
                 })
                 .catch(() => { msgEl.innerText = '✗ Failed'; msgEl.style.color = 'var(--danger)'; })
@@ -716,11 +1340,41 @@
                 'lighter-mainnet': 'Lighter Mainnet',
                 'lighter-robinhood': 'Lighter · Robinhood Chain',
                 'arcus-mainnet': 'Arcus Mainnet',
-                'arcus-testnet': 'Arcus Testnet'
+                'arcus-testnet': 'Arcus Testnet',
+                'aster-mainnet': 'Aster Mainnet',
+                'hyperliquid-mainnet': 'Hyperliquid Mainnet',
+                'hyperliquid-testnet': 'Hyperliquid Testnet'
             };
             setVal('set-exchange', venueLabels[d.network] || d.network);
+            setVal('hero-venue', venueLabels[d.network] || d.network);
         }
         if (d.strategy) setVal('strat-name', d.strategy);
+        if (d.strategy) updateStrategyBadges(d.strategy);
+        if (d.user_add_rate_bps != null && $('network-fee-tier')) {
+            var addBps = Number(d.user_add_rate_bps);
+            var crossBps = Number(d.user_cross_rate_bps || 0);
+            var t4 = d.fee_tier_is_t4 === true;
+            $('network-fee-tier').textContent = t4
+                ? ('T4 · maker ' + addBps.toFixed(2) + ' bps')
+                : ('T0 · maker ' + addBps.toFixed(2) + ' / taker ' + crossBps.toFixed(2) + ' bps');
+        }
+        if ($('network-cross-dex')) {
+            if (d.last_cross_dex_net_bps != null) {
+                $('network-cross-dex').textContent =
+                    String(d.last_cross_dex_side || '') + ' · ' +
+                    Number(d.last_cross_dex_net_bps).toFixed(2) + ' bps (not armed)';
+            } else {
+                $('network-cross-dex').textContent = currentLang === 'cn' ? '无（未武装）' : 'none (not armed)';
+            }
+        }
+        if ($('network-strategy-source')) {
+            const src = d.strategy_overlay
+                ? (currentLang === 'cn' ? '覆盖文件' : 'overlay file')
+                : 'yaml';
+            const mode = d.quote_mode || '';
+            const flat = String(d.flatten_only) === 'true' ? 'flatten_only' : '';
+            $('network-strategy-source').textContent = [src, mode, flat].filter(Boolean).join(' · ');
+        }
 
         // Equity chart update
         const now = Date.now();
@@ -835,12 +1489,12 @@
         const tb = $('trd-tbody');
         if (!tb) return;
         const rows = data.slice(0, 15);
-        if (rows.length === 0) { tb.innerHTML = '<tr><td colspan="7" class="empty-cell">No trades yet</td></tr>'; return; }
+        if (rows.length === 0) { tb.innerHTML = '<tr><td colspan="7" class="empty-cell">' + t('noTrades') + '</td></tr>'; return; }
         tb.innerHTML = rows.map(t => {
             const ts = new Date(t.timestamp).toLocaleTimeString();
             const pnl = t.pnl || 0;
             const action = tradeAction(t);
-            const isClose = isCloseAction(action);
+            const isClose = isCloseAction(action) || hasTradePnl(t);
             const actionBadge = isClose
                 ? `<span class="badge ${pnl >= 0 ? 'badge-up' : 'badge-down'}">${escapeHtml(action)}</span>`
                 : `<span class="badge badge-neutral">${escapeHtml(action)}</span>`;
@@ -890,7 +1544,7 @@
             });
         }
         if (filtered.length === 0) {
-            tb.innerHTML = '<tr><td colspan="7" class="empty-cell">No matching trades</td></tr>';
+            tb.innerHTML = '<tr><td colspan="7" class="empty-cell">' + t('noMatching') + '</td></tr>';
             return;
         }
         tb.innerHTML = filtered.slice(0, 100).map(t => {
@@ -898,10 +1552,11 @@
             const pnl = t.pnl || 0;
             const action = tradeAction(t);
             const isClose = isCloseAction(action);
+            const showPnl = isClose || hasTradePnl(t);
             const actionBadge = isClose
                 ? `<span class="badge ${pnl >= 0 ? 'badge-up' : 'badge-down'}">${escapeHtml(action)}</span>`
                 : `<span class="badge badge-neutral">${escapeHtml(action)}</span>`;
-            const pnlCell = isClose
+            const pnlCell = showPnl
                 ? `<td class="td-r ${pnlClass(pnl)}">${fmtPnl(pnl)}</td>`
                 : `<td class="td-r" style="color:var(--text-muted)">—</td>`;
             return `<tr><td>${ts}</td><td>${escapeHtml(t.symbol || t.market)}</td><td>${actionBadge}</td><td><span class="badge ${t.side==='Buy'?'badge-up':'badge-down'}">${escapeHtml(t.side)}</span></td><td>$${parseFloat(t.price).toFixed(2)}</td><td>${parseFloat(t.quantity).toFixed(6)}</td>${pnlCell}</tr>`;
@@ -916,9 +1571,14 @@
         if (data.total_realized_pnl !== undefined) {
             setPnl('hc-pnl', data.total_realized_pnl);
         }
+        const closeStatsForCount = buildCloseTradeStats();
         const closed = data.total_closed_trades;
-        if (closed !== undefined && closed !== null) {
+        if (closed) {
             setVal('hc-closed-trades', closed);
+        } else {
+            // Hyperliquid never increments the server-side close counter;
+            // fall back to pnl-bearing fills in the retained buffer.
+            setVal('hc-closed-trades', closeStatsForCount.length);
         }
         const vol = data.total_volume;
         if (vol !== undefined && vol !== null) {
@@ -932,9 +1592,8 @@
         } else if (allTrades.length) {
             setVal('sp-trades', allTrades.length);
         }
-        const closeStats = buildCloseTradeStats();
-        const avgDurationSecs = closeStats.length
-            ? closeStats.reduce((sum, t) => sum + (t.duration_secs || 0), 0) / closeStats.length
+        const avgDurationSecs = closeStatsForCount.length
+            ? closeStatsForCount.reduce((sum, t) => sum + (t.duration_secs || 0), 0) / closeStatsForCount.length
             : 0;
         setVal('hc-duration', fmtDuration(avgDurationSecs));
     }
@@ -967,7 +1626,7 @@
         if (!tb) return;
         const closeTrades = buildCloseTradeStats();
         if (closeTrades.length === 0) {
-            tb.innerHTML = '<tr><td colspan="4" class="empty-cell">No closed positions yet</td></tr>';
+            tb.innerHTML = '<tr><td colspan="4" class="empty-cell">' + t('noClosed') + '</td></tr>';
             return;
         }
         const groups = {};
@@ -986,7 +1645,7 @@
             totalDuration += g.durationSum;
             return `<tr><td><b>${escapeHtml(asset)}</b></td><td>${g.count}</td><td>${fmtDuration(g.durationSum / Math.max(g.count, 1))}</td><td class="td-r ${pnlClass(g.totalPnl)}">${fmtPnl(g.totalPnl)}</td></tr>`;
         });
-        rows.push(`<tr style="border-top:2px solid var(--border);font-weight:600;"><td>Total</td><td>${totalCount}</td><td>${fmtDuration(totalDuration / Math.max(totalCount, 1))}</td><td class="td-r ${pnlClass(totalPnl)}">${fmtPnl(totalPnl)}</td></tr>`);
+        rows.push(`<tr style="border-top:2px solid var(--border);font-weight:600;"><td>${t('totalWord')}</td><td>${totalCount}</td><td>${fmtDuration(totalDuration / Math.max(totalCount, 1))}</td><td class="td-r ${pnlClass(totalPnl)}">${fmtPnl(totalPnl)}</td></tr>`);
         tb.innerHTML = rows.join('');
     }
 
@@ -1000,10 +1659,10 @@
             const blob = new Blob([csv], { type: 'text/csv' });
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
-            a.href = url; a.download = 'lighter_trades_' + new Date().toISOString().slice(0,10) + '.csv';
+            a.href = url; a.download = 'quant_trades_' + new Date().toISOString().slice(0,10) + '.csv';
             document.body.appendChild(a); a.click(); document.body.removeChild(a);
             URL.revokeObjectURL(url);
-            addNotification('trade', 'Trade history exported to CSV');
+            addNotification('trade', t('csvExported'));
         });
     }
 
@@ -1012,7 +1671,7 @@
         const el = $('pnl-history');
         if (!el) return;
         const entries = Object.entries(pnlMap).sort((a, b) => b[0].localeCompare(a[0])).slice(0, 14);
-        if (entries.length === 0) { el.innerHTML = '<div class="notif-empty">No daily data yet</div>'; return; }
+        if (entries.length === 0) { el.innerHTML = '<div class="notif-empty">' + t('noDaily') + '</div>'; return; }
         const maxAbs = Math.max(...entries.map(e => Math.abs(e[1])), 0.01);
         el.innerHTML = entries.map(([date, val]) => {
             const pct = (Math.abs(val) / maxAbs * 48).toFixed(1);
@@ -1147,6 +1806,10 @@
     }
 
     function updateRevenueChart(pnlMap) {
+        // Bars must not depend on Chart.js: on first load the WS connects
+        // before initCharts (500ms), and the early return left the daily
+        // pnl panel stuck on the loading placeholder forever.
+        renderPnlHistory(pnlMap);
         if (!revenueChart) return;
         const values = new Array(7).fill(0);
         const today = new Date();
@@ -1167,24 +1830,26 @@
 
     // ── Trading Controls ──
     let tradingPaused = false;
-    let activeMarketsSet = new Set([1]); // default BTC
-    const marketNames = { 0: 'ETH', 1: 'BTC' };
+    let activeMarketsSet = new Set();
+    const marketNames = {};
 
     function loadTradingControls() {
         fetch('/api/trading/markets').then(r => r.json()).then(data => {
-            if (data.active_markets) {
-                activeMarketsSet = new Set(data.active_markets);
-                data.active_markets.forEach(mid => {
-                    const cb = $('tc-m-' + mid);
-                    if (cb) cb.checked = true;
-                });
-                // Uncheck inactive
-                document.querySelectorAll('#tc-markets input[data-market]').forEach(cb => {
-                    const mid = parseInt(cb.getAttribute('data-market'));
-                    cb.checked = activeMarketsSet.has(mid);
-                });
-                updateMarketsDisplay();
+            const host = $('tc-markets');
+            const available = (data && data.available_markets) || [];
+            activeMarketsSet = new Set(data.active_markets || []);
+            available.forEach(m => { marketNames[m.id] = m.symbol; });
+            if (host) {
+                if (!available.length) {
+                    host.innerHTML = '<div class="empty-cell" id="tc-markets-empty">' + t('noMarkets') + '</div>';
+                } else {
+                    host.innerHTML = available.map(m => {
+                        const checked = activeMarketsSet.has(m.id) ? ' checked' : '';
+                        return '<label class="market-toggle"><input type="checkbox" id="tc-m-' + m.id + '" data-market="' + m.id + '"' + checked + '><span class="mt-slider"></span><span class="mt-label">' + escapeHtml(m.symbol) + ' <span class="mt-id">(' + m.id + ')</span></span></label>';
+                    }).join('');
+                }
             }
+            updateMarketsDisplay();
             if (data.trading_paused !== undefined) {
                 tradingPaused = data.trading_paused;
                 updatePauseButton();
@@ -1201,16 +1866,17 @@
         const btn = $('btn-pause-trading');
         const txt = $('btn-pause-text');
         const badge = $('tc-status-badge');
-        if (!btn) return;
+        if (!btn) { updateConnectionStatus(); return; }
         if (tradingPaused) {
             btn.classList.add('paused');
-            txt.textContent = 'Resume Trading';
-            if (badge) { badge.textContent = '⏸ Paused'; badge.className = 'badge badge-warn'; }
+            txt.textContent = t('resumeTrading');
+            if (badge) { badge.textContent = t('pausedBadge'); badge.className = 'badge badge-warn'; }
         } else {
             btn.classList.remove('paused');
-            txt.textContent = 'Pause Trading';
-            if (badge) { badge.textContent = '● Active'; badge.className = 'badge badge-up'; }
+            txt.textContent = t('pauseTrading');
+            if (badge) { badge.textContent = t('activeBadge'); badge.className = 'badge badge-up'; }
         }
+        updateConnectionStatus();
     }
 
     // Save markets
@@ -1230,11 +1896,11 @@
                 updateMarketsDisplay();
                 msgEl.textContent = '✓ ' + data.message;
                 msgEl.style.color = 'var(--success)';
-                addNotification('trade', 'Markets updated: ' + markets.map(m => marketNames[m] || m).join(', '));
+                addNotification('trade', t('marketsUpdated') + ': ' + markets.map(m => marketNames[m] || m).join(', '));
                 addLog('i', 'Active markets changed: ' + JSON.stringify(markets));
                 setTimeout(() => msgEl.textContent = '', 3000);
             }).catch(() => {
-                msgEl.textContent = '✗ Failed to update markets';
+                msgEl.textContent = '✗ ' + t('marketsFailed');
                 msgEl.style.color = 'var(--danger)';
             });
         });
@@ -1250,11 +1916,11 @@
                 updatePauseButton();
                 msgEl.textContent = '✓ ' + data.message;
                 msgEl.style.color = 'var(--success)';
-                addNotification(tradingPaused ? 'warn' : 'trade', tradingPaused ? 'Trading paused' : 'Trading resumed');
+                addNotification(tradingPaused ? 'warn' : 'trade', tradingPaused ? t('tradingPausedMsg') : t('tradingResumedMsg'));
                 addLog(tradingPaused ? 'w' : 'i', tradingPaused ? 'Trading PAUSED' : 'Trading RESUMED');
                 setTimeout(() => msgEl.textContent = '', 3000);
             }).catch(() => {
-                msgEl.textContent = '✗ Failed';
+                msgEl.textContent = '✗ ' + t('actionFailed');
                 msgEl.style.color = 'var(--danger)';
             });
         });
@@ -1263,16 +1929,16 @@
     // Cancel All
     if ($('btn-cancel-all')) {
         $('btn-cancel-all').addEventListener('click', () => {
-            if (!confirm('Cancel ALL open orders? This cannot be undone.')) return;
+            if (!confirm(t('confirmCancel'))) return;
             const msgEl = $('tc-action-msg');
             fetch('/api/trading/cancel-all', { method: 'POST' }).then(r => r.json()).then(data => {
                 msgEl.textContent = '✓ ' + data.message;
                 msgEl.style.color = 'var(--success)';
-                addNotification('warn', 'All orders cancelled');
+                addNotification('warn', t('allCancelled'));
                 addLog('w', 'Cancel all orders requested');
                 setTimeout(() => msgEl.textContent = '', 3000);
             }).catch(() => {
-                msgEl.textContent = '✗ Failed to cancel orders';
+                msgEl.textContent = '✗ ' + t('cancelFailed');
                 msgEl.style.color = 'var(--danger)';
             });
         });
@@ -1327,9 +1993,9 @@
                 body: JSON.stringify(body)
             }).then(r => r.json()).then(data => {
                 if (data.status === 'ok') {
-                    msgEl.textContent = '✓ Risk settings saved successfully';
+                    msgEl.textContent = '✓ ' + t('riskSaved');
                     msgEl.style.color = 'var(--success)';
-                    addNotification('trade', 'Risk settings updated');
+                    addNotification('trade', t('riskUpdated'));
                     addLog('i', 'Risk config updated: leverage=' + body.leverage_limit + 'x, SL=' + body.position_stop_loss_pct + '%, TP=' + body.position_take_profit_pct + '%');
                 } else {
                     msgEl.textContent = '✗ ' + (data.message || 'Failed');
@@ -1337,14 +2003,14 @@
                 }
                 setTimeout(() => msgEl.textContent = '', 4000);
             }).catch(e => {
-                msgEl.textContent = '✗ Network error';
+                msgEl.textContent = '✗ ' + t('networkError');
                 msgEl.style.color = 'var(--danger)';
             });
         });
     }
 
     // ── Init ──
-    addLog('i', 'Dashboard initializing...');
+    addLog('i', t('initLog'));
     applyI18n();
     connect();
     setTimeout(initCharts, 500);

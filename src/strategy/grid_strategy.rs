@@ -376,6 +376,7 @@ impl Strategy for GridStrategy {
                         ),
                         risk_reducing: net_position < 0.0
                             && quantity <= net_position.abs() + f64::EPSILON,
+                        ..Default::default()
                     });
                     state.filled_buy[i] = true;
                     if i < state.filled_sell.len() {
@@ -430,6 +431,7 @@ impl Strategy for GridStrategy {
                             ),
                             risk_reducing: net_position > 0.0
                                 && quantity <= net_position + f64::EPSILON,
+                            ..Default::default()
                         });
                         state.filled_sell[i] = true;
                         if i < state.filled_buy.len() {

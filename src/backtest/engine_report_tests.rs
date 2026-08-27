@@ -22,12 +22,17 @@ fn format_summary_includes_alpha_fields() {
         benchmark_return: 0.03,
         excess_return: 0.02,
         total_commission: 1.25,
+        total_adverse_selection: 0.0,
         peak_notional: 421.5,
         peak_leverage: 1.75,
         peak_position_grids: 6.5,
         liq_count: 2,
         bars_over_soft_cap: 17,
         blocked_by_profitability: 3,
+        blocked_by_position_limit: 0,
+        blocked_by_total_position_limit: 0,
+        stop_loss_exits: 0,
+        take_profit_exits: 0,
     };
     let text = crate::backtest::metrics::format_summary_for_test(&results);
     assert!(
@@ -68,12 +73,17 @@ fn format_summary_includes_peak_risk_fields() {
         benchmark_return: 0.0,
         excess_return: -0.01,
         total_commission: 0.0,
+        total_adverse_selection: 0.0,
         peak_notional: 421.5,
         peak_leverage: 1.75,
         peak_position_grids: 6.5,
         liq_count: 2,
         bars_over_soft_cap: 17,
         blocked_by_profitability: 0,
+        blocked_by_position_limit: 0,
+        blocked_by_total_position_limit: 0,
+        stop_loss_exits: 0,
+        take_profit_exits: 0,
     };
     let text = crate::backtest::metrics::format_summary_for_test(&results);
     for needle in [

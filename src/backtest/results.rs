@@ -36,6 +36,8 @@ pub struct BacktestResults {
     pub benchmark_return: f64,
     pub excess_return: f64,
     pub total_commission: f64,
+    /// Capital penalty charged by the conservative maker adverse-selection model.
+    pub total_adverse_selection: f64,
     /// 峰值毛名义敞口 = max over bars of |qty| * close（收盘价计价，非成本价）
     pub peak_notional: f64,
     /// 峰值杠杆 = max over bars of notional / max(equity, 1e-9)
@@ -49,6 +51,14 @@ pub struct BacktestResults {
     pub bars_over_soft_cap: usize,
     /// 被收益门槛（profitability gate）拦截的入场信号数
     pub blocked_by_profitability: usize,
+    /// Entries rejected by the live-equivalent per-symbol notional limit.
+    pub blocked_by_position_limit: usize,
+    /// Entries rejected by the live-equivalent account worst-case notional limit.
+    pub blocked_by_total_position_limit: usize,
+    /// Positions closed by the per-position stop-loss.
+    pub stop_loss_exits: usize,
+    /// Positions closed by the per-position take-profit.
+    pub take_profit_exits: usize,
 }
 
 /// Inputs for result statistics (mirrors engine state at end of run).
@@ -58,6 +68,7 @@ pub(crate) struct ResultsCalcInput<'a> {
     pub trades: &'a [BacktestTrade],
     pub equity_curve: &'a [(DateTime<Utc>, f64)],
     pub total_commission: f64,
+    pub total_adverse_selection: f64,
     pub historical_data: &'a [Candlestick],
     pub commission_rate: f64,
     pub slippage_rate: f64,
@@ -67,6 +78,10 @@ pub(crate) struct ResultsCalcInput<'a> {
     pub liq_count: usize,
     pub bars_over_soft_cap: usize,
     pub blocked_by_profitability: usize,
+    pub blocked_by_position_limit: usize,
+    pub blocked_by_total_position_limit: usize,
+    pub stop_loss_exits: usize,
+    pub take_profit_exits: usize,
 }
 
 pub(crate) fn calculate_results(input: &ResultsCalcInput<'_>) -> BacktestResults {
@@ -124,12 +139,17 @@ pub(crate) fn calculate_results(input: &ResultsCalcInput<'_>) -> BacktestResults
         benchmark_return,
         excess_return,
         total_commission: input.total_commission,
+        total_adverse_selection: input.total_adverse_selection,
         peak_notional: input.peak_notional,
         peak_leverage: input.peak_leverage,
         peak_position_grids: input.peak_position_grids,
         liq_count: input.liq_count,
         bars_over_soft_cap: input.bars_over_soft_cap,
         blocked_by_profitability: input.blocked_by_profitability,
+        blocked_by_position_limit: input.blocked_by_position_limit,
+        blocked_by_total_position_limit: input.blocked_by_total_position_limit,
+        stop_loss_exits: input.stop_loss_exits,
+        take_profit_exits: input.take_profit_exits,
     }
 }
 

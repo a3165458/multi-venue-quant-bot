@@ -97,6 +97,8 @@ impl MarketDataStore {
             positions: std::collections::HashMap::new(),
             position_entry_prices: std::collections::HashMap::new(),
             positions_authoritative: false,
+            open_orders: Vec::new(),
+            open_orders_authoritative: false,
         }
     }
 

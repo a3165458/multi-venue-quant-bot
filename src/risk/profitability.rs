@@ -3,11 +3,22 @@ use config::Config;
 
 const CONFIG_PREFIX: &str = "profitability";
 
+/// Observed HIP-3 growth-mode maker fee for this wallet (bps).
+/// 1.5 userAdd * 0.1 growth * ~2 HIP-3 * 0.96 referral.
+pub const HIP3_GROWTH_MAKER_FEE_BPS: f64 = 0.29;
+/// Observed HIP-3 growth-mode taker fee (bps).
+pub const HIP3_GROWTH_TAKER_FEE_BPS: f64 = 0.86;
+/// Observed maker residual after fees on io: fills (bps).
+pub const HIP3_GROWTH_ADVERSE_BPS: f64 = 0.73;
+
 /// Strategy-provided economics for one proposed order.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SignalEconomics {
     pub expected_edge_bps: Option<f64>,
     pub risk_reducing: bool,
+    /// ALO / post-only maker quotes. Gross edge is distance to mid (join-best
+    /// half-spread). Scored against maker fee + adverse, not taker round-trip.
+    pub post_only: bool,
 }
 
 impl SignalEconomics {
@@ -15,6 +26,29 @@ impl SignalEconomics {
         Self {
             expected_edge_bps,
             risk_reducing: false,
+            post_only: false,
+        }
+    }
+
+    pub fn maker_entry(expected_edge_bps: Option<f64>) -> Self {
+        Self {
+            expected_edge_bps,
+            risk_reducing: false,
+            post_only: true,
+        }
+    }
+
+    pub fn from_signal(
+        expected_edge_bps: Option<f64>,
+        risk_reducing: bool,
+        post_only: bool,
+    ) -> Self {
+        if risk_reducing {
+            Self::exit()
+        } else if post_only {
+            Self::maker_entry(expected_edge_bps)
+        } else {
+            Self::entry(expected_edge_bps)
         }
     }
 
@@ -22,6 +56,7 @@ impl SignalEconomics {
         Self {
             expected_edge_bps: None,
             risk_reducing: true,
+            post_only: false,
         }
     }
 }
@@ -117,6 +152,24 @@ impl ProfitabilityGuard {
             };
         }
 
+        if economics.post_only {
+            let maker_cost_bps = self.maker_cost_bps();
+            let net_edge_bps = expected_edge_bps - maker_cost_bps;
+            let allowed = net_edge_bps > self.min_net_edge_bps;
+            return ProfitabilityDecision {
+                allowed,
+                expected_edge_bps: Some(expected_edge_bps),
+                total_cost_bps: maker_cost_bps,
+                net_edge_bps: Some(net_edge_bps),
+                required_net_edge_bps: self.min_net_edge_bps,
+                reason: if allowed {
+                    "post_only_maker"
+                } else {
+                    "insufficient_net_edge"
+                },
+            };
+        }
+
         let net_edge_bps = expected_edge_bps - total_cost_bps;
         let allowed = net_edge_bps > self.min_net_edge_bps;
         ProfitabilityDecision {
@@ -140,6 +193,25 @@ impl ProfitabilityGuard {
             + self.exit_slippage_bps
             + self.funding_bps
             + self.adverse_selection_bps
+    }
+
+    /// Maker rest cost: add-fee (rebate allowed) plus adverse selection.
+    /// Taker exit, slippage, and funding are not charged on an ALO quote.
+    pub fn maker_cost_bps(&self) -> f64 {
+        self.entry_fee_bps + self.adverse_selection_bps
+    }
+
+    pub fn with_schedule(
+        mut self,
+        entry_fee_bps: f64,
+        exit_fee_bps: f64,
+        adverse_selection_bps: f64,
+    ) -> Result<Self> {
+        self.entry_fee_bps = entry_fee_bps;
+        self.exit_fee_bps = exit_fee_bps;
+        self.adverse_selection_bps = adverse_selection_bps;
+        self.validate()?;
+        Ok(self)
     }
 
     fn validate(&self) -> Result<()> {

@@ -30,6 +30,7 @@ impl Strategy for AddEveryBar {
             timestamp: ts,
             expected_edge_bps: None,
             risk_reducing: false,
+            ..Default::default()
         }]))
     }
 

@@ -118,6 +118,7 @@ impl Strategy for DcaStrategy {
                     // DCA has no defined exit target, so it cannot claim a round-trip edge.
                     expected_edge_bps: None,
                     risk_reducing: false,
+                    ..Default::default()
                 });
 
                 state.last_buy_time = Some(now);

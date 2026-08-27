@@ -1,6 +1,5 @@
 const DASHBOARD_HTML: &str = include_str!("ui/index.html");
 const DASHBOARD_APP_JS: &str = include_str!("ui/app.js");
-const DASHBOARD_AI_JS: &str = include_str!("ui/ai.js");
 
 fn css_rule(selector: &str) -> &str {
     let selector_start = DASHBOARD_HTML
@@ -16,6 +15,77 @@ fn css_rule(selector: &str) -> &str {
         .expect("CSS rule must have a closing brace");
 
     &DASHBOARD_HTML[rule_start..rule_end]
+}
+
+#[test]
+fn dashboard_exposes_venue_and_maker_quote_controls() {
+    assert!(
+        DASHBOARD_HTML.contains(r#"id="hero-venue""#),
+        "hero must show the live venue"
+    );
+    assert!(
+        DASHBOARD_HTML.contains(r#"id="maker-card""#),
+        "strategies page must include maker quote controls"
+    );
+    assert!(
+        DASHBOARD_HTML.contains(r#"id="mq-fields""#),
+        "maker param grid container must exist"
+    );
+    assert!(
+        DASHBOARD_APP_JS.contains("const MQ_PARAMS"),
+        "maker param spec must drive the generated form"
+    );
+    assert!(
+        DASHBOARD_APP_JS.contains("'flatten_only'"),
+        "maker flatten-only toggle must be part of the generated form"
+    );
+    assert!(
+        DASHBOARD_APP_JS.contains("quant_trades_"),
+        "CSV export must not use the Lighter-only filename"
+    );
+    assert!(
+        DASHBOARD_APP_JS.contains("|| 'cn'"),
+        "dashboard language must default to Chinese"
+    );
+    assert!(
+        DASHBOARD_APP_JS.contains("mq_quote_mode"),
+        "maker labels must be i18n keys"
+    );
+    assert!(
+        DASHBOARD_APP_JS.contains("中间价铺开"),
+        "maker quote mode must have a Chinese label"
+    );
+    assert!(
+        DASHBOARD_APP_JS.contains("function updateConnectionStatus"),
+        "header pill must track WebSocket state instead of staying on connecting"
+    );
+    assert!(
+        DASHBOARD_APP_JS.contains("t('liveTrading')"),
+        "connected status must use the i18n liveTrading key, not hardcoded English"
+    );
+    let connecting_attr = format!("data-i18n={q}connecting{q}", q = '"');
+    assert_eq!(
+        DASHBOARD_HTML.find(&connecting_attr),
+        None,
+        "connection pill must not bind the connecting i18n key"
+    );
+    assert!(
+        DASHBOARD_HTML.contains("status-label"),
+        "header must keep the connection status pill"
+    );
+    let dict_start = DASHBOARD_APP_JS
+        .find("const i18nStrings")
+        .expect("i18n dictionary must exist");
+    let dict_end = DASHBOARD_APP_JS
+        .find("currentLang = localStorage")
+        .expect("currentLang init must follow the i18n dictionary");
+    let self_call = format!("t({q}", q = '\'');
+    assert_eq!(
+        DASHBOARD_APP_JS[dict_start..dict_end].find(&self_call),
+        None,
+        "i18n dictionary values must be literals; calling t() inside the dictionary \
+         is a TDZ ReferenceError that kills the whole dashboard script"
+    );
 }
 
 #[test]
@@ -181,33 +251,21 @@ fn dynamic_market_order_and_fill_strings_are_escaped_before_inner_html_rendering
 }
 
 #[test]
-fn ai_api_key_is_persisted_in_browser_local_storage() {
-    // Product decision: users asked to keep the key across refreshes.
-    // Stored only in browser localStorage (not on the trading server).
-    assert!(
-        DASHBOARD_AI_JS.contains("key: document.getElementById('ai-key').value"),
-        "API key must be serialized into localStorage settings"
-    );
-    assert!(
-        DASHBOARD_AI_JS.contains("document.getElementById('ai-key').value = s.key"),
-        "API key must be restored from localStorage"
-    );
-    assert!(
-        DASHBOARD_AI_JS.contains("'ai-key'") || DASHBOARD_AI_JS.contains("\"ai-key\""),
-        "API-key input must trigger settings persistence"
-    );
-}
-
-#[test]
 fn settings_exposes_restart_safe_network_selection() {
     for id in [
         "network-lighter-mainnet",
         "network-lighter-robinhood",
         "network-arcus-mainnet",
         "network-arcus-testnet",
+        "network-aster-mainnet",
+        "network-hyperliquid-mainnet",
+        "network-hyperliquid-testnet",
         "network-rest-url",
         "network-ws-url",
         "network-chain-id",
+        "network-fee-tier",
+        "network-cross-dex",
+        "network-strategy-source",
         "btn-save-network",
         "network-msg",
     ] {
@@ -225,231 +283,117 @@ fn settings_exposes_restart_safe_network_selection() {
 }
 
 #[test]
-fn ai_lab_loads_datasets_and_aligns_dates() {
+fn pnl_stats_pages_render_hyperliquid_fill_pnl_and_daily_history() {
+    // Daily pnl bars must render independently of Chart.js init order:
+    // renderPnlHistory has to run before the revenueChart early-return,
+    // otherwise the panel stays on the loading placeholder forever.
+    let render_idx = DASHBOARD_APP_JS
+        .find("renderPnlHistory(pnlMap);")
+        .expect("updateRevenueChart must render daily pnl bars");
+    let guard_idx = DASHBOARD_APP_JS
+        .find("if (!revenueChart) return;")
+        .expect("revenueChart guard must exist");
     assert!(
-        DASHBOARD_AI_JS.contains("/api/backtest/datasets"),
-        "AI Lab must load dataset catalog from the server"
+        render_idx < guard_idx,
+        "renderPnlHistory must be called before the revenueChart guard"
     );
-    assert!(
-        DASHBOARD_AI_JS.contains("function applyDatasetDates")
-            || DASHBOARD_AI_JS.contains("applyDatasetDates("),
-        "selecting a dataset must realign start/end dates"
-    );
+
+    // Hyperliquid fills all carry action="Fill" with net realized pnl; the
+    // history/stat pages must treat pnl-bearing fills as closed-trade rows.
+    assert!(DASHBOARD_APP_JS.contains("const hasTradePnl"));
+    assert!(DASHBOARD_APP_JS.contains("hasTradePnl(t)"));
+
+    // Stats panels refresh periodically instead of only on WS reconnect,
+    // and the refresh must not refetch /api/strategy (form stomping).
+    assert!(DASHBOARD_APP_JS.contains("function refreshPnlStats"));
+    assert!(DASHBOARD_APP_JS.contains("setInterval(refreshPnlStats, 60000);"));
+
+    // Empty-state strings go through i18n, not hardcoded English.
+    assert!(!DASHBOARD_APP_JS.contains("No closed positions yet"));
+    assert!(!DASHBOARD_APP_JS.contains(">No daily data yet<"));
 }
 
 #[test]
-fn ai_lab_is_tool_using_quant_agent() {
-    const DASHBOARD_AI_HTML: &str = include_str!("ui/ai.html");
-    const QUANT_AGENT_JS: &str = include_str!("ui/quant_agent.js");
-    assert!(
-        DASHBOARD_AI_HTML.contains(r#"id="agent-chat""#),
-        "AI Lab must expose an agent chat surface"
-    );
-    assert!(
-        DASHBOARD_AI_HTML.contains("quant_agent.js"),
-        "AI Lab must load the quant agent script"
-    );
-    assert!(
-        QUANT_AGENT_JS.contains("run_backtest") && QUANT_AGENT_JS.contains("run_param_sweep"),
-        "agent must expose real backtest tools"
-    );
-    assert!(
-        QUANT_AGENT_JS.contains("tool_calls") || QUANT_AGENT_JS.contains("TOOLS"),
-        "agent must use tool-calling protocol"
-    );
-    assert!(
-        QUANT_AGENT_JS.contains("agentLoop") || QUANT_AGENT_JS.contains("function agentLoop"),
-        "agent multi-step loop required"
-    );
-}
-
-#[test]
-fn ai_backtest_html_escapes_dynamic_text() {
-    assert!(
-        DASHBOARD_AI_JS.contains("escapeHtml(t('errPrefix') + msg)")
-            || DASHBOARD_AI_JS.contains("escapeHtml(msg)"),
-        "error messages must be HTML-escaped"
-    );
-    // Title is built then escaped as one string (strategy + data file).
-    assert!(DASHBOARD_AI_JS.contains("escapeHtml(t('backtestOn')"));
-    assert!(DASHBOARD_AI_JS.contains("escapeHtml(currentParams)"));
-    assert!(DASHBOARD_AI_JS.contains("escapeHtml(currentStrategy)"));
-}
-
-#[test]
-fn ai_optimize_sends_start_end_not_start_date_aliases() {
-    // Regression: AI path used start_date/end_date while /api/backtest only
-    // read start/end → silent empty metrics shown as 0% return.
-    assert!(
-        DASHBOARD_AI_JS.contains("start: document.getElementById('bt-start').value"),
-        "AI optimize payload must use start"
-    );
-    assert!(
-        DASHBOARD_AI_JS.contains("end: document.getElementById('bt-end').value"),
-        "AI optimize payload must use end"
-    );
-    assert!(
-        !DASHBOARD_AI_JS.contains("start_date: document.getElementById('bt-start').value"),
-        "AI optimize must not send the broken start_date field"
-    );
-    assert!(
-        DASHBOARD_AI_JS.contains("function runServerBacktest")
-            || DASHBOARD_AI_JS.contains("runServerBacktest")
-            || DASHBOARD_AI_JS.contains("function assertBacktestOk"),
-        "failed backtests must abort the AI loop instead of faking 0%"
-    );
-}
-
-#[test]
-fn ai_lab_clamps_max_tokens_to_safe_completion_range() {
-    assert!(
-        DASHBOARD_AI_JS.contains("function clampMaxTokens"),
-        "max_tokens must be clamped before API calls"
-    );
-    assert!(
-        DASHBOARD_AI_JS.contains("MAX_TOKENS_MAX = 131072")
-            || DASHBOARD_AI_JS.contains("MAX_TOKENS_MAX=131072"),
-        "completion ceiling allows long-context model outputs"
-    );
-    assert!(
-        DASHBOARD_AI_JS.contains("readMaxTokensFromUi"),
-        "UI reader must normalize max_tokens"
-    );
-}
-
-#[test]
-fn quant_agent_supports_million_context_and_compact() {
-    const QUANT_AGENT_JS: &str = include_str!("ui/quant_agent.js");
-    const DASHBOARD_AI_HTML: &str = include_str!("ui/ai.html");
-    assert!(
-        QUANT_AGENT_JS.contains("DEFAULT_CONTEXT_WINDOW = 1000000")
-            || QUANT_AGENT_JS.contains("1000000"),
-        "agent default context should be 1M tokens"
-    );
-    assert!(
-        QUANT_AGENT_JS.contains("function compactHistory")
-            || QUANT_AGENT_JS.contains("compactHistory"),
-        "agent must support history compact"
-    );
-    assert!(
-        DASHBOARD_AI_HTML.contains(r#"id="ai-context-window""#),
-        "UI must expose context window setting"
-    );
-    assert!(
-        DASHBOARD_AI_HTML.contains(r#"id="agent-compact""#),
-        "UI must expose manual Compact control"
-    );
-}
-
-#[test]
-fn ai_lab_right_panel_streams_process_and_thinking() {
-    const DASHBOARD_AI_HTML: &str = include_str!("ui/ai.html");
-    assert!(
-        DASHBOARD_AI_HTML.contains(r#"id="process-stream""#),
-        "right panel needs a live process stream"
-    );
-    assert!(
-        DASHBOARD_AI_HTML.contains(r#"id="think-body""#),
-        "right panel needs an AI thinking body"
-    );
-    assert!(
-        DASHBOARD_AI_JS.contains("function addProcess")
-            || DASHBOARD_AI_JS.contains("function renderThought"),
-        "AI Lab must render process + thought into the right panel"
-    );
-}
-
-#[test]
-fn ai_lab_shares_dashboard_language_and_has_chinese_copy() {
-    const DASHBOARD_AI_HTML: &str = include_str!("ui/ai.html");
-    assert!(
-        DASHBOARD_AI_JS.contains("lighter-lang"),
-        "AI Lab must reuse the main dashboard language key"
-    );
-    assert!(
-        DASHBOARD_AI_JS.contains("cn: {"),
-        "AI Lab must ship a Chinese string pack"
-    );
-    assert!(
-        DASHBOARD_AI_JS.contains("function applyI18n"),
-        "AI Lab must apply i18n to data-i18n nodes"
-    );
-    assert!(
-        DASHBOARD_AI_HTML.contains(r#"data-i18n="apiKey""#)
-            || DASHBOARD_AI_HTML.contains(r#"data-i18n="btConfig""#),
-        "AI Lab markup must mark translatable nodes"
-    );
-    assert!(
-        DASHBOARD_AI_HTML.contains(r#"id="ai-lang-btn""#),
-        "AI Lab must expose a language toggle"
-    );
-    assert!(
-        DASHBOARD_AI_HTML.contains("Quant Bot Agent") || DASHBOARD_AI_HTML.contains("agent-send"),
-        "Chinese/agent primary surface must exist"
-    );
-}
-
-#[test]
-fn ai_lab_layout_keeps_agent_primary_and_responsive_rules_authoritative() {
-    const DASHBOARD_AI_HTML: &str = include_str!("ui/ai.html");
-    assert!(DASHBOARD_AI_HTML.contains(r#"class="config-sidebar""#));
-    assert!(DASHBOARD_AI_HTML.contains("grid-template-areas:\"config agent rail\""));
-    assert!(DASHBOARD_AI_HTML.contains("grid-area:agent"));
-    assert!(DASHBOARD_AI_HTML.contains("grid-area:config"));
-    assert!(DASHBOARD_AI_HTML.contains("grid-area:rail"));
-    assert!(
-        DASHBOARD_AI_HTML.contains("grid-template-areas:\"agent\" \"config\" \"rail\""),
-        "mobile must put the task surface before lengthy configuration"
-    );
-
-    let base_rail = DASHBOARD_AI_HTML
-        .find(".agent-rail {")
-        .expect("agent rail base rule");
-    let responsive = DASHBOARD_AI_HTML
-        .rfind("@media (max-width:1200px)")
-        .expect("tablet responsive rule");
-    assert!(
-        responsive > base_rail,
-        "responsive rules must come after base rules so they are not overridden"
-    );
-}
-
-#[test]
-fn ai_lab_runs_a_structured_strategy_research_mission() {
-    const DASHBOARD_AI_HTML: &str = include_str!("ui/ai.html");
-    const QUANT_AGENT_JS: &str = include_str!("ui/quant_agent.js");
-
-    for control in [
-        r#"id="strategy-mission""#,
-        r#"id="mission-goal""#,
-        r#"id="mission-risk""#,
-        r#"id="mission-universe""#,
-        r#"id="mission-run""#,
-        r#"id="mission-stages""#,
-        r#"id="strategy-candidates""#,
+fn dashboard_exposes_aster_shadow_maker_metrics() {
+    for id in [
+        "shadow-maker-section",
+        "shadow-state",
+        "shadow-lag",
+        "shadow-depth-lag",
+        "shadow-eval",
+        "shadow-queue",
+        "shadow-requests",
+        "shadow-amend-savings",
+        "shadow-fills",
+        "shadow-volume",
+        "shadow-markout",
+        "shadow-depth-misses",
     ] {
-        assert!(DASHBOARD_AI_HTML.contains(control), "missing {control}");
+        assert!(
+            DASHBOARD_HTML.contains(&format!(r#"id="{id}""#)),
+            "missing shadow-maker metric: {id}"
+        );
     }
-
-    assert!(QUANT_AGENT_JS.contains("name: 'research_strategies'"));
-    assert!(QUANT_AGENT_JS.contains("function scoreStrategyCandidate"));
-    assert!(QUANT_AGENT_JS.contains("async function startStrategyMission"));
-    assert!(QUANT_AGENT_JS.contains("fetch('/api/status')"));
-    assert!(QUANT_AGENT_JS.contains("fetch('/api/positions')"));
-    assert!(QUANT_AGENT_JS.contains("toolSweep"));
-    assert!(QUANT_AGENT_JS.contains("runAdaptiveAiResearch"));
-    assert!(QUANT_AGENT_JS.contains("MAX_AI_RESEARCH_ROUNDS"));
-    assert!(QUANT_AGENT_JS.contains("var MODEL_RESEARCH_TIMEOUT_MS = 120000"));
-    assert!(QUANT_AGENT_JS.contains("timeoutMs: MODEL_RESEARCH_TIMEOUT_MS"));
-    assert!(QUANT_AGENT_JS.contains("maxTokens: 1600"));
-    assert!(QUANT_AGENT_JS.contains("opts.timeoutMs || 45000"));
-    assert!(QUANT_AGENT_JS.contains("max_notional_usd"));
-    assert!(QUANT_AGENT_JS.contains("livePolicy: research.live_policy"));
-    assert!(QUANT_AGENT_JS.contains("live_eligible"));
-    assert!(DASHBOARD_AI_HTML.contains(r#"data-stage="ai""#));
+    assert!(DASHBOARD_HTML.contains("fetch('/api/shadow')"));
+    assert!(DASHBOARD_HTML.contains("SHADOW ACTIVE"));
+    assert!(DASHBOARD_HTML.contains("RISK EXITS REMAIN ARMED"));
     assert!(
-        !QUANT_AGENT_JS.contains("startStrategyMission")
-            || !QUANT_AGENT_JS.contains("startStrategyMission();\n        toolApplyLive"),
-        "research mission must never auto-apply a live strategy"
+        DASHBOARD_HTML.contains(r#"id="shadow-maker-section" hidden"#),
+        "Aster shadow maker must start hidden; live Hyperliquid must not show it"
     );
+    assert!(
+        DASHBOARD_HTML.contains(r#"id="hft-shadow-section" hidden"#),
+        "HFT shadow lab must start hidden; live Hyperliquid must not show it"
+    );
+    assert!(
+        DASHBOARD_HTML.contains("function showAsterOnlyPanels"),
+        "shadow panels must be gated to the live Aster venue"
+    );
+    assert!(
+        DASHBOARD_HTML.contains("indexOf('aster-') === 0"),
+        "shadow panels must key off the aster- venue prefix"
+    );
+    for id in [
+        "hft-shadow-section",
+        "hft-shadow-state",
+        "hft-shadow-body",
+        "hft-shadow-recommend",
+    ] {
+        assert!(DASHBOARD_HTML.contains(&format!(r#"id="{id}""#)));
+    }
+    assert!(DASHBOARD_HTML.contains("fetch('/api/hft-shadow')"));
+    assert!(DASHBOARD_HTML.contains("NO REAL ORDERS"));
+    assert!(DASHBOARD_HTML.contains("recommended_profile"));
+    assert!(DASHBOARD_HTML.contains("TOXIC"));
+}
+
+#[test]
+fn credential_editor_is_venue_aware_and_keeps_all_secrets_write_only() {
+    for group in [
+        "credentials-lighter",
+        "credentials-arcus",
+        "credentials-aster",
+        "credentials-hyperliquid",
+    ] {
+        assert!(
+            DASHBOARD_HTML.contains(&format!(r#"id="{group}""#)),
+            "missing venue credential group: {group}"
+        );
+    }
+    for secret in [
+        "LIGHTER_SECRET_KEY",
+        "ARCUS_SIGNING_KEY",
+        "ASTER_SIGNER_PRIVATE_KEY",
+        "HYPERLIQUID_SIGNER_PRIVATE_KEY",
+    ] {
+        assert!(
+            DASHBOARD_HTML.contains(&format!(r#"data-secret-key="{secret}""#)),
+            "missing write-only secret control: {secret}"
+        );
+    }
+    assert!(DASHBOARD_HTML.contains("ARCUS_API_KEY"));
+    assert!(DASHBOARD_HTML.contains("ASTER_SIGNER_ADDRESS"));
+    assert!(DASHBOARD_HTML.contains("HYPERLIQUID_ACCOUNT_ADDRESS"));
+    assert!(DASHBOARD_HTML.contains("write-only"));
+    assert!(DASHBOARD_HTML.contains("leaving this blank"));
 }

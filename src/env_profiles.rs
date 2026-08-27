@@ -49,6 +49,20 @@ pub(crate) struct ArcusCredentials {
     pub(crate) account_index: u8,
 }
 
+#[allow(dead_code)]
+pub(crate) struct AsterCredentials {
+    pub(crate) signer_address: String,
+    pub(crate) signer_private_key: String,
+}
+
+#[allow(dead_code)]
+pub(crate) struct HyperliquidCredentials {
+    /// Master account queried for balances, orders, and fills.
+    pub(crate) account_address: String,
+    /// Private key of the account or of an approved API/agent wallet.
+    pub(crate) signer_private_key: String,
+}
+
 pub(crate) fn profile_for_chain_id(chain_id: i64) -> Result<CredentialProfile> {
     match chain_id {
         304 => Ok(CredentialProfile::Mainnet),
@@ -185,6 +199,87 @@ pub(crate) fn load_arcus_credentials(venue: LiveVenue) -> Result<(ArcusCredentia
     ))
 }
 
+#[allow(dead_code)]
+pub(crate) fn load_aster_credentials(venue: LiveVenue) -> Result<(AsterCredentials, PathBuf)> {
+    let path = PathBuf::from(".env");
+    let contents = std::fs::read_to_string(&path).unwrap_or_default();
+    let value = |suffix: &str| -> Result<String> {
+        let key = venue.credential_key(suffix);
+        dotenv_value(&contents, &key)
+            .or_else(|| std::env::var(&key).ok())
+            .filter(|value| !value.trim().is_empty())
+            .with_context(|| format!("{key} is empty or missing in {}", path.display()))
+    };
+    Ok((build_aster_credentials(venue, value)?, path))
+}
+
+fn build_aster_credentials(
+    venue: LiveVenue,
+    mut value: impl FnMut(&str) -> Result<String>,
+) -> Result<AsterCredentials> {
+    if venue != LiveVenue::AsterMainnet {
+        bail!("{venue} is not an Aster venue");
+    }
+    Ok(AsterCredentials {
+        signer_address: value("SIGNER_ADDRESS")?,
+        signer_private_key: value("SIGNER_PRIVATE_KEY")?,
+    })
+}
+
+#[allow(dead_code)]
+pub(crate) fn load_hyperliquid_credentials(
+    venue: LiveVenue,
+) -> Result<(HyperliquidCredentials, PathBuf)> {
+    let path = PathBuf::from(".env");
+    let contents = std::fs::read_to_string(&path).unwrap_or_default();
+    let value = |suffix: &str| -> Result<String> {
+        let key = venue.credential_key(suffix);
+        dotenv_value(&contents, &key)
+            .or_else(|| std::env::var(&key).ok())
+            .filter(|value| !value.trim().is_empty())
+            .with_context(|| format!("{key} is empty or missing in {}", path.display()))
+    };
+    Ok((build_hyperliquid_credentials(venue, value)?, path))
+}
+
+fn build_hyperliquid_credentials(
+    venue: LiveVenue,
+    mut value: impl FnMut(&str) -> Result<String>,
+) -> Result<HyperliquidCredentials> {
+    if venue.exchange() != multi_venue_quant_bot::exchange::ExchangeKind::Hyperliquid {
+        bail!("{venue} is not a Hyperliquid venue");
+    }
+    Ok(HyperliquidCredentials {
+        account_address: value("ACCOUNT_ADDRESS")?,
+        signer_private_key: value("SIGNER_PRIVATE_KEY")?,
+    })
+}
+
+#[cfg(test)]
+fn hyperliquid_credentials_from_contents(
+    venue: LiveVenue,
+    contents: &str,
+) -> Result<HyperliquidCredentials> {
+    let value = |suffix: &str| -> Result<String> {
+        let key = venue.credential_key(suffix);
+        dotenv_value(contents, &key)
+            .filter(|value| !value.trim().is_empty())
+            .with_context(|| format!("{key} is empty or missing"))
+    };
+    build_hyperliquid_credentials(venue, value)
+}
+
+#[cfg(test)]
+fn aster_credentials_from_contents(venue: LiveVenue, contents: &str) -> Result<AsterCredentials> {
+    let value = |suffix: &str| -> Result<String> {
+        let key = venue.credential_key(suffix);
+        dotenv_value(contents, &key)
+            .filter(|value| !value.trim().is_empty())
+            .with_context(|| format!("{key} is empty or missing"))
+    };
+    build_aster_credentials(venue, value)
+}
+
 #[cfg(test)]
 pub(crate) fn credential_env_template(label: &str) -> String {
     format!(
@@ -254,5 +349,44 @@ mod tests {
         assert!(template.contains("LIGHTER_MAINNET_SECRET_KEY="));
         assert!(template.contains("LIGHTER_ROBINHOOD_SECRET_KEY="));
         assert!(template.contains("LIGHTER_NETWORK="));
+    }
+
+    #[test]
+    fn aster_credentials_are_namespaced_and_fail_closed() {
+        let contents = "ASTER_MAINNET_SIGNER_ADDRESS=0x1111111111111111111111111111111111111111\n\
+ASTER_MAINNET_SIGNER_PRIVATE_KEY=0x2222222222222222222222222222222222222222222222222222222222222222\n";
+        let credentials =
+            aster_credentials_from_contents(LiveVenue::AsterMainnet, contents).unwrap();
+        assert_eq!(
+            credentials.signer_address,
+            "0x1111111111111111111111111111111111111111"
+        );
+        let missing = contents.replace("ASTER_MAINNET_SIGNER_PRIVATE_KEY", "ASTER_OTHER_KEY");
+        assert!(aster_credentials_from_contents(LiveVenue::AsterMainnet, &missing).is_err());
+        assert!(aster_credentials_from_contents(LiveVenue::ArcusMainnet, contents).is_err());
+    }
+
+    #[test]
+    fn hyperliquid_credentials_are_namespaced_and_fail_closed() {
+        let contents = "HYPERLIQUID_MAINNET_ACCOUNT_ADDRESS=0x3333333333333333333333333333333333333333\n\
+HYPERLIQUID_MAINNET_SIGNER_PRIVATE_KEY=0x4444444444444444444444444444444444444444444444444444444444444444\n";
+        let credentials =
+            hyperliquid_credentials_from_contents(LiveVenue::HyperliquidMainnet, contents).unwrap();
+        assert_eq!(
+            credentials.account_address,
+            "0x3333333333333333333333333333333333333333"
+        );
+        // Testnet keys are a separate namespace: mainnet secrets never leak over.
+        assert!(
+            hyperliquid_credentials_from_contents(LiveVenue::HyperliquidTestnet, contents).is_err()
+        );
+        let missing = contents.replace(
+            "HYPERLIQUID_MAINNET_SIGNER_PRIVATE_KEY",
+            "HYPERLIQUID_OTHER",
+        );
+        assert!(
+            hyperliquid_credentials_from_contents(LiveVenue::HyperliquidMainnet, &missing).is_err()
+        );
+        assert!(hyperliquid_credentials_from_contents(LiveVenue::AsterMainnet, contents).is_err());
     }
 }

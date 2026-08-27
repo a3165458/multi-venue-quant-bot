@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Multi-Venue Quant Bot | Dashboard</title>
+<title data-i18n="pageTitle">Multi-Venue Quant Bot | Dashboard</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -11,7 +11,7 @@
 <script src="https://unpkg.com/lucide@latest"></script>
 <style>
 /* ══════════════════════════════════════════════════════════════════════════
-   Multi-Venue Quant Bot · 设计层
+   多场所量化机器人 · 设计层
    --------------------------------------------------------------------------
    配色直接取自参考图的像素采样：
      页面底 #F4F4F4 / 卡片 #FFFFFF / 区块头部条 #EFEEF1 / 发丝描边 #ECECEC / 锚点卡 #000
@@ -151,7 +151,7 @@ aside { display:none; }               /* 侧栏已并入头部卡 */
   font-size:33px; font-weight:700; letter-spacing:-0.03em; line-height:1.1;
   margin-top:1px; white-space:nowrap;
 }
-/* "Multi-Venue Quant Bot · quant engine" */
+/* "多场所量化机器人 · 量化引擎" */
 .brand-title em { font-style:normal; font-weight:400; color:var(--text-muted); }
 .tb-right { margin-left:auto; display:flex; flex-direction:column; align-items:flex-end; gap:6px; }
 
@@ -681,32 +681,32 @@ tr:hover td { background:var(--bg-card-hover); }
       <div class="logo">
         <div class="logo-icon"><i data-lucide="zap"></i></div>
         <div class="breadcrumb">
-          <span class="kicker" data-i18n="brandKicker">WS IN · ORDERS OUT · TWO CONTROL LOOPS</span>
-          <div class="brand-title">Multi-Venue Quant Bot<em> · quant engine</em></div>
+          <span class="kicker" data-i18n="brandKicker">WS 进 · 订单出 · 两条控制回路</span>
+          <div class="brand-title"><span data-i18n="brandName">Multi-Venue Quant Bot</span><em> · <span data-i18n="quantEngine">quant engine</span></em></div>
         </div>
       </div>
       <div class="tb-right">
-        <span class="pill"><span class="sb-dot" id="status-dot"></span><span id="status-label">Connecting...</span></span>
-        <span class="pill" id="loop-tick">IDLE</span>
+        <span class="pill"><span class="sb-dot" id="status-dot"></span><span id="status-label">连接中...</span></span>
+        <span class="pill" id="loop-tick">空闲</span>
       </div>
     </div>
 
     <div class="tb-nav">
       <ul class="nav-links">
-        <li><a href="#" class="nav-item active" data-page="dashboard"><i data-lucide="layout-dashboard"></i> <span data-i18n="dashboard">Dashboard</span></a></li>
-        <li><a href="#" class="nav-item" data-page="strategies"><i data-lucide="trending-up"></i> <span data-i18n="strategies">Strategies</span></a></li>
-        <li><a href="#" class="nav-item" data-page="portfolio"><i data-lucide="wallet"></i> <span data-i18n="portfolio">Portfolio</span></a></li>
-        <li><a href="#" class="nav-item" data-page="history"><i data-lucide="clock"></i> <span data-i18n="history">History</span></a></li>
-        <li><a href="#" class="nav-item" data-page="settings"><i data-lucide="settings"></i> <span data-i18n="settings">Settings</span></a></li>
+        <li><a href="#" class="nav-item active" data-page="dashboard"><i data-lucide="layout-dashboard"></i> <span data-i18n="dashboard">仪表盘</span></a></li>
+        <li><a href="#" class="nav-item" data-page="strategies"><i data-lucide="trending-up"></i> <span data-i18n="strategies">策略</span></a></li>
+        <li><a href="#" class="nav-item" data-page="portfolio"><i data-lucide="wallet"></i> <span data-i18n="portfolio">投资组合</span></a></li>
+        <li><a href="#" class="nav-item" data-page="history"><i data-lucide="clock"></i> <span data-i18n="history">历史记录</span></a></li>
+        <li><a href="#" class="nav-item" data-page="settings"><i data-lucide="settings"></i> <span data-i18n="settings">设置</span></a></li>
       </ul>
-      <a href="/ai" class="nav-item"><i data-lucide="sparkles"></i> <span>AI Lab</span></a>
+      <a href="/ai" class="nav-item" target="_blank" rel="noopener noreferrer"><i data-lucide="bot"></i> <span data-i18n="ompAgent">OMP 助手</span></a>
       <span class="nav-spacer"></span>
       <div class="topnav">
         <div class="search-wrap">
           <i data-lucide="search"></i>
           <input type="text" placeholder="Search..." id="global-search">
         </div>
-        <button class="topnav-btn" id="btn-notif" title="Notifications">
+        <button class="topnav-btn" id="btn-notif" title="通知" data-i18n-title="notifications">
           <i data-lucide="bell"></i>
           <span class="notif-dot" id="notif-dot" style="display:none"></span>
         </button>
@@ -719,8 +719,8 @@ tr:hover td { background:var(--bg-card-hover); }
       </div>
     </div>
     <div class="notif-panel" id="notif-panel">
-      <div class="notif-header"><span>Notifications</span><button class="notif-clear" id="notif-clear">Clear all</button></div>
-      <div id="notif-list"><div class="notif-empty">No notifications yet</div></div>
+      <div class="notif-header"><span data-i18n="notifications">通知</span><button class="notif-clear" id="notif-clear" data-i18n="clearAll">全部清除</button></div>
+      <div id="notif-list"><div class="notif-empty" data-i18n="noNotifs">暂无通知</div></div>
     </div>
   </div>
 
@@ -736,31 +736,32 @@ tr:hover td { background:var(--bg-card-hover); }
       <div class="console">
         <div>
           <div class="con-bar">
-            <span class="hero-kicker"><span class="sb-dot" id="hero-dot"></span> <span data-i18n="equity">Equity</span> · LIVE</span>
+            <span class="hero-kicker"><span class="sb-dot" id="hero-dot"></span> <span data-i18n="equity">净值</span> · 实盘</span>
             <span class="hero-chip solid" id="hero-strategy">—</span>
+            <span class="hero-chip" id="hero-venue">—</span>
             <span class="con-spacer"></span>
             <span class="hero-chip" id="hero-markets">—</span>
           </div>
           <div class="con-num">
             <div class="hero-value" id="mc-equity">$0.00</div>
-            <div class="hero-delta"><b id="mc-daily" class="value">$0.00</b> <span data-i18n="today">today</span></div>
+            <div class="hero-delta"><b id="mc-daily" class="value">$0.00</b> <span data-i18n="today">今日</span></div>
           </div>
         </div>
         <div class="con-stats">
           <!-- status.total_trades 是**下单次数**不是成交数；成交与胜率由后两格从 trade_history 现算 -->
-          <span class="con-stat"><b id="hero-placed">—</b><i data-i18n="ordersPlaced">orders placed</i></span>
-          <span class="con-stat"><b id="hero-fills">—</b><i data-i18n="fillsCapped">fills (last 200)</i></span>
-          <span class="con-stat"><b id="hero-wr">—</b><i data-i18n="winRate">WR</i></span>
-          <span class="con-stat"><span id="mc-upnl" class="value">$0.00</span><i data-i18n="unrealizedPnl">unrealized</i></span>
-          <span class="con-stat"><b id="since-fill">—</b><i data-i18n="sinceFill">since last fill</i></span>
-          <span class="con-stat"><b id="hero-age">—</b><i data-i18n="lastPush">last push</i><span id="hero-paused"></span></span>
+          <span class="con-stat"><b id="hero-placed">—</b><i data-i18n="ordersPlaced">下单次数</i></span>
+          <span class="con-stat"><b id="hero-fills">—</b><i data-i18n="fillsCapped">成交（最近 200 条）</i></span>
+          <span class="con-stat"><b id="hero-wr">—</b><i data-i18n="winRate">胜率</i></span>
+          <span class="con-stat"><span id="mc-upnl" class="value">$0.00</span><i data-i18n="unrealizedPnl">未实现盈亏</i></span>
+          <span class="con-stat"><b id="since-fill">—</b><i data-i18n="sinceFill">距上次成交</i></span>
+          <span class="con-stat"><b id="hero-age">—</b><i data-i18n="lastPush">最近推送</i><span id="hero-paused"></span></span>
         </div>
       </div>
 
       <div class="sec runcard" style="margin-bottom:0;">
         <div class="sec-head">
           <div>
-            <div class="kicker" data-i18n="totalReturn">★ TOTAL RETURN · SINCE INCEPTION</div>
+            <div class="kicker" data-i18n="totalReturn">累计收益率 · 自建仓起</div>
           </div>
           <span class="kicker" id="run-src">—</span>
         </div>
@@ -770,19 +771,19 @@ tr:hover td { background:var(--bg-card-hover); }
             <div class="run-side c-up" id="mc-total">$0.00</div>
           </div>
           <!-- 行情：mark_price / 盘口中间价每帧都在变，是页面上唯一持续跳动的真实数字 -->
-          <div class="tape-live" id="tape"><div class="tape-idle" data-i18n="tapeIdle">WAITING FOR MARKET DATA</div></div>
+          <div class="tape-live" id="tape"><div class="tape-idle" data-i18n="tapeIdle">等待持仓数据</div></div>
           <div class="run-legs">
-            <div class="run-leg"><span class="kicker" data-i18n="initial">INITIAL</span><b id="run-base">—</b></div>
-            <div class="run-leg"><span class="kicker" data-i18n="peakEquity">PEAK</span><b id="s-peak">—</b></div>
-            <div class="run-leg"><span class="kicker" data-i18n="available">AVAILABLE</span><b id="s-avail">—</b></div>
+            <div class="run-leg"><span class="kicker" data-i18n="initial">起始</span><b id="run-base">—</b></div>
+            <div class="run-leg"><span class="kicker" data-i18n="peakEquity">峰值净值</span><b id="s-peak">—</b></div>
+            <div class="run-leg"><span class="kicker" data-i18n="available">可用余额</span><b id="s-avail">—</b></div>
           </div>
           <div class="spark-wrap">
             <canvas id="sparkChart"></canvas>
-            <div class="spark-empty" id="spark-empty">NO EQUITY HISTORY</div>
+            <div class="spark-empty" id="spark-empty" data-i18n="noHist">暂无净值历史</div>
           </div>
           <!-- 参考稿底部那排小横杠，这里当净值曲线的区间选择器 -->
           <div class="range-group" id="eq-range-group">
-            <button class="range-btn active" data-range="all" title="ALL">ALL</button>
+            <button class="range-btn active" data-range="all" title="ALL">全部</button>
             <button class="range-btn" data-range="30d" title="30D">30D</button>
             <button class="range-btn" data-range="7d" title="7D">7D</button>
             <button class="range-btn" data-range="24h" title="24H">24H</button>
@@ -797,10 +798,10 @@ tr:hover td { background:var(--bg-card-hover); }
     <div class="sec" id="loop-card">
       <div class="sec-head">
         <div>
-          <div class="kicker" data-i18n="loopKicker">TWO CONTROL LOOPS · WS MAIN + 10S REFRESH</div>
-          <div class="sec-title" data-i18n="theLoop">THE LOOP</div>
+          <div class="kicker" data-i18n="loopKicker">两条控制回路 · WS 主循环 + 10s 刷新</div>
+          <div class="sec-title" data-i18n="theLoop">控制回路</div>
         </div>
-        <span class="pill solid" id="loop-sub">WAITING FOR WS</span>
+        <span class="pill solid" id="loop-sub">等待 WS</span>
       </div>
       <div class="sec-body dotted">
         <div class="loop-stage">
@@ -825,18 +826,18 @@ tr:hover td { background:var(--bg-card-hover); }
             </circle>
           </svg>
           <div class="loop-center">
-            <div class="loop-center-word">LOOP</div>
-            <div class="loop-center-sub" id="loop-rev">REV 0</div>
+            <div class="loop-center-word" data-i18n="theLoop">控制回路</div>
+            <div class="loop-center-sub" id="loop-rev">圈数 0</div>
           </div>
-          <div class="loop-node loop-n-top" id="loop-n-push"><b>PUSH</b><span>state 3s</span></div>
-          <div class="loop-node loop-n-right" id="loop-n-risk"><b>RISK</b><span>drawdown gate</span></div>
-          <div class="loop-node loop-n-bottom" id="loop-n-order"><b>ORDER</b><span>open orders</span></div>
-          <div class="loop-node loop-n-left" id="loop-n-fill"><b>FILL</b><span>trade history</span></div>
+          <div class="loop-node loop-n-top" id="loop-n-push"><b data-i18n="pushWord">推送</b><span data-i18n="state3s">状态 3秒</span></div>
+          <div class="loop-node loop-n-right" id="loop-n-risk"><b data-i18n="riskMonitor">风控监控</b><span data-i18n="drawdownGate">回撤闸门</span></div>
+          <div class="loop-node loop-n-bottom" id="loop-n-order"><b data-i18n="orders">订单</b><span data-i18n="openOrdersHint">挂单</span></div>
+          <div class="loop-node loop-n-left" id="loop-n-fill"><b data-i18n="fills">成交</b><span data-i18n="tradeHistoryHint">成交记录</span></div>
         </div>
       </div>
       <div class="sec-foot">
-        <div><b>PUSH</b> <span data-i18n="legendPush">on every /ws state frame</span> · <b>RISK</b> <span data-i18n="legendRisk">drawdown / daily-loss figures change</span> · <b>ORDER</b> <span data-i18n="legendOrder">open-order count changes</span> · <b>FILL</b> <span data-i18n="legendFill">trade_history gains a record</span></div>
-        <div data-i18n="legendDot">ONE LAP = ONE /WS FRAME (3S)</div>
+        <div><b data-i18n="pushWord">推送</b> <span data-i18n="legendPush">每收到一帧 /ws state 推送</span> · <b data-i18n="riskMonitor">风控监控</b> <span data-i18n="legendRisk">回撤 / 日亏数值发生变化</span> · <b data-i18n="orders">订单</b> <span data-i18n="legendOrder">挂单数发生变化</span> · <b data-i18n="fills">成交</b> <span data-i18n="legendFill">trade_history 新增记录</span></div>
+        <div data-i18n="legendDot">跑一圈 = 一帧 /ws 推送（3s）</div>
       </div>
     </div>
 
@@ -848,28 +849,28 @@ tr:hover td { background:var(--bg-card-hover); }
       <div class="sec">
         <div class="sec-head">
           <div>
-            <div class="kicker" data-i18n="riskKicker">HOW MUCH ROOM IS LEFT</div>
-            <div class="sec-title" data-i18n="riskMonitor">RISK STATE</div>
+            <div class="kicker" data-i18n="riskKicker">还剩多少空间</div>
+            <div class="sec-title" data-i18n="riskMonitor">风控监控</div>
           </div>
-          <span class="pill" data-i18n="refreshLoop">LIVE · 10S REFRESH</span>
+          <span class="pill" data-i18n="refreshLoop">实时 · 10s 刷新回路</span>
         </div>
         <div class="sec-body dotted">
           <!-- 每个气泡按**各自的上限**取比例，不是三者凑成 100%：
                回撤上限 15%、日亏上限 8% 不是同一个整体的两部分，凑成一个圆会说谎。 -->
           <div class="bub-wrap">
             <div class="bub plain"><div class="bub-circle" id="bub-dd"><span class="bub-k">DD</span><span class="bub-v" id="r-dd">0.0%</span></div><div class="bub-cap" id="bub-dd-cap">—</div></div>
-            <div class="bub plain"><div class="bub-circle" id="bub-dl"><span class="bub-k">DAILY</span><span class="bub-v" id="r-dl">0.0%</span></div><div class="bub-cap" id="bub-dl-cap">—</div></div>
-            <div class="bub primary"><div class="bub-circle" id="bub-hr"><span class="bub-k" data-i18n="headroom">HEADROOM</span><span class="bub-v" id="bub-hr-v">—</span></div><div class="bub-cap" data-i18n="headroomCap">LOWEST REMAINING MARGIN</div></div>
+            <div class="bub plain"><div class="bub-circle" id="bub-dl"><span class="bub-k" data-i18n="dailyCap">日亏</span><span class="bub-v" id="r-dl">0.0%</span></div><div class="bub-cap" id="bub-dl-cap">—</div></div>
+            <div class="bub primary"><div class="bub-circle" id="bub-hr"><span class="bub-k" data-i18n="headroom">余量</span><span class="bub-v" id="bub-hr-v">—</span></div><div class="bub-cap" data-i18n="headroomCap">更紧的那条上限还剩多少</div></div>
           </div>
         </div>
         <div class="sec-foot">
           <div style="flex:1;min-width:220px;">
             <div class="risk-item">
-              <div class="risk-labels"><span class="risk-k" data-i18n="maxDrawdown">Max Drawdown</span><span class="risk-v" id="r-dd-echo">—</span></div>
+              <div class="risk-labels"><span class="risk-k" data-i18n="maxDrawdown">最大回撤</span><span class="risk-v" id="r-dd-echo">—</span></div>
               <div class="risk-bar"><div class="risk-fill ok" id="r-dd-bar" style="width:0%"></div></div>
             </div>
             <div class="risk-item">
-              <div class="risk-labels"><span class="risk-k" data-i18n="dailyLoss">Daily Loss</span><span class="risk-v" id="r-dl-echo">—</span></div>
+              <div class="risk-labels"><span class="risk-k" data-i18n="dailyLoss">日内亏损</span><span class="risk-v" id="r-dl-echo">—</span></div>
               <div class="risk-bar"><div class="risk-fill ok" id="r-dl-bar" style="width:0%"></div></div>
             </div>
           </div>
@@ -880,13 +881,13 @@ tr:hover td { background:var(--bg-card-hover); }
         <div class="sec-head">
           <div>
             <div class="kicker" id="chart-info">—</div>
-            <div class="sec-title" data-i18n="equityCurve">EQUITY CURVE</div>
+            <div class="sec-title" data-i18n="equityCurve">净值曲线</div>
           </div>
         </div>
         <div class="sec-body chart"><canvas id="equityChart"></canvas></div>
         <div class="sec-foot">
-          <div data-i18n="equityFootL">EVERY POINT IS A /API/PNL SNAPSHOT</div>
-          <div data-i18n="equityFootR">RANGE SET ON THE RETURN CARD</div>
+          <div data-i18n="equityFootL">每个点都是一次 /api/pnl 快照</div>
+          <div data-i18n="equityFootR">区间在收益卡上切换</div>
         </div>
       </div>
     </div>
@@ -895,19 +896,19 @@ tr:hover td { background:var(--bg-card-hover); }
     <div class="sec">
       <div class="sec-head">
         <div>
-          <div class="kicker" data-i18n="ordersKicker">EVERY CELL IS A RESTING ORDER · LIVE FROM /WS</div>
-          <div class="sec-title" data-i18n="openOrders">THE BOOK</div>
+          <div class="kicker" data-i18n="ordersKicker">每一格都是一个挂单 · 实时来自 /ws</div>
+          <div class="sec-title" data-i18n="openOrders">挂单数</div>
         </div>
-        <span class="pill solid"><span id="swarm-count">0</span> <span data-i18n="orders">ORDERS</span></span>
+        <span class="pill solid"><span id="swarm-count">0</span> <span data-i18n="orders">订单</span></span>
       </div>
       <div class="sec-body dotted">
         <div class="swarm-grid" id="swarm-grid">
-          <div class="swarm-empty">NO OPEN ORDERS</div>
+          <div class="swarm-empty" data-i18n="noOrders">暂无挂单</div>
         </div>
       </div>
       <div class="sec-foot">
-        <div id="swarm-latest" data-i18n="swarmFootL">NEAREST TO MARKET IS INVERTED</div>
-        <div><span id="s-orders-label">0 open orders</span> · <span data-i18n="swarmFootR">FILL BAR = FILLED / QUANTITY</span></div>
+        <div id="swarm-latest" data-i18n="swarmFootL">离市价最近的一档是反相卡</div>
+        <div><span id="s-orders-label">0 <span data-i18n="openOrdersCount">笔挂单</span></span> · <span data-i18n="swarmFootR">进度条 = 已成交 / 委托量</span></div>
       </div>
     </div>
 
@@ -918,51 +919,91 @@ tr:hover td { background:var(--bg-card-hover); }
       <div class="sec event-stream-section">
         <div class="sec-head">
           <div>
-            <div class="kicker" data-i18n="railKicker">REAL EVENTS ONLY · NEWEST FIRST</div>
-            <div class="sec-title" data-i18n="eventLog">EVENT LOG</div>
+            <div class="kicker" data-i18n="railKicker">只记真实事件 · 最新在上</div>
+            <div class="sec-title" data-i18n="eventLog">事件流</div>
           </div>
         </div>
         <div class="sec-body">
-          <div class="rail" id="rail"><div class="rail-empty" data-i18n="railEmpty">NO EVENTS THIS SESSION</div></div>
+          <div class="rail" id="rail"><div class="rail-empty" data-i18n="railEmpty">本次会话暂无事件</div></div>
         </div>
       </div>
 
       <div class="sec">
         <div class="sec-head">
           <div>
-            <div class="kicker" data-i18n="thisWeek">THIS WEEK · REALISED</div>
-            <div class="sec-title" data-i18n="weeklyPnl">WEEKLY P&amp;L</div>
+            <div class="kicker" data-i18n="thisWeek">本周 · 已实现</div>
+            <div class="sec-title" data-i18n="weeklyPnl">周盈亏</div>
           </div>
         </div>
         <div class="sec-body chart" style="height:190px;"><canvas id="revenueChart"></canvas></div>
         <div class="pnl-section">
-          <div class="risk-title" data-i18n="dailyPnlHistory">DAILY P&amp;L HISTORY</div>
-          <div id="pnl-history"><div class="notif-empty">Loading...</div></div>
+          <div class="risk-title" data-i18n="dailyPnlHistory">每日盈亏历史</div>
+          <div id="pnl-history"><div class="notif-empty">加载中...</div></div>
         </div>
       </div>
+    </div>
+
+    <div class="sec" id="shadow-maker-section" hidden>
+      <div class="sec-head">
+        <div><div class="kicker" data-i18n="shadowKicker">VIRTUAL QUOTES ONLY · RISK EXITS REMAIN ARMED</div><div class="sec-title" data-i18n="asterShadow">Aster 影子做市</div></div>
+        <span class="pill solid" id="shadow-state" data-i18n="waitingShadow">等待中</span>
+      </div>
+      <div class="sec-body">
+        <div class="stats-grid" style="margin-bottom:0;">
+          <div class="card stat-card"><div class="stat-info"><div class="label" data-i18n="runtime">运行时长</div><div class="value" id="shadow-runtime">—</div></div></div>
+          <div class="card stat-card"><div class="stat-info"><div class="label" data-i18n="bboEvents">BBO 事件</div><div class="value" id="shadow-bbo">0</div></div></div>
+          <div class="card stat-card"><div class="stat-info"><div class="label" data-i18n="eventLag">事件延迟</div><div class="value" id="shadow-lag">—</div></div></div>
+          <div class="card stat-card"><div class="stat-info"><div class="label" data-i18n="depthLag">深度延迟</div><div class="value" id="shadow-depth-lag">—</div></div></div>
+          <div class="card stat-card"><div class="stat-info"><div class="label" data-i18n="strategyEval">策略计算</div><div class="value" id="shadow-eval">—</div></div></div>
+          <div class="card stat-card"><div class="stat-info"><div class="label" data-i18n="queueAhead">前方排队</div><div class="value" id="shadow-queue">—</div></div></div>
+          <div class="card stat-card"><div class="stat-info"><div class="label" data-i18n="quoteReqMin">报价请求/分钟</div><div class="value" id="shadow-requests">0</div></div></div>
+          <div class="card stat-card"><div class="stat-info"><div class="label" data-i18n="amendSavings">改单节省</div><div class="value" id="shadow-amend-savings">0</div></div></div>
+          <div class="card stat-card"><div class="stat-info"><div class="label" data-i18n="virtualFills">虚拟成交</div><div class="value" id="shadow-fills">0</div></div></div>
+          <div class="card stat-card"><div class="stat-info"><div class="label" data-i18n="virtualVolume">虚拟成交额</div><div class="value" id="shadow-volume">$0</div></div></div>
+          <div class="card stat-card"><div class="stat-info"><div class="label" data-i18n="volumeHour">每小时成交额</div><div class="value" id="shadow-volume-hour">$0</div></div></div>
+        </div>
+      </div>
+      <div class="sec-foot">
+        <div>标记损益： <span id="shadow-markout">1s — · 5s — · 30s —</span></div>
+        <div><span id="shadow-active-quotes">0</span> 虚拟报价 · <span id="shadow-requotes">0</span> 换单 · <span id="shadow-depth-misses">0</span> 深度缺失</div>
+      </div>
+    </div>
+
+    <div class="sec" id="hft-shadow-section" hidden>
+      <div class="sec-head">
+        <div><div class="kicker" data-i18n="hftKicker">MULTI-PROFILE · NEAR-BBO · NO REAL ORDERS</div><div class="sec-title" data-i18n="hftLab">高频影子实验室</div></div>
+        <span class="pill solid" id="hft-shadow-state">等待中</span>
+      </div>
+      <div class="sec-body" style="overflow-x:auto;">
+        <table>
+          <thead><tr><th data-i18n="profile">配置</th><th data-i18n="offset">偏移</th><th data-i18n="cooldown">冷却</th><th data-i18n="queueAhead">前方排队</th><th data-i18n="reqMin">请求/分</th><th data-i18n="amendSave">改单节省</th><th data-i18n="fills">成交</th><th data-i18n="volHour">成交额/时</th><th data-i18n="markout1s">1秒标记损益</th><th data-i18n="markout5s">5秒标记损益</th><th data-i18n="markout30s">30秒标记损益</th></tr></thead>
+          <tbody id="hft-shadow-body"><tr><td colspan="11" class="empty-cell" data-i18n="collectingHft">正在采集高频影子数据…</td></tr></tbody>
+        </table>
+      </div>
+      <div class="sec-foot"><div id="hft-shadow-recommend" data-i18n="hftFootL">贴盘 vs 偏移 · 原地改单</div><div data-i18n="hftFootR">仅虚拟成交</div></div>
     </div>
 
     <div class="sec">
       <div class="sec-head" style="align-items:center;">
         <div class="tab-bar" id="btm-tabs">
-          <button class="tab-btn active" data-t="positions" data-i18n="positions">Positions</button>
-          <button class="tab-btn" data-t="orders" data-i18n="orders">Orders</button>
-          <button class="tab-btn" data-t="trades" data-i18n="trades">Trades</button>
-          <button class="tab-btn" data-t="log" data-i18n="log">Log</button>
+          <button class="tab-btn active" data-t="positions" data-i18n="positions">持仓</button>
+          <button class="tab-btn" data-t="orders" data-i18n="orders">订单</button>
+          <button class="tab-btn" data-t="trades" data-i18n="trades">交易</button>
+          <button class="tab-btn" data-t="log" data-i18n="log">日志</button>
         </div>
-        <span class="kicker"><span id="s-orders">0</span> <span data-i18n="openOrders">open orders</span></span>
+        <span class="kicker"><span id="s-orders">0</span> <span data-i18n="openOrders">挂单数</span></span>
       </div>
       <div id="tp-positions" class="tab-panel active" style="max-height:320px;overflow-y:auto;">
-        <table><thead><tr><th data-i18n="market">Market</th><th data-i18n="side">Side</th><th data-i18n="size">Size</th><th data-i18n="entry">Entry</th><th data-i18n="mark">Mark</th><th class="td-r" data-i18n="unrealizedPnl">Unrealized P&amp;L</th></tr></thead>
-        <tbody id="pos-tbody"><tr><td colspan="6" class="empty-cell" data-i18n="noPositions">No active positions</td></tr></tbody></table>
+        <table><thead><tr><th data-i18n="market">市场</th><th data-i18n="side">方向</th><th data-i18n="size">数量</th><th data-i18n="entry">开仓价</th><th data-i18n="mark">标记价</th><th class="td-r" data-i18n="unrealizedPnl">未实现盈亏</th></tr></thead>
+        <tbody id="pos-tbody"><tr><td colspan="6" class="empty-cell" data-i18n="noPositions">暂无持仓</td></tr></tbody></table>
       </div>
       <div id="tp-orders" class="tab-panel" style="max-height:320px;overflow-y:auto;">
-        <table><thead><tr><th>ID</th><th>Market</th><th>Side</th><th>Price</th><th>Qty</th><th>Filled</th><th>Status</th></tr></thead>
-        <tbody id="ord-tbody"><tr><td colspan="7" class="empty-cell">No open orders</td></tr></tbody></table>
+        <table><thead><tr><th>ID</th><th data-i18n="market">市场</th><th data-i18n="side">方向</th><th data-i18n="price">价格</th><th data-i18n="qty">数量</th><th data-i18n="filled">已成交</th><th data-i18n="status">状态</th></tr></thead>
+        <tbody id="ord-tbody"><tr><td colspan="7" class="empty-cell" data-i18n="noOrders">暂无挂单</td></tr></tbody></table>
       </div>
       <div id="tp-trades" class="tab-panel" style="max-height:320px;overflow-y:auto;">
-        <table><thead><tr><th>Time</th><th>Market</th><th>Action</th><th>Side</th><th>Price</th><th>Qty</th><th class="td-r">P&amp;L</th></tr></thead>
-        <tbody id="trd-tbody"><tr><td colspan="7" class="empty-cell">No trades yet</td></tr></tbody></table>
+        <table><thead><tr><th data-i18n="time">时间</th><th data-i18n="market">市场</th><th data-i18n="action">动作</th><th data-i18n="side">方向</th><th data-i18n="price">价格</th><th data-i18n="qty">数量</th><th class="td-r">P&amp;L</th></tr></thead>
+        <tbody id="trd-tbody"><tr><td colspan="7" class="empty-cell" data-i18n="noTrades">暂无交易</td></tr></tbody></table>
       </div>
       <div id="tp-log" class="tab-panel">
         <div class="log-area" id="log-box"></div>
@@ -974,38 +1015,29 @@ tr:hover td { background:var(--bg-card-hover); }
     <!-- Trading Controls Card -->
     <div class="card" style="margin-bottom:24px;">
       <div class="card-header">
-        <div><div class="card-title" data-i18n="tradingControls">Trading Controls</div><div class="card-subtitle" data-i18n="manageMarkets">Manage markets and trading state</div></div>
-        <span class="badge" id="tc-status-badge">● Loading</span>
+        <div><div class="card-title" data-i18n="tradingControls">交易控制</div><div class="card-subtitle" data-i18n="manageMarkets">管理交易对和交易状态</div></div>
+        <span class="badge" id="tc-status-badge" data-i18n="loading">加载中...</span>
       </div>
       <div style="display:grid; grid-template-columns:1fr 1fr; gap:20px;">
         <!-- Market Toggles -->
         <div>
-          <div class="cfg-label" style="margin-bottom:12px;" data-i18n="activeMarkets">Active Markets</div>
+          <div class="cfg-label" style="margin-bottom:12px;" data-i18n="activeMarkets">激活市场</div>
           <div id="tc-markets" style="display:flex; flex-direction:column; gap:10px;">
-            <label class="market-toggle">
-              <input type="checkbox" id="tc-m-1" data-market="1" checked>
-              <span class="mt-slider"></span>
-              <span class="mt-label">BTC <span class="mt-id">(market 1)</span></span>
-            </label>
-            <label class="market-toggle">
-              <input type="checkbox" id="tc-m-0" data-market="0">
-              <span class="mt-slider"></span>
-              <span class="mt-label">ETH <span class="mt-id">(market 0)</span></span>
-            </label>
+            <div class="empty-cell" id="tc-markets-empty" data-i18n="loadingMarkets">正在加载市场…</div>
           </div>
           <button class="btn btn-primary" id="btn-save-markets" style="width:100%; margin-top:14px;"><i data-lucide="save" style="width:14px;height:14px;margin-right:6px;vertical-align:middle;"></i>Save Market Config</button>
           <div class="cfg-msg" id="tc-market-msg" style="margin-top:8px;"></div>
         </div>
         <!-- Actions -->
         <div>
-          <div class="cfg-label" style="margin-bottom:12px;" data-i18n="quickActions">Quick Actions</div>
+          <div class="cfg-label" style="margin-bottom:12px;" data-i18n="quickActions">快速操作</div>
           <div style="display:flex; flex-direction:column; gap:10px;">
             <button class="btn btn-pause" id="btn-pause-trading" style="width:100%;">
               <i data-lucide="pause-circle" style="width:16px;height:16px;margin-right:8px;vertical-align:middle;"></i>
-              <span id="btn-pause-text">Pause Trading</span>
+              <span id="btn-pause-text" data-i18n="pauseTrading">暂停交易</span>
             </button>
             <button class="btn btn-outline btn-danger-outline" id="btn-cancel-all" style="width:100%;">
-              <i data-lucide="x-circle" style="width:16px;height:16px;margin-right:8px;vertical-align:middle;"></i>Cancel All Orders
+              <i data-lucide="x-circle" style="width:16px;height:16px;margin-right:8px;vertical-align:middle;"></i><span data-i18n="cancelAllOrders">取消所有订单</span>
             </button>
           </div>
           <div class="cfg-msg" id="tc-action-msg" style="margin-top:8px;"></div>
@@ -1014,49 +1046,63 @@ tr:hover td { background:var(--bg-card-hover); }
     </div>
 
     <div class="strat-grid">
+      <div class="card" id="maker-card" style="grid-column:1 / -1;">
+        <div class="card-header">
+          <div>
+            <div class="card-title" data-i18n="makerQuote">做市报价</div>
+            <div class="card-subtitle" data-i18n="makerSub">中间价双边 ALO 做市 · 库存偏斜减仓，不用 IOC 强平</div>
+          </div>
+          <span class="badge badge-warn" id="maker-status-badge">○ 未启用</span>
+        </div>
+        <!-- All maker_quote params are generated by app.js (see MQ_PARAMS). -->
+        <div id="mq-fields" style="display:grid; grid-template-columns:repeat(auto-fill, minmax(190px, 1fr)); gap:6px 14px; margin-bottom:12px;"></div>
+        <div id="mq-toggles" style="display:flex; flex-wrap:wrap; gap:8px 24px; margin-bottom:12px;"></div>
+        <button class="btn btn-primary" id="btn-apply-maker" style="width:100%;" data-i18n="applyMaker">应用做市策略</button>
+        <div class="cfg-msg" id="mq-msg"></div>
+      </div>
       <div class="card">
         <div class="card-header">
-          <div><div class="card-title" id="strat-name">Grid Strategy</div><div class="card-subtitle">Configuration</div></div>
-          <span class="badge badge-up">● Active</span>
+          <div><div class="card-title" id="strat-name" data-i18n="gridStrategy">网格策略</div><div class="card-subtitle" data-i18n="configuration">参数配置</div></div>
+          <span class="badge" id="grid-status-badge">○ 未启用</span>
         </div>
-        <div class="cfg-group"><label class="cfg-label">Grid Count</label><input type="number" class="cfg-input" id="cfg-gc" value="6" min="4" max="50"></div>
-        <div class="cfg-group"><label class="cfg-label" data-i18n="investPerGrid">Investment per Grid ($)</label><input type="number" class="cfg-input" id="cfg-inv" value="8" min="1" max="100"></div>
-        <div class="cfg-group"><label class="cfg-label" data-i18n="priceDeviation">Price Deviation (%)</label><input type="number" class="cfg-input" id="cfg-dev" value="0.012" step="0.001" min="0.001" max="0.1"></div>
-        <button class="btn btn-primary" id="btn-apply" style="width:100%;">Apply Changes</button>
+        <div class="cfg-group"><label class="cfg-label" data-i18n="gridCount">网格数量</label><input type="number" class="cfg-input" id="cfg-gc" value="6" min="4" max="50"></div>
+        <div class="cfg-group"><label class="cfg-label" data-i18n="investPerGrid">每格投资 ($)</label><input type="number" class="cfg-input" id="cfg-inv" value="8" min="1" max="100"></div>
+        <div class="cfg-group"><label class="cfg-label" data-i18n="priceDeviation">价格偏差 (%)</label><input type="number" class="cfg-input" id="cfg-dev" value="0.012" step="0.001" min="0.001" max="0.1"></div>
+        <button class="btn btn-primary" id="btn-apply" style="width:100%;" data-i18n="applyChanges">应用更改</button>
         <div class="cfg-msg" id="cfg-msg"></div>
       </div>
       <div class="card">
-        <div class="card-header"><div class="card-title" data-i18n="performance">Performance</div><span class="badge badge-info">Live</span></div>
-        <div class="info-row"><span class="info-k" data-i18n="totalTrades">Total Trades</span><span class="info-v" id="sp-trades">0</span></div>
-        <div class="info-row"><span class="info-k">Total P&amp;L</span><span class="info-v" id="sp-pnl">$0.00</span></div>
-        <div class="info-row"><span class="info-k" data-i18n="activeMarkets">Active Markets</span><span class="info-v" id="sp-markets">—</span></div>
-        <div class="info-row"><span class="info-k">Risk: SL / TP</span><span class="info-v">3% / 5%</span></div>
-        <div class="info-row"><span class="info-k" data-i18n="maxLeverage">Max Leverage</span><span class="info-v">5x</span></div>
-        <div class="info-row"><span class="info-k">Max Open Orders</span><span class="info-v">8</span></div>
+        <div class="card-header"><div class="card-title" data-i18n="performance">业绩表现</div><span class="badge badge-info">Live</span></div>
+        <div class="info-row"><span class="info-k" data-i18n="totalTrades">总交易数</span><span class="info-v" id="sp-trades">0</span></div>
+        <div class="info-row"><span class="info-k" data-i18n="totalPnl">总盈亏</span><span class="info-v" id="sp-pnl">$0.00</span></div>
+        <div class="info-row"><span class="info-k" data-i18n="activeMarkets">激活市场</span><span class="info-v" id="sp-markets">—</span></div>
+        <div class="info-row"><span class="info-k" data-i18n="riskSlTp">风控：止损 / 止盈</span><span class="info-v">3% / 5%</span></div>
+        <div class="info-row"><span class="info-k" data-i18n="maxLeverage">最大杠杆</span><span class="info-v">5x</span></div>
+        <div class="info-row"><span class="info-k" data-i18n="maxOpenOrders">最大挂单数</span><span class="info-v">8</span></div>
       </div>
       <!-- DCA Strategy Card -->
       <div class="card">
         <div class="card-header">
-          <div><div class="card-title">DCA Strategy</div><div class="card-subtitle" data-i18n="dcaSub">Dollar-Cost Averaging</div></div>
-          <span class="badge badge-warn" id="dca-status-badge">○ Inactive</span>
+          <div><div class="card-title">DCA Strategy</div><div class="card-subtitle" data-i18n="dcaSub">定投策略</div></div>
+          <span class="badge badge-warn" id="dca-status-badge">○ 未启用</span>
         </div>
-        <div class="cfg-group"><label class="cfg-label" data-i18n="buyInterval">Buy Interval (hours)</label><input type="number" class="cfg-input" id="cfg-dca-interval" value="4" min="1" max="168"></div>
-        <div class="cfg-group"><label class="cfg-label" data-i18n="amountPerBuy">Amount per Buy ($)</label><input type="number" class="cfg-input" id="cfg-dca-amount" value="5" min="1" max="50"></div>
-        <div class="cfg-group"><label class="cfg-label" data-i18n="dipThreshold">Dip Threshold (%)</label><input type="number" class="cfg-input" id="cfg-dca-dip" value="2" step="0.5" min="0" max="20"></div>
-        <button class="btn btn-outline" id="btn-activate-dca" style="width:100%;" data-i18n="activateStrategy">Activate DCA Strategy</button>
+        <div class="cfg-group"><label class="cfg-label" data-i18n="buyInterval">买入间隔 (小时)</label><input type="number" class="cfg-input" id="cfg-dca-interval" value="4" min="1" max="168"></div>
+        <div class="cfg-group"><label class="cfg-label" data-i18n="amountPerBuy">每次买入 ($)</label><input type="number" class="cfg-input" id="cfg-dca-amount" value="5" min="1" max="50"></div>
+        <div class="cfg-group"><label class="cfg-label" data-i18n="dipThreshold">下跌阈值 (%)</label><input type="number" class="cfg-input" id="cfg-dca-dip" value="2" step="0.5" min="0" max="20"></div>
+        <button class="btn btn-outline" id="btn-activate-dca" style="width:100%;" data-i18n="activateStrategy">启用策略</button>
         <div class="cfg-msg" id="dca-msg"></div>
       </div>
       <!-- Trend Following Strategy Card -->
       <div class="card">
         <div class="card-header">
-          <div><div class="card-title">Trend Following</div><div class="card-subtitle" data-i18n="trendSub">EMA Crossover</div></div>
-          <span class="badge badge-warn" id="trend-status-badge">○ Inactive</span>
+          <div><div class="card-title">Trend Following</div><div class="card-subtitle" data-i18n="trendSub">EMA交叉 + RSI</div></div>
+          <span class="badge badge-warn" id="trend-status-badge">○ 未启用</span>
         </div>
-        <div class="cfg-group"><label class="cfg-label" data-i18n="fastEma">Fast EMA Period</label><input type="number" class="cfg-input" id="cfg-trend-fast" value="7" min="3" max="50"></div>
-        <div class="cfg-group"><label class="cfg-label" data-i18n="slowEma">Slow EMA Period</label><input type="number" class="cfg-input" id="cfg-trend-slow" value="21" min="10" max="200"></div>
-        <div class="cfg-group"><label class="cfg-label" data-i18n="stopLoss">Stop Loss (%)</label><input type="number" class="cfg-input" id="cfg-trend-sl" value="3" step="0.5" min="0.5" max="20"></div>
-        <div class="cfg-group"><label class="cfg-label" data-i18n="takeProfit">Take Profit (%)</label><input type="number" class="cfg-input" id="cfg-trend-tp" value="6" step="0.5" min="1" max="50"></div>
-        <button class="btn btn-outline" id="btn-activate-trend" style="width:100%;" data-i18n="activateStrategy">Activate Trend Strategy</button>
+        <div class="cfg-group"><label class="cfg-label" data-i18n="fastEma">快速EMA周期</label><input type="number" class="cfg-input" id="cfg-trend-fast" value="7" min="3" max="50"></div>
+        <div class="cfg-group"><label class="cfg-label" data-i18n="slowEma">慢速EMA周期</label><input type="number" class="cfg-input" id="cfg-trend-slow" value="21" min="10" max="200"></div>
+        <div class="cfg-group"><label class="cfg-label" data-i18n="stopLoss">止损 (%)</label><input type="number" class="cfg-input" id="cfg-trend-sl" value="3" step="0.5" min="0.5" max="20"></div>
+        <div class="cfg-group"><label class="cfg-label" data-i18n="takeProfit">止盈 (%)</label><input type="number" class="cfg-input" id="cfg-trend-tp" value="6" step="0.5" min="1" max="50"></div>
+        <button class="btn btn-outline" id="btn-activate-trend" style="width:100%;" data-i18n="activateStrategy">启用策略</button>
         <div class="cfg-msg" id="trend-msg"></div>
       </div>
     </div>
@@ -1065,75 +1111,76 @@ tr:hover td { background:var(--bg-card-hover); }
   <!-- ═══ PORTFOLIO PAGE ═══ -->
   <div id="page-portfolio" class="page">
     <div class="stats-grid">
-      <div class="card stat-card"><div class="stat-icon"><i data-lucide="wallet"></i></div><div class="stat-info"><div class="label">Equity</div><div class="value" id="pf-equity">$0.00</div></div></div>
-      <div class="card stat-card"><div class="stat-icon"><i data-lucide="landmark"></i></div><div class="stat-info"><div class="label">Available</div><div class="value" id="pf-avail">$0.00</div></div></div>
-      <div class="card stat-card"><div class="stat-icon"><i data-lucide="layers"></i></div><div class="stat-info"><div class="label">Positions</div><div class="value" id="pf-pos-count">0</div></div></div>
-      <div class="card stat-card"><div class="stat-icon"><i data-lucide="list-ordered"></i></div><div class="stat-info"><div class="label">Open Orders</div><div class="value" id="pf-ord-count">0</div></div></div>
+      <div class="card stat-card"><div class="stat-icon"><i data-lucide="wallet"></i></div><div class="stat-info"><div class="label" data-i18n="equity">净值</div><div class="value" id="pf-equity">$0.00</div></div></div>
+      <div class="card stat-card"><div class="stat-icon"><i data-lucide="landmark"></i></div><div class="stat-info"><div class="label" data-i18n="available">可用余额</div><div class="value" id="pf-avail">$0.00</div></div></div>
+      <div class="card stat-card"><div class="stat-icon"><i data-lucide="layers"></i></div><div class="stat-info"><div class="label" data-i18n="positions">持仓</div><div class="value" id="pf-pos-count">0</div></div></div>
+      <div class="card stat-card"><div class="stat-icon"><i data-lucide="list-ordered"></i></div><div class="stat-info"><div class="label" data-i18n="openOrders">挂单数</div><div class="value" id="pf-ord-count">0</div></div></div>
     </div>
     <div class="card" style="margin-bottom:20px;">
-      <div class="card-header"><div class="card-title">Positions</div></div>
-      <table><thead><tr><th>Market</th><th>Side</th><th>Size</th><th>Entry</th><th>Mark</th><th class="td-r">Unrealized P&amp;L</th></tr></thead>
-      <tbody id="pf-pos-tbody"><tr><td colspan="6" class="empty-cell">No positions</td></tr></tbody></table>
+      <div class="card-header"><div class="card-title" data-i18n="positions">持仓</div></div>
+      <table><thead><tr><th data-i18n="market">市场</th><th data-i18n="side">方向</th><th data-i18n="size">数量</th><th data-i18n="entry">开仓价</th><th data-i18n="mark">标记价</th><th class="td-r" data-i18n="unrealizedHeader">未实现盈亏</th></tr></thead>
+      <tbody id="pf-pos-tbody"><tr><td colspan="6" class="empty-cell" data-i18n="noPositionsShort">暂无持仓</td></tr></tbody></table>
     </div>
     <div class="card">
-      <div class="card-header"><div class="card-title">Open Orders</div></div>
-      <table><thead><tr><th>ID</th><th>Market</th><th>Side</th><th>Price</th><th>Qty</th><th>Filled</th><th>Status</th></tr></thead>
-      <tbody id="pf-ord-tbody"><tr><td colspan="7" class="empty-cell">No open orders</td></tr></tbody></table>
+      <div class="card-header"><div class="card-title" data-i18n="openOrders">挂单数</div></div>
+      <table><thead><tr><th>ID</th><th data-i18n="market">市场</th><th data-i18n="side">方向</th><th data-i18n="price">价格</th><th data-i18n="qty">数量</th><th data-i18n="filled">已成交</th><th data-i18n="status">状态</th></tr></thead>
+      <tbody id="pf-ord-tbody"><tr><td colspan="7" class="empty-cell" data-i18n="noOrders">暂无挂单</td></tr></tbody></table>
     </div>
   </div>
 
   <!-- ═══ HISTORY PAGE ═══ -->
   <div id="page-history" class="page">
     <div class="card-header" style="margin-bottom:20px;">
-      <div><div class="card-title" style="font-size:24px;" data-i18n="tradeHistory">Trade History</div><div class="card-subtitle" data-i18n="fullAuditTrail">Full audit trail of all executed trades</div></div>
+      <div><div class="card-title" style="font-size:24px;" data-i18n="tradeHistory">交易历史</div><div class="card-subtitle" data-i18n="fullAuditTrail">所有已执行交易的完整记录</div></div>
       <div style="display:flex;gap:10px;">
-        <button class="btn btn-outline" id="btn-export"><i data-lucide="download" style="width:14px;height:14px;margin-right:6px;vertical-align:middle;"></i>Export CSV</button>
+        <button class="btn btn-outline" id="btn-export"><i data-lucide="download" style="width:14px;height:14px;margin-right:6px;vertical-align:middle;"></i data-i18n="exportCsv">导出CSV</button>
       </div>
     </div>
     <div class="stats-grid" style="margin-bottom:20px;">
-      <div class="card stat-card"><div class="stat-icon"><i data-lucide="trending-up"></i></div><div class="stat-info"><div class="label" data-i18n="totalPnl">Total PNL</div><div class="value" id="hc-pnl">$0.00</div></div></div>
-      <div class="card stat-card"><div class="stat-icon"><i data-lucide="circle-check-big"></i></div><div class="stat-info"><div class="label">Closed Trades</div><div class="value" id="hc-closed-trades">0</div></div></div>
-      <div class="card stat-card"><div class="stat-icon"><i data-lucide="activity"></i></div><div class="stat-info"><div class="label" data-i18n="volume">Volume</div><div class="value" id="hc-volume">$0</div></div></div>
-      <div class="card stat-card"><div class="stat-icon"><i data-lucide="timer"></i></div><div class="stat-info"><div class="label" data-i18n="avgDuration">Avg Duration</div><div class="value" id="hc-duration">—</div></div></div>
+      <div class="card stat-card"><div class="stat-icon"><i data-lucide="trending-up"></i></div><div class="stat-info"><div class="label" data-i18n="totalPnl">总盈亏</div><div class="value" id="hc-pnl">$0.00</div></div></div>
+      <div class="card stat-card"><div class="stat-icon"><i data-lucide="circle-check-big"></i></div><div class="stat-info"><div class="label">已平仓笔数</div><div class="value" id="hc-closed-trades">0</div></div></div>
+      <div class="card stat-card"><div class="stat-icon"><i data-lucide="activity"></i></div><div class="stat-info"><div class="label" data-i18n="volume">成交量</div><div class="value" id="hc-volume">$0</div></div></div>
+      <div class="card stat-card"><div class="stat-icon"><i data-lucide="timer"></i></div><div class="stat-info"><div class="label" data-i18n="avgDuration">平均持仓时间</div><div class="value" id="hc-duration">—</div></div></div>
     </div>
     <div class="filter-bar">
-      <div class="filter-search-wrap"><i data-lucide="search"></i><input type="text" class="filter-search" id="h-search" placeholder="Search by asset, side..."></div>
+      <div class="filter-search-wrap"><i data-lucide="search"></i><input type="text" class="filter-search" id="h-search" placeholder="按资产、方向搜索..." data-i18n-placeholder="searchByAsset"></div>
       <div class="filter-group">
-        <button class="fpill active" data-asset="all">ALL</button>
-        <button class="fpill" data-asset="BTC">BTC</button>
-        <button class="fpill" data-asset="ETH">ETH</button>
+        <button class="fpill active" data-asset="all">全部</button>
       </div>
     </div>
     <div class="card" style="margin-bottom:16px;">
-      <div class="card-header"><div class="card-title">Position P&L Summary</div></div>
+      <div class="card-header"><div class="card-title" data-i18n="posSummary">持仓盈亏汇总</div></div>
       <table>
-        <thead><tr><th>Asset</th><th>Closed Trades</th><th>Avg Hold</th><th class="td-r">Total P&L</th></tr></thead>
-        <tbody id="pos-summary-tbody"><tr><td colspan="4" class="empty-cell">No data</td></tr></tbody>
+        <thead><tr><th data-i18n="asset">资产</th><th data-i18n="closedTrades">已平仓笔数</th><th data-i18n="avgHold">平均持仓</th><th class="td-r">总盈亏</th></tr></thead>
+        <tbody id="pos-summary-tbody"><tr><td colspan="4" class="empty-cell" data-i18n="noData">暂无数据</td></tr></tbody>
       </table>
     </div>
     <div class="card" style="padding:0; overflow:hidden;">
-      <table><thead><tr><th data-i18n="time">Time</th><th data-i18n="asset">Asset</th><th>Action</th><th data-i18n="side">Side</th><th data-i18n="price">Price</th><th data-i18n="qty">Qty</th><th class="td-r" data-i18n="pnl">PNL</th></tr></thead>
-      <tbody id="history-tbody"><tr><td colspan="7" class="empty-cell" data-i18n="noHistory">No trade history</td></tr></tbody></table>
+      <table><thead><tr><th data-i18n="time">时间</th><th data-i18n="asset">资产</th><th data-i18n="action">动作</th><th data-i18n="side">方向</th><th data-i18n="price">价格</th><th data-i18n="qty">数量</th><th class="td-r" data-i18n="pnl">盈亏</th></tr></thead>
+      <tbody id="history-tbody"><tr><td colspan="7" class="empty-cell" data-i18n="noHistory">暂无交易历史</td></tr></tbody></table>
     </div>
   </div>
 
   <!-- ═══ SETTINGS PAGE ═══ -->
   <div id="page-settings" class="page">
     <div class="sec" style="margin-bottom:12px;">
-      <div class="sec-head"><div><div class="kicker" data-i18n="networkKicker">ACTIVE CONNECTION · RESTART TO SWITCH</div><div class="sec-title" data-i18n="networkTitle">NETWORK</div></div><span class="pill" id="network-active">—</span></div>
+      <div class="sec-head"><div><div class="kicker" data-i18n="networkKicker">当前连接 · 切换需重启</div><div class="sec-title" data-i18n="networkTitle">网络</div></div><span class="pill" id="network-active">—</span></div>
       <div class="sec-body">
         <div class="network-options">
-          <label class="network-option"><input type="radio" name="live-venue" id="network-lighter-mainnet" value="lighter-mainnet"><div class="network-name">Lighter Mainnet <span class="network-active" id="network-lighter-mainnet-active"></span></div><div class="network-meta">USDC · Crypto perpetuals<br>chain ID 304</div></label>
-          <label class="network-option"><input type="radio" name="live-venue" id="network-lighter-robinhood" value="lighter-robinhood"><div class="network-name">Lighter · Robinhood Chain <span class="network-active" id="network-lighter-robinhood-active"></span></div><div class="network-meta">USDG · Crypto &amp; stock perpetuals<br>chain ID 466324</div></label>
-          <label class="network-option"><input type="radio" name="live-venue" id="network-arcus-mainnet" value="arcus-mainnet"><div class="network-name">Arcus Mainnet <span class="network-active" id="network-arcus-mainnet-active"></span></div><div class="network-meta">USD · Equities, crypto &amp; commodity perps<br>Ed25519 API key</div></label>
-          <label class="network-option"><input type="radio" name="live-venue" id="network-arcus-testnet" value="arcus-testnet"><div class="network-name">Arcus Testnet <span class="network-active" id="network-arcus-testnet-active"></span></div><div class="network-meta">Paper collateral · Integration testing<br>Ed25519 API key</div></label>
+          <label class="network-option"><input type="radio" name="live-venue" id="network-lighter-mainnet" value="lighter-mainnet"><div class="network-name">Lighter 主网 <span class="network-active" id="network-lighter-mainnet-active"></span></div><div class="network-meta"><span data-i18n="lighterDesc">USDC · 加密永续</span><br>链 ID 304</div></label>
+          <label class="network-option"><input type="radio" name="live-venue" id="network-lighter-robinhood" value="lighter-robinhood"><div class="network-name">Lighter · Robinhood 链 <span class="network-active" id="network-lighter-robinhood-active"></span></div><div class="network-meta"><span data-i18n="robinhoodDesc">USDG · 加密与股票永续</span><br>链 ID 466324</div></label>
+          <label class="network-option"><input type="radio" name="live-venue" id="network-arcus-mainnet" value="arcus-mainnet"><div class="network-name">Arcus 主网 <span class="network-active" id="network-arcus-mainnet-active"></span></div><div class="network-meta"><span data-i18n="arcusDesc">USD · 股票、加密与商品永续</span><br><span data-i18n="ed25519">Ed25519 API 密钥</span></div></label>
+          <label class="network-option"><input type="radio" name="live-venue" id="network-arcus-testnet" value="arcus-testnet"><div class="network-name">Arcus 测试网 <span class="network-active" id="network-arcus-testnet-active"></span></div><div class="network-meta"><span data-i18n="arcusTestDesc">模拟保证金 · 联调测试</span><br>Ed25519 API 密钥</div></label>
+          <label class="network-option"><input type="radio" name="live-venue" id="network-aster-mainnet" value="aster-mainnet"><div class="network-name">Aster 主网 <span class="network-active" id="network-aster-mainnet-active"></span></div><div class="network-meta"><span data-i18n="asterDesc">USDT · Aster Pro 期货 V3</span><br><span data-i18n="apiWalletSigner">API 钱包签名器</span></div></label>
+          <label class="network-option"><input type="radio" name="live-venue" id="network-hyperliquid-mainnet" value="hyperliquid-mainnet"><div class="network-name">Hyperliquid 主网 <span class="network-active" id="network-hyperliquid-mainnet-active"></span></div><div class="network-meta"><span data-i18n="hlDesc">USDC · HIP-3 / entropy.io 永续</span><br>API 钱包签名器</div></label>
+          <label class="network-option"><input type="radio" name="live-venue" id="network-hyperliquid-testnet" value="hyperliquid-testnet"><div class="network-name">Hyperliquid 测试网 <span class="network-active" id="network-hyperliquid-testnet-active"></span></div><div class="network-meta"><span data-i18n="hlTestDesc">测试网 USDC · 已上线的 HIP-3 币对</span><br>API 钱包签名器</div></label>
         </div>
         <div class="settings-grid" style="margin-top:14px;margin-bottom:0;">
-          <div><div class="info-row"><span class="info-k">REST API</span><span class="info-v" id="network-rest-url">—</span></div><div class="info-row"><span class="info-k">WebSocket</span><span class="info-v" id="network-ws-url">—</span></div><div class="info-row"><span class="info-k">Signer chain ID</span><span class="info-v" id="network-chain-id">—</span></div></div>
-          <div><div class="note" data-i18n="networkCredentials">Mainnet and Robinhood Chain use separate account credentials. Update the account index, API key index and private key below before switching.</div><button class="btn btn-primary" id="btn-save-network" style="width:100%;margin-top:12px;" data-i18n="saveNetwork">Use selected network after restart</button><div class="cfg-msg" id="network-msg"></div></div>
+          <div><div class="info-row"><span class="info-k" data-i18n="restApi">REST 接口</span><span class="info-v" id="network-rest-url">—</span></div><div class="info-row"><span class="info-k" data-i18n="websocket">WebSocket</span><span class="info-v" id="network-ws-url">—</span></div><div class="info-row"><span class="info-k" data-i18n="signerChain">签名链 ID</span><span class="info-v" id="network-chain-id">—</span></div><div class="info-row"><span class="info-k" data-i18n="feeTier">Fee tier</span><span class="info-v" id="network-fee-tier">—</span></div><div class="info-row"><span class="info-k" data-i18n="crossDex">Cross-dex basis</span><span class="info-v" id="network-cross-dex">—</span></div><div class="info-row"><span class="info-k" data-i18n="strategySource">Strategy source</span><span class="info-v" id="network-strategy-source">—</span></div></div>
+          <div><div class="note" data-i18n="networkCredentials">各 venue 使用相互隔离的凭据。Aster V3 使用子账户 user 地址和 API 钱包签名器。</div><button class="btn btn-primary" id="btn-save-network" style="width:100%;margin-top:12px;" data-i18n="saveNetwork">重启后使用所选网络</button><div class="cfg-msg" id="network-msg"></div></div>
         </div>
       </div>
-      <div class="sec-foot"><div data-i18n="networkFootL">CURRENT CONNECTION STAYS UNCHANGED</div><div data-i18n="networkFootR">SELECTION IS SAVED TO .ENV</div></div>
+      <div class="sec-foot"><div data-i18n="networkFootL">当前连接不会立即改变</div><div data-i18n="networkFootR">选择保存到 .env</div></div>
     </div>
     <!-- ═══ 环境变量 ═══
          这些值在**进程启动时**读入；凭据按网络前缀写入同一个 .env。
@@ -1141,111 +1188,139 @@ tr:hover td { background:var(--bg-card-hover); }
     <div class="sec" style="margin-bottom:12px;">
       <div class="sec-head">
         <div>
-          <div class="kicker" data-i18n="envKicker">READ AT PROCESS START · RESTART REQUIRED</div>
-          <div class="sec-title" data-i18n="envTitle">ENVIRONMENT</div>
+          <div class="kicker" data-i18n="envKicker">进程启动时读入 · 需重启生效</div>
+          <div class="sec-title" data-i18n="envTitle">环境变量</div>
         </div>
         <span class="pill" id="env-path">.env</span>
       </div>
       <div class="sec-body">
         <div class="note" style="margin-bottom:14px;">
-          <b data-i18n="envWarnTag">SECURITY</b>
-          <span data-i18n="envWarn">This panel has no authentication and the live process binds 0.0.0.0. Anyone who can reach this port can edit these values. The secret key is write-only — it is never sent back to the browser.</span>
+          <b data-i18n="envWarnTag">安全</b>
+          <span data-i18n="envWarn">写操作接口受进程级 Dashboard 凭据保护；仍应只在可信网络访问。密钥为只写字段，后端不会把明文返回浏览器。</span>
+        </div>
+        <div id="credentials-lighter" class="venue-credentials" data-credential-venue="lighter">
+          <div class="settings-grid" style="margin-bottom:14px;">
+            <div>
+              <div class="form-group"><label class="form-label" data-i18n="lighterAccount">Lighter 账户序号</label><input type="text" class="form-input" data-credential-key="LIGHTER_ACCOUNT_INDEX" placeholder="—"></div>
+              <div class="form-group"><label class="form-label" data-i18n="lighterApi">Lighter API 密钥序号</label><input type="text" class="form-input" data-credential-key="LIGHTER_API_KEY_INDEX" placeholder="—"></div>
+            </div>
+            <div class="form-group">
+              <label class="form-label" data-i18n="lighterSecret">Lighter 密钥<span data-i18n="writeOnly">(write-only)</span></label>
+              <div class="info-row" style="padding:9px 0;border-bottom:none;"><span class="info-k" data-i18n="currentValue">当前</span><span class="info-v" data-secret-status="LIGHTER_SECRET_KEY">—</span></div>
+              <input type="password" class="form-input" data-secret-key="LIGHTER_SECRET_KEY" autocomplete="new-password" placeholder="leaving this blank keeps the current secret" data-i18n-placeholder="secretKeep">
+            </div>
+          </div>
+        </div>
+        <div id="credentials-arcus" class="venue-credentials" data-credential-venue="arcus" hidden>
+          <div class="settings-grid" style="margin-bottom:14px;">
+            <div>
+              <div class="form-group"><label class="form-label" data-i18n="arcusKey">Arcus API 密钥</label><input type="text" class="form-input" data-credential-key="ARCUS_API_KEY" placeholder="—"></div>
+              <div class="form-group"><label class="form-label" data-i18n="arcusWallet">Arcus 钱包地址</label><input type="text" class="form-input" data-credential-key="ARCUS_ADDRESS" placeholder="0x…"></div>
+              <div class="form-group"><label class="form-label" data-i18n="arcusIndex">Arcus 账户序号</label><input type="text" class="form-input" data-credential-key="ARCUS_ACCOUNT_INDEX" placeholder="0–9"></div>
+            </div>
+            <div class="form-group">
+              <label class="form-label" data-i18n="arcusSign">Arcus 签名密钥<span data-i18n="writeOnly">(write-only)</span></label>
+              <div class="info-row" style="padding:9px 0;border-bottom:none;"><span class="info-k" data-i18n="currentValue">当前</span><span class="info-v" data-secret-status="ARCUS_SIGNING_KEY">—</span></div>
+              <input type="password" class="form-input" data-secret-key="ARCUS_SIGNING_KEY" autocomplete="new-password" placeholder="leaving this blank keeps the current secret" data-i18n-placeholder="secretKeep">
+            </div>
+          </div>
+        </div>
+        <div id="credentials-aster" class="venue-credentials" data-credential-venue="aster" hidden>
+          <div class="settings-grid" style="margin-bottom:14px;">
+            <div>
+              <div class="form-group"><label class="form-label" data-i18n="asterWallet">Aster API 钱包公钥</label><input type="text" class="form-input" data-credential-key="ASTER_SIGNER_ADDRESS" placeholder="Pro API Wallet public address"></div>
+            </div>
+            <div class="form-group">
+              <label class="form-label" data-i18n="asterSigner">Aster 签名私钥<span data-i18n="writeOnly">(write-only)</span></label>
+              <div class="info-row" style="padding:9px 0;border-bottom:none;"><span class="info-k" data-i18n="currentValue">当前</span><span class="info-v" data-secret-status="ASTER_SIGNER_PRIVATE_KEY">—</span></div>
+              <input type="password" class="form-input" data-secret-key="ASTER_SIGNER_PRIVATE_KEY" autocomplete="new-password" placeholder="leaving this blank keeps the current secret" data-i18n-placeholder="secretKeep">
+            </div>
+          </div>
+        </div>
+        <div id="credentials-hyperliquid" class="venue-credentials" data-credential-venue="hyperliquid" hidden>
+          <div class="settings-grid" style="margin-bottom:14px;">
+            <div>
+              <div class="form-group"><label class="form-label" data-i18n="hlAccount">Hyperliquid 账户地址</label><input type="text" class="form-input" data-credential-key="HYPERLIQUID_ACCOUNT_ADDRESS" placeholder="0x…"></div>
+            </div>
+            <div class="form-group">
+              <label class="form-label" data-i18n="hlSigner">Hyperliquid 签名私钥<span data-i18n="writeOnly">(write-only)</span></label>
+              <div class="info-row" style="padding:9px 0;border-bottom:none;"><span class="info-k" data-i18n="currentValue">当前</span><span class="info-v" data-secret-status="HYPERLIQUID_SIGNER_PRIVATE_KEY">—</span></div>
+              <input type="password" class="form-input" data-secret-key="HYPERLIQUID_SIGNER_PRIVATE_KEY" autocomplete="new-password" placeholder="leaving this blank keeps the current secret" data-i18n-placeholder="secretKeep">
+            </div>
+          </div>
         </div>
         <div class="settings-grid" style="margin-bottom:0;">
-          <div class="card" style="border:none;padding:0;">
+          <div>
             <div class="form-group">
-              <label class="form-label">ACCOUNT INDEX</label>
-              <input type="text" class="form-input" id="env-account-index" placeholder="—">
-            </div>
-            <div class="form-group">
-              <label class="form-label">ARCUS WALLET ADDRESS</label>
-              <input type="text" class="form-input" id="env-arcus-address" placeholder="0x… (Arcus only)">
-            </div>
-            <div class="form-group">
-              <label class="form-label">LIGHTER_API_KEY_INDEX</label>
-              <input type="text" class="form-input" id="env-api-key-index" placeholder="—">
-            </div>
-            <div class="form-group">
-              <label class="form-label">RUST_LOG</label>
+              <label class="form-label" data-i18n="rustLog">RUST_LOG</label>
               <input type="text" class="form-input" id="env-rust-log" placeholder="info">
             </div>
             <div class="form-group">
-              <label class="form-label">TOKIO_WORKER_THREADS</label>
+              <label class="form-label" data-i18n="tokioThreads">TOKIO_WORKER_THREADS</label>
               <input type="text" class="form-input" id="env-worker-threads" placeholder="—">
             </div>
           </div>
-          <div class="card" style="border:none;padding:0;">
-            <div class="form-group">
-              <label class="form-label">EXCHANGE API SECRET KEY <span data-i18n="writeOnly">(write-only)</span></label>
-              <div class="info-row" style="padding:9px 0;border-bottom:none;">
-                <span class="info-k" data-i18n="currentValue">current</span>
-                <span class="info-v" id="env-secret-status">—</span>
-              </div>
-              <input type="password" class="form-input" id="env-secret-key" autocomplete="new-password"
-                     placeholder="留空 = 不修改 / leave blank to keep">
-              <div class="note" style="margin-top:8px;">
-                <span data-i18n="secretHint">Exchange API private key, not the wallet L1 key. Leaving this blank keeps the existing value.</span>
-              </div>
-            </div>
-            <button class="btn btn-primary" id="btn-save-env" style="width:100%;" data-i18n="saveEnv">Save network profile</button>
+          <div>
+            <div class="note" style="margin-bottom:10px;"><span data-i18n="secretHint">只能填写交易所签发的 API 凭据，不要填写钱包 L1 私钥。密钥留空表示保持原值。</span></div>
+            <button class="btn btn-primary" id="btn-save-env" style="width:100%;" data-i18n="saveEnv">保存网络凭据</button>
             <div class="cfg-msg" id="env-msg"></div>
           </div>
         </div>
       </div>
       <div class="sec-foot">
-        <div data-i18n="envFootL">ONE FILE · ISOLATED NETWORK PREFIXES</div>
-        <div data-i18n="envFootR">RESTART THE BOT TO APPLY</div>
+        <div data-i18n="envFootL">单一文件 · 两组网络前缀隔离</div>
+        <div data-i18n="envFootR">重启机器人后生效</div>
       </div>
     </div>
 
     <div class="settings-grid">
       <div class="card">
-        <div class="card-header"><div class="card-title" data-i18n="systemStatus">System Status</div></div>
-        <div class="info-row"><span class="info-k" data-i18n="botStatus">Bot Status</span><span class="info-v" id="set-status" style="color:var(--success);">Running</span></div>
-        <div class="info-row"><span class="info-k" data-i18n="apiConnection">API Connection</span><span class="info-v" id="set-conn" style="color:var(--success);">Stable</span></div>
-        <div class="info-row"><span class="info-k">Version</span><span class="info-v" id="set-version">—</span></div>
-        <div class="info-row"><span class="info-k">Exchange</span><span class="info-v" id="set-exchange">Lighter.xyz</span></div>
+        <div class="card-header"><div class="card-title" data-i18n="systemStatus">系统状态</div></div>
+        <div class="info-row"><span class="info-k" data-i18n="botStatus">机器人状态</span><span class="info-v" id="set-status" style="color:var(--success);">运行中</span></div>
+        <div class="info-row"><span class="info-k" data-i18n="apiConnection">API连接</span><span class="info-v" id="set-conn" style="color:var(--success);">稳定</span></div>
+        <div class="info-row"><span class="info-k" data-i18n="version">版本</span><span class="info-v" id="set-version">—</span></div>
+        <div class="info-row"><span class="info-k" data-i18n="venue">交易所</span><span class="info-v" id="set-exchange">—</span></div>
       </div>
       <div class="card">
-        <div class="card-header"><div class="card-title" data-i18n="riskLimits">Risk &amp; Leverage Controls</div></div>
+        <div class="card-header"><div class="card-title" data-i18n="riskLimits">风险限制</div></div>
         <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
           <div class="form-group">
-            <label class="form-label">Leverage Limit</label>
+            <label class="form-label" data-i18n="leverageLimit">杠杆上限</label>
             <div style="display:flex;align-items:center;gap:6px;">
               <input type="number" class="form-input" id="rc-leverage-limit" value="3" min="1" max="20" step="0.5" style="width:80px;">
               <span style="color:var(--text-sub);font-size:12px;">&times;</span>
             </div>
           </div>
           <div class="form-group">
-            <label class="form-label">Max Leverage (Risk)</label>
+            <label class="form-label" data-i18n="maxLeverageRisk">最大杠杆（风控）</label>
             <div style="display:flex;align-items:center;gap:6px;">
               <input type="number" class="form-input" id="rc-max-leverage" value="5" min="1" max="50" step="1" style="width:80px;">
               <span style="color:var(--text-sub);font-size:12px;">&times;</span>
             </div>
           </div>
           <div class="form-group">
-            <label class="form-label">Stop Loss</label>
+            <label class="form-label" data-i18n="stopLossLabel">止损</label>
             <div style="display:flex;align-items:center;gap:6px;">
               <input type="number" class="form-input" id="rc-stop-loss" value="3" min="0.5" max="50" step="0.5" style="width:80px;">
               <span style="color:var(--text-sub);font-size:12px;">%</span>
             </div>
           </div>
           <div class="form-group">
-            <label class="form-label">Take Profit</label>
+            <label class="form-label" data-i18n="takeProfitLabel">止盈</label>
             <div style="display:flex;align-items:center;gap:6px;">
               <input type="number" class="form-input" id="rc-take-profit" value="5" min="0.5" max="100" step="0.5" style="width:80px;">
               <span style="color:var(--text-sub);font-size:12px;">%</span>
             </div>
           </div>
           <div class="form-group">
-            <label class="form-label" data-i18n="maxDrawdown">Max Drawdown</label>
+            <label class="form-label" data-i18n="maxDrawdown">最大回撤</label>
             <div style="display:flex;align-items:center;gap:6px;">
               <input type="number" class="form-input" id="rc-max-drawdown" value="10" min="1" max="50" step="1" style="width:80px;">
               <span style="color:var(--text-sub);font-size:12px;">%</span>
             </div>
           </div>
           <div class="form-group">
-            <label class="form-label" data-i18n="dailyLoss">Daily Loss Limit</label>
+            <label class="form-label" data-i18n="dailyLoss">日内亏损</label>
             <div style="display:flex;align-items:center;gap:6px;">
               <input type="number" class="form-input" id="rc-daily-loss" value="5" min="1" max="50" step="1" style="width:80px;">
               <span style="color:var(--text-sub);font-size:12px;">%</span>
@@ -1253,15 +1328,15 @@ tr:hover td { background:var(--bg-card-hover); }
           </div>
         </div>
         <button class="btn btn-primary" id="btn-save-risk" style="width:100%; margin-top:16px;">
-          <i data-lucide="shield" style="width:14px;height:14px;margin-right:6px;vertical-align:middle;"></i>Save Risk Settings
+          <i data-lucide="shield" style="width:14px;height:14px;margin-right:6px;vertical-align:middle;"></i><span data-i18n="saveRisk">保存风控设置</span>
         </button>
         <div class="cfg-msg" id="rc-save-msg" style="margin-top:8px;"></div>
       </div>
       <div class="card">
-        <div class="card-header"><div class="card-title" data-i18n="theme">Theme</div></div>
-        <p style="color:var(--text-sub); font-size:13px; margin-bottom:16px;" data-i18n="themeDesc">Switch between light and dark mode for comfortable viewing.</p>
+        <div class="card-header"><div class="card-title" data-i18n="theme">主题</div></div>
+        <p style="color:var(--text-sub); font-size:13px; margin-bottom:16px;" data-i18n="themeDesc">切换亮色和暗色模式以获得舒适的浏览体验。</p>
         <button class="btn btn-outline" id="btn-theme-settings" style="width:100%;">
-          <i data-lucide="sun" style="width:14px;height:14px;margin-right:6px;vertical-align:middle;"></i><span data-i18n="toggleTheme">Toggle Theme</span>
+          <i data-lucide="sun" style="width:14px;height:14px;margin-right:6px;vertical-align:middle;"></i><span data-i18n="toggleTheme">切换主题</span>
         </button>
       </div>
     </div>
@@ -1270,7 +1345,7 @@ tr:hover td { background:var(--bg-card-hover); }
   <!-- 页脚跑马灯：全是实时值，没有装饰性文案 -->
   <div class="footbar">
     <div><b id="fb-strategy">—</b> · <span id="fb-markets">—</span></div>
-    <div><b id="fb-conn">DISCONNECTED</b> · PUSH <span id="fb-age">—</span> · ORDERS <span id="fb-orders">0</span> · <span id="fb-ver">—</span></div>
+    <div><b id="fb-conn">已断开</b> · <span data-i18n="pushWord">推送</span> <span id="fb-age">—</span> · <span data-i18n="ordersWord">挂单</span> <span id="fb-orders">0</span> · <span id="fb-ver">—</span></div>
   </div>
 </main>
 
@@ -1295,9 +1370,9 @@ tr:hover td { background:var(--bg-card-hover); }
 
   /* JS 生成的文案。DOM 里那些走 data-i18n，由 app.js 的 applyI18n() 统一处理；
      这里只装它管不到的动态串。app.js 切语言时会回调下面的 lang()。 */
-  var LANG = 'en';
+  var LANG = 'cn';
   var STR = {
-    en: { waiting:'WAITING FOR WS', live:'LIVE · 3S STATE PUSH', paused:'TRADING PAUSED',
+    en: { waiting:'等待 WS', live:'LIVE · 3S STATE PUSH', paused:'TRADING PAUSED',
           pausedTag:' · PAUSED', noOrders:'NO OPEN ORDERS', filled:'FILLED', idle:'IDLE',
           noHist:'NO EQUITY HISTORY', noData:'NO DATA', failed:'FETCH FAILED', pts:'PTS',
           conn:'LIVE', disconn:'DISCONNECTED', all:'ALL' },
@@ -1307,7 +1382,7 @@ tr:hover td { background:var(--bg-card-hover); }
           conn:'在线', disconn:'已断开', all:'全部' }
   };
   function s(k) { return (STR[LANG] || STR.en)[k]; }
-  STR.en.tapeIdle = 'WAITING FOR POSITION DATA'; STR.cn.tapeIdle = '等待持仓数据';
+  STR.en.tapeIdle = '等待中 FOR POSITION DATA'; STR.cn.tapeIdle = '等待持仓数据';
   STR.en.away = 'away'; STR.cn.away = '距市价';
   STR.en.flat = 'FLAT'; STR.cn.flat = '无持仓';
   STR.en.noFeed = 'no feed'; STR.cn.noFeed = '暂无行情';
@@ -1464,7 +1539,7 @@ tr:hover td { background:var(--bg-card-hover); }
     var el = $('rail'); if (!el) return;
     lastEventList = Array.isArray(events) ? events.slice(0, 200) : [];
     if (!lastEventList.length) {
-      el.innerHTML = '<div class="rail-empty" data-i18n="railEmpty">' + s('railEmpty') + '</div>';
+      el.innerHTML = '<div class="rail-empty" data-i18n="railEmpty">本次会话暂无事件</div>';
       txt('swarm-latest', '');
       return;
     }
@@ -1652,6 +1727,10 @@ tr:hover td { background:var(--bg-card-hover); }
     // 版本号只在 /api/status 里，WS 的 status 帧不带 version
     fetch('/api/status').then(function (r) { return r.json(); }).then(function (s) {
       if (s && s.version) txt('fb-ver', 'v' + s.version);
+      if (s && s.network) {
+        txt('hero-venue', String(s.network).replace(/-/g, ' ').toUpperCase());
+        showAsterOnlyPanels(s.network);
+      }
     }).catch(function () {});
   }
 
@@ -1736,6 +1815,10 @@ tr:hover td { background:var(--bg-card-hover); }
       if (eq !== null) { rollTo('mc-equity', lastEquity, eq, fmtEq); lastEquity = eq; }
       txt('hero-strategy', String(d.strategy || '—').toUpperCase());
       txt('fb-strategy', String(d.strategy || '—').toUpperCase());
+      if (d.network) {
+        txt('hero-venue', String(d.network).replace(/-/g, ' ').toUpperCase());
+        showAsterOnlyPanels(d.network);
+      }
       if (d.last_prices && typeof d.last_prices === 'object') {
         lastPrices = d.last_prices;         // 每 3s 一帧，行情条的跳动就来自这里
         renderTape();
@@ -1859,61 +1942,92 @@ tr:hover td { background:var(--bg-card-hover); }
      GET 只回公开键 + 密钥的"已配置/长度/后4位"；密钥输入框留空表示不修改，
      所以后端把空字符串当"跳过"，避免掩码占位符被写回去把密钥清空。 */
   var ENV_FIELDS = {
-    'env-account-index': 'EXCHANGE_ACCOUNT_INDEX',
-    'env-api-key-index': 'LIGHTER_API_KEY_INDEX',
-    'env-arcus-address': 'ARCUS_ADDRESS',
     'env-rust-log': 'RUST_LOG',
     'env-worker-threads': 'TOKIO_WORKER_THREADS'
   };
-  function loadEnv() {
-    fetch('/api/env').then(function (r) { return r.json(); }).then(function (d) {
+  var credentialVenue = 'lighter-mainnet';
+  function credentialKind(venue) {
+    if ((venue || '').indexOf('lighter-') === 0) return 'lighter';
+    if ((venue || '').indexOf('arcus-') === 0) return 'arcus';
+    if ((venue || '').indexOf('hyperliquid-') === 0) return 'hyperliquid';
+    if ((venue || '').indexOf('aster-') === 0) return 'aster';
+    return 'lighter';
+  }
+  function showCredentialGroup(venue) {
+    credentialVenue = venue;
+    document.querySelectorAll('.venue-credentials').forEach(function (group) {
+      group.hidden = group.getAttribute('data-credential-venue') !== credentialKind(venue);
+    });
+  }
+  function loadEnv(venue) {
+    venue = venue || credentialVenue;
+    showCredentialGroup(venue);
+    fetch('/api/env?venue=' + encodeURIComponent(venue)).then(function (r) { return r.json(); }).then(function (d) {
       Object.keys(ENV_FIELDS).forEach(function (id) {
         var el = $(id); if (el) el.value = (d.public && d.public[ENV_FIELDS[id]]) || '';
       });
+      document.querySelectorAll('[data-credential-key]').forEach(function (el) {
+        el.value = (d.public && d.public[el.getAttribute('data-credential-key')]) || '';
+      });
       txt('env-path', d.env_path || '.env');
-      var sec = d.secrets && d.secrets.EXCHANGE_SECRET_KEY;
-      txt('env-secret-status', !sec || !sec.configured
-        ? s('notSet')
-        : s('isSet') + ' · ' + sec.length + ' · \u2022\u2022\u2022\u2022' + sec.tail);
-    }).catch(function () { txt('env-secret-status', s('loadFailed')); });
+      document.querySelectorAll('[data-secret-status]').forEach(function (el) {
+        var sec = d.secrets && d.secrets[el.getAttribute('data-secret-status')];
+        el.textContent = !sec || !sec.configured
+          ? s('notSet')
+          : s('isSet');
+      });
+    }).catch(function () {
+      document.querySelectorAll('[data-secret-status]').forEach(function (el) { el.textContent = s('loadFailed'); });
+    });
   }
   var envBtn = $('btn-save-env');
   if (envBtn) envBtn.addEventListener('click', function () {
-    var payload = {};
+    var payload = { venue: credentialVenue };
     Object.keys(ENV_FIELDS).forEach(function (id) {
       var el = $(id); if (el && el.value.trim()) payload[ENV_FIELDS[id]] = el.value.trim();
     });
-    var sk = $('env-secret-key');
-    if (sk && sk.value.trim()) payload.EXCHANGE_SECRET_KEY = sk.value.trim();
-    if (!Object.keys(payload).length) { txt('env-msg', s('nothingToSave')); return; }
+    var group = $('credentials-' + credentialKind(credentialVenue));
+    if (group) {
+      group.querySelectorAll('[data-credential-key]').forEach(function (el) {
+        if (el.value.trim()) payload[el.getAttribute('data-credential-key')] = el.value.trim();
+      });
+      group.querySelectorAll('[data-secret-key]').forEach(function (el) {
+        if (el.value.trim()) payload[el.getAttribute('data-secret-key')] = el.value.trim();
+      });
+    }
+    if (Object.keys(payload).length === 1) { txt('env-msg', s('nothingToSave')); return; }
     txt('env-msg', s('saving'));
     fetch('/api/env', { method: 'POST', headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify(payload) })
       .then(function (r) { return r.json(); })
       .then(function (d) {
         if (d.status === 'ok') {
-          if (sk) sk.value = '';                       // 别把密钥留在 DOM 里
+          if (group) group.querySelectorAll('[data-secret-key]').forEach(function (el) { el.value = ''; });
           txt('env-msg', s('savedRestart'));
-          loadEnv();
+          loadEnv(credentialVenue);
         } else {
           txt('env-msg', (d.message || 'error'));
         }
       })
       .catch(function (e) { txt('env-msg', String(e)); });
   });
-  loadEnv();
+  loadEnv(credentialVenue);
 
   function loadNetwork() {
     fetch('/api/network').then(function (r) { return r.json(); }).then(function (d) {
-      var selected = ['lighter-mainnet','lighter-robinhood','arcus-mainnet','arcus-testnet'].indexOf(d.selected) >= 0 ? d.selected : 'lighter-mainnet';
+      var venues = ['lighter-mainnet','lighter-robinhood','arcus-mainnet','arcus-testnet','aster-mainnet','hyperliquid-mainnet','hyperliquid-testnet'];
+      var selected = venues.indexOf(d.selected) >= 0 ? d.selected : (venues.indexOf(d.active) >= 0 ? d.active : 'lighter-mainnet');
       var radio = $('network-' + selected); if (radio) radio.checked = true;
       txt('network-active', String(d.active || '').toUpperCase());
-      ['lighter-mainnet','lighter-robinhood','arcus-mainnet','arcus-testnet'].forEach(function (venue) {
+      venues.forEach(function (venue) {
         txt('network-' + venue + '-active', d.active === venue ? '● ACTIVE' : '');
       });
+      showCredentialGroup(selected);
+      loadEnv(selected);
       txt('network-rest-url', d.rest_url || '—');
       txt('network-ws-url', d.ws_url || '—');
       txt('network-chain-id', !d.chain_id ? 'N/A' : String(d.chain_id));
+      showAsterOnlyPanels(d.active);
     }).catch(function () { txt('network-msg', s('loadFailed')); });
   }
   var networkBtn = $('btn-save-network');
@@ -1926,6 +2040,9 @@ tr:hover td { background:var(--bg-card-hover); }
         txt('network-msg', d.status === 'ok' ? s('savedRestart') : (d.message || 'error'));
         if (d.status === 'ok' && d.requires_restart) { loadNetwork(); loadEnv(); }
       }).catch(function (e) { txt('network-msg', String(e)); });
+  });
+  document.querySelectorAll('input[name="live-venue"]').forEach(function (radio) {
+    radio.addEventListener('change', function () { if (radio.checked) loadEnv(radio.value); });
   });
   loadNetwork();
 
@@ -1941,6 +2058,89 @@ tr:hover td { background:var(--bg-card-hover); }
   requestAnimationFrame(nudgeCharts);
   setTimeout(nudgeCharts, 900);
   window.addEventListener('resize', nudgeCharts);
+
+  function isAsterVenue(venue) {
+    return (venue || '').indexOf('aster-') === 0;
+  }
+  function showAsterOnlyPanels(venue) {
+    var show = isAsterVenue(venue);
+    ['shadow-maker-section', 'hft-shadow-section'].forEach(function (id) {
+      var el = $(id);
+      if (el) el.hidden = !show;
+    });
+  }
+  function loadShadow() {
+    var section = $('shadow-maker-section');
+    if (section && section.hidden) return;
+    fetch('/api/shadow').then(function (r) { return r.json(); }).then(function (d) {
+      txt('shadow-state', !d.enabled ? 'DISABLED' : (d.collecting ? 'SHADOW ACTIVE' : 'SUSPENDED'));
+      if (!d.enabled) return;
+      var seconds = Number(d.runtime_seconds || 0);
+      txt('shadow-runtime', seconds >= 3600
+        ? (seconds / 3600).toFixed(1) + 'h'
+        : (seconds / 60).toFixed(1) + 'm');
+      txt('shadow-bbo', String(d.bbo_events || 0));
+      txt('shadow-lag', Number(d.mean_event_lag_ms || 0).toFixed(0) + 'ms');
+      txt('shadow-depth-lag', Number(d.mean_depth_lag_ms || 0).toFixed(0) + 'ms');
+      txt('shadow-eval', Number(d.mean_strategy_eval_micros || 0).toFixed(0) + 'µs');
+      txt('shadow-queue', '$' + Number(d.mean_queue_ahead_notional || 0).toFixed(0));
+      txt('shadow-requests', Number(d.estimated_order_requests_per_minute || 0).toFixed(1));
+      txt('shadow-amend-savings', String(d.modify_request_savings || 0));
+      txt('shadow-fills', String(d.virtual_fills || 0));
+      txt('shadow-volume', '$' + Number(d.virtual_volume || 0).toFixed(2));
+      txt('shadow-volume-hour', '$' + Number(d.virtual_volume_per_hour || 0).toFixed(2));
+      txt('shadow-active-quotes', String(d.active_quotes || 0));
+      txt('shadow-requotes', String(d.quote_requotes || 0));
+      txt('shadow-depth-misses', String(d.depth_visibility_misses || 0));
+      var markouts = {};
+      (d.markouts || []).forEach(function (m) { markouts[m.horizon_ms] = m; });
+      function mark(horizon, label) {
+        var m = markouts[horizon];
+        return label + ' ' + (!m || !m.samples ? '—' : Number(m.mean_bps).toFixed(2) + 'bps');
+      }
+      txt('shadow-markout', [mark(1000, '1s'), mark(5000, '5s'), mark(30000, '30s')].join(' · '));
+    }).catch(function () { txt('shadow-state', 'UNAVAILABLE'); });
+  }
+  function loadHftShadow() {
+    var section = $('hft-shadow-section');
+    if (section && section.hidden) return;
+    fetch('/api/hft-shadow').then(function (r) { return r.json(); }).then(function (d) {
+      txt('hft-shadow-state', !d.enabled ? 'DISABLED' : (d.collecting ? 'SHADOW ACTIVE' : 'SUSPENDED'));
+      var body = $('hft-shadow-body');
+      if (!body) return;
+      var profiles = d.profiles || [];
+      if (!profiles.length) {
+        body.innerHTML = '<tr><td colspan="11" class="empty-cell">暂无高频配置</td></tr>';
+        return;
+      }
+      function mark(metrics, horizon) {
+        var found = (metrics.markouts || []).find(function (m) { return m.horizon_ms === horizon; });
+        return !found || !found.samples ? '—' : Number(found.mean_bps).toFixed(2) + 'bps';
+      }
+      body.innerHTML = profiles.map(function (p) {
+        var m = p.metrics || {};
+        var lead = d.recommended_profile && p.name === d.recommended_profile;
+        return '<tr>' +
+          '<td>' + esc(p.name || '') + (p.toxic ? ' · TOXIC' : (lead ? ' · LEAD' : '')) + '</td>' +
+          '<td>' + Number(p.offset_bps || 0).toFixed(1) + 'bps</td>' +
+          '<td>' + Number(p.cooldown_ms || 0).toFixed(0) + 'ms</td>' +
+          '<td>$' + Number(m.mean_queue_ahead_notional || 0).toFixed(0) + '</td>' +
+          '<td>' + Number(m.estimated_order_requests_per_minute || 0).toFixed(1) + '</td>' +
+          '<td>' + String(m.modify_request_savings || 0) + '</td>' +
+          '<td>' + String(m.virtual_fills || 0) + '</td>' +
+          '<td>$' + Number(m.virtual_volume_per_hour || 0).toFixed(2) + '</td>' +
+          '<td>' + mark(m, 1000) + '</td>' +
+          '<td>' + mark(m, 5000) + '</td>' +
+          '<td>' + mark(m, 30000) + '</td>' +
+        '</tr>';
+      }).join('');
+      txt('hft-shadow-recommend', d.recommendation_reason || 'JOIN VS OFFSET · AMEND IN PLACE · TOXICITY PULL');
+    }).catch(function () { txt('hft-shadow-state', 'UNAVAILABLE'); });
+  }
+  loadShadow();
+  loadHftShadow();
+  setInterval(loadShadow, 3000);
+  setInterval(loadHftShadow, 3000);
   setInterval(loadHistory, 60000);
 })();
 </script>
