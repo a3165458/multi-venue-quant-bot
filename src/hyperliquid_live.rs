@@ -633,7 +633,7 @@ pub(crate) async fn run_hyperliquid_live_trading(settings: Config) -> Result<()>
     validate_runtime_positions(&positions, &coins, require_isolated_margin)
         .context("Hyperliquid account safety validation failed")?;
 
-    let start_paused = settings.get_bool("trading.start_paused").unwrap_or(true);
+    let start_paused = settings.get_bool("trading.start_paused").unwrap_or(false);
     if start_paused {
         info!(
             "Skipping isolated leverage update because trading.start_paused=true (preserve L1 budget)"

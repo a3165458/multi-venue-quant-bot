@@ -82,7 +82,7 @@ fn dashboard_uses_the_dedicated_4028_port_everywhere() {
 }
 
 #[test]
-fn aster_profile_is_paused_and_conservatively_bounded() {
+fn aster_profile_starts_live_and_is_conservatively_bounded() {
     let settings = config::Config::builder()
         .add_source(config::File::with_name("config/settings.aster.yaml"))
         .build()
@@ -92,7 +92,7 @@ fn aster_profile_is_paused_and_conservatively_bounded() {
         settings.get_string("exchange.environment").unwrap(),
         "mainnet"
     );
-    assert!(settings.get_bool("trading.start_paused").unwrap());
+    assert!(!settings.get_bool("trading.start_paused").unwrap());
     assert!(settings
         .get_bool("trading.require_isolated_margin")
         .unwrap());

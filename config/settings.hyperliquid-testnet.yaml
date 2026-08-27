@@ -3,7 +3,7 @@ exchange:
   environment: testnet
 
 trading:
-  start_paused: true
+  start_paused: false
   # Testnet primary-dex coins; HIP-3 "dex:NAME" coins work here too when the
   # builder dex exists on testnet.
   symbols: ["BTC"]

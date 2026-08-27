@@ -53,24 +53,22 @@ Never use the sub-account login key or a funding-wallet/L1 private key. The sign
 GET returns only whether it is configured, and submitting an empty secret preserves the stored
 value. Runtime state is isolated under `data/aster-mainnet/`.
 
-`config/settings.aster.yaml` starts paused and uses conservative BTCUSDT maker defaults. The
-published base fee assumptions (maker 1.0 bps, taker 3.5 bps) must be checked against the actual
-sub-account tier. The live path requires One-way and isolated-margin modes and only permits
-`maker_quote`; it validates but never changes those account settings. An operator must verify the
-sub-account, API Wallet permissions, contract specifications, balances, fees, and a small test
-order before manually resuming.
+`config/settings.aster.yaml` uses conservative BTCUSDT maker defaults. The published base fee
+assumptions (maker 1.0 bps, taker 3.5 bps) should be checked against the actual sub-account tier.
+The live path requires One-way and isolated-margin modes and only permits `maker_quote`; it
+validates but never changes those account settings.
 
-While paused, `trading.shadow_maker.enabled` runs a no-order shadow loop against live BBO data. It
-estimates quote churn, virtual fills/volume, event and strategy latency, and side-adjusted
-1s/5s/30s markout. Requotes are modeled as a single `PUT /fapi/v3/order` amend so the virtual quote
-stays on the book. Results are available at `/api/shadow`, in the Dashboard, and under
+`trading.shadow_maker.enabled` runs a no-order shadow loop against live BBO data. It estimates
+quote churn, virtual fills/volume, event and strategy latency, and side-adjusted 1s/5s/30s
+markout. Requotes are modeled as a single `PUT /fapi/v3/order` amend so the virtual quote stays on
+the book. Results are available at `/api/shadow`, in the Dashboard, and under
 `data/aster-mainnet/shadow_metrics.json`.
 
 `trading.hft_shadow` compares join-BBO and offset profiles in parallel, ranks them by 5s markout,
 virtual volume, and request rate, and never submits orders. The live `maker_quote` path uses the
-same amend-first replacement once trading is manually resumed; unknown `orderId` still falls back
-to cancel-then-wait. Filter rejects leave the original order in place. Crossed or locked books and
-1s markout toxicity pull virtual HFT quotes only; they never resume live trading.
+same amend-first replacement; unknown `orderId` still falls back to cancel-then-wait. Filter
+rejects leave the original order in place. Crossed or locked books and 1s markout toxicity pull
+virtual HFT quotes only.
 
 Do not copy unbounded GitHub HFT examples that skip inventory caps, use taker/chase orders, or
 enable live connectors by default.

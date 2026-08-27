@@ -1,8 +1,6 @@
-# maker_quote 策略验证/上线配置（Arcus mainnet）
+# maker_quote 策略配置（Arcus mainnet）
 # maker 经济学：post_only(ALO) 挂单按报价价成交，无 taker 滑点；费率按 Arcus maker 档。
-# 与 settings.arcus.yaml 的唯一差异：策略 = maker_quote，profitability 为 maker 口径。
-# 实盘切换 = 改 data/arcus-mainnet/strategy_config.json (name=maker_quote) + 本文件
-# profitability 段 + pm2 restart multi-venue-quant-bot（勿在未确认时直接切换）。
+# 与 settings.arcus.yaml 的差异：策略 = maker_quote，profitability 为 maker 口径。
 
 exchange:
   kind: arcus
@@ -46,10 +44,7 @@ trading:
     max_total_position_percent: 200
     risk_per_trade_percent: 1.5
 
-# maker 经济学：maker 信号 expected_edge_bps = spread_bps/2 = 3bps，
-# 单腿费 0（或按实盘 feetiers 实际 maker 费率调整），无滑点。
-# 净边缘 = 3.0 - (funding 1.0 + adverse 1.0) = 1.0bps；门槛 0.5bps 保留正余量
-# 但允许策略运行（>1.0 会把刚好 1.0bps 的边缘挡在门外）。
+# maker 经济学：expected_edge_bps = spread_bps/2。门槛略低于净边缘，避免把刚好达标的报价挡掉。
 profitability:
   enabled: true
   entry_fee_bps: 0.0

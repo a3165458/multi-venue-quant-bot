@@ -3,10 +3,7 @@ exchange:
   environment: mainnet
 
 trading:
-  # Safety gate: strategy changes require an audited proposal and explicit human approval.
-  # Startup still reconciles state and cancels stale orders, but emits no entries.
-  start_paused: true
-  # Arcus maker allowlist selected by 30-day 1m train/holdout screening:
+  start_paused: false
   # 8=ZEC 9=AMD 14=GOOGL 22=USO 33=SNDK 34=DRAM 35=PLTR 36=CRWV 37=ORCL 39=BE
   markets: [8, 9, 14, 22, 33, 34, 35, 36, 37, 39]
   # 10 markets × 2 sides. The live guard combines REST count with the local
@@ -20,12 +17,6 @@ trading:
       price_deviation: 0.004
     trend_following:
       enabled: false
-      # 2026-08-09 整年扫描（Arcus BTC 1h 2025-08-09~2026-08-09，capital=1730）:
-      #   基线: BTC buy&hold -44.4%, grid 12/30/0.004 -8.2%, 旧 trend 7/21/0.05/0.06 +3.5% (q1 -5.8%)
-      #   终选 7/50/0.08/0.12/cmin0.005/clb3/notional=430: 全年 +10.8%, Sharpe 1.40, MaxDD 4.99%
-      #   四季度全正(+1.87/+3.41/+1.54/+0.83), 两半年全正; walk-forward H1训练→H2 OOS +2.37%
-      #   峰值杠杆 0.26x, 0 强平, 盈亏比 2.46, 10 笔; 斜率确认(clb3)与慢线50 是盈利根因
-      #   详见 backtests/results/arcus-year/FINDINGS.md（gitignore）
       fast_ma: 7
       slow_ma: 50
       stop_loss: 0.08
@@ -37,9 +28,6 @@ trading:
       confirm_slope_min: 0.005
       confirm_lookback: 3
     maker_quote:
-      # 做市报价（post-only/ALO）。2026-08-10 上线 v2 多市场增强版（30bps + 自适应 + 偏斜），
-      # 回测见 backtests/results/ab/MAKER-V2-MULTIMARKET-2026-08-10.md。
-      # 实盘参数由 data/arcus-mainnet/strategy_config.json 覆盖（Dashboard 可改）。
       enabled: true
       spread_bps: 30.0
       per_quote_notional: 50

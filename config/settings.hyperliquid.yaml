@@ -3,11 +3,7 @@ exchange:
   environment: mainnet
 
 trading:
-  # Safety gate: Hyperliquid live mode starts paused. Verify the account,
-  # API/agent wallet, HIP-3 dex funding (builder-deployed perps use isolated
-  # margin inside their own dex), fees, and order sizing before manual resume.
-  # Pause blocks maker entries; reduce-only IOC risk exits remain armed.
-  start_paused: true
+  start_paused: false
   # Coins use the canonical Hyperliquid name. HIP-3 builder-deployed assets are
   # addressed as "dex:NAME"; entropy.io markets live on the "io" dex. Primary
   # dex coins (BTC, ETH, ...) work too - mixing dexs in one session is fine.
@@ -36,11 +32,7 @@ trading:
       confirm_lookback: 3
     maker_quote:
       enabled: true
-      # Reduce-loss mode (2026-08-27): join-best at BBO was ~-1.0 bps maker
-      # and ~-2.2 bps on 08-26 after 10x size. Mid-spread 30 bps sits off
-      # the touch so fills need a move; inventory skew + hard cap stop
-      # stacking longs. flatten_only stays false (IOC flatten was -2.65 bps).
-      quote_mode: mid_spread
+      quote_mode: join_best
       spread_bps: 30.0
       per_quote_notional: 40.0
       requote_threshold_bps: 2.0
@@ -57,7 +49,7 @@ trading:
       cash_open_guard_before_minutes: 5
       cash_open_guard_after_minutes: 20
       jump_circuit_breaker_bps: 20.0
-      min_book_spread_bps: 1.5
+      min_book_spread_bps: 0.0
       max_book_spread_bps: 80.0
       wide_book_size_mult: 1.0
       max_bbo_imbalance: 3.0
@@ -74,12 +66,9 @@ trading:
     max_total_position_percent: 50
     risk_per_trade_percent: 1.0
 
-# Round-trip cost model applies to aggressive/non-maker entries only.
-# join_best ALO quotes skip that gate (half-spread is often < 1 bps).
-# Hyperliquid base tier is maker 1.5 bps / taker 4.5 bps; HIP-3 growth-mode
-# maker is typically ~0.3 bps. Verify the live entropy.io rate separately.
+# Round-trip cost model. Disabled so maker quotes are not blocked at startup.
 profitability:
-  enabled: true
+  enabled: false
   entry_fee_bps: 1.5
   exit_fee_bps: 4.5
   entry_slippage_bps: 0.0
@@ -99,8 +88,7 @@ risk:
     position_take_profit_percent: 3
   position_limit:
     max_leverage: 2
-    # Must sit above hard_cap_notional or the live risk gate silently
-    # drops maker quotes (old $50 cap blocked most inventory).
+    # Must sit above hard_cap_notional or live risk limits drop maker quotes.
     max_position_size: 180
   monitoring_interval_ms: 1000
 

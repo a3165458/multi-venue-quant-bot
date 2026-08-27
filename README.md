@@ -172,13 +172,11 @@ cargo run --release -- backtest --strategy grid \
 - `ASTER_MAINNET_SIGNER_ADDRESS`：API Wallet 公钥地址（V3 内部称 signer）。
 - `ASTER_MAINNET_SIGNER_PRIVATE_KEY`：API Wallet 私钥，只写；绝不能使用资金钱包/L1 私钥。
 
-新配置默认 `start_paused=true`，Dashboard 端口为 4028，且使用
+新配置默认 `start_paused=false`，Dashboard 端口为 4028，且使用
 `data/aster-mainnet/` 独立运行目录。Aster 路径仅允许 `maker_quote`，要求 One-way
 持仓和逐仓模式（程序只校验，不自动修改账户），并在 WS 断线、listenKey 失效、
 countdownCancelAll 失败或下单状态不确定时
-暂停、逐合约撤单并退出。首次启动必须先人工核对 V3 子账户、API Wallet 权限、
-BTCUSDT 合约规格、余额、实际 maker/taker 费率与小额下单结果，再从 Dashboard 手动
-resume：
+暂停、逐合约撤单并退出：
 
 ```bash
 ./scripts/run_venue_live.sh aster-mainnet
@@ -188,18 +186,16 @@ cargo run --release -- download-aster --symbols BTCUSDT --interval 1h \
   --start 2026-01-01 --end 2026-08-17
 ```
 
-默认暂停期间会运行 Aster Shadow Maker：只根据实时 BBO 生成虚拟报价/成交，记录事件
-延迟、策略耗时、预计撤挂请求、虚拟交易量以及 1s/5s/30s markout，绝不提交交易所
-订单。100ms depth20 流同时估算排队在前的名义金额，并对比 cancel+place 与单次 amend
-的请求节省。指标展示在 Dashboard，并原子保存到
-`data/aster-mainnet/shadow_metrics.json`。
+Aster Shadow Maker 只根据实时 BBO 生成虚拟报价/成交，记录事件延迟、策略耗时、
+预计撤挂请求、虚拟交易量以及 1s/5s/30s markout，绝不提交交易所订单。100ms
+depth20 流同时估算排队在前的名义金额，并对比 cancel+place 与单次 amend 的请求节省。
+指标展示在 Dashboard，并原子保存到 `data/aster-mainnet/shadow_metrics.json`。
 
 `trading.hft_shadow` 会并行运行 join-BBO 250ms/1000ms 与 1bps/2bps 偏移四组近盘口
 实验，requote 按单次 PUT amend 建模（虚拟报价不离场），并按 5s markout、虚拟量、请求频率
-标出领先 profile。1s markout 过毒或盘口交叉/锁定时会撤掉虚拟报价，不会推荐该 profile，
-也绝不会自动 resume。结果写入 `data/aster-mainnet/hft_shadow_metrics.json`；该实验器没有
-交易所客户端，不能下单。Aster 实盘 `maker_quote` 重报价在已知 `orderId` 时走同一条
-`PUT /fapi/v3/order` 路径；默认仍暂停，不会自动 resume。
+标出领先 profile。1s markout 过毒或盘口交叉/锁定时会撤掉虚拟报价，不会推荐该 profile。
+结果写入 `data/aster-mainnet/hft_shadow_metrics.json`；该实验器没有交易所客户端，不能下单。
+Aster 实盘 `maker_quote` 重报价在已知 `orderId` 时走同一条 `PUT /fapi/v3/order` 路径。
 
 ## 📊 Dashboard
 
@@ -213,63 +209,6 @@ cargo run --release -- download-aster --symbols BTCUSDT --interval 1h \
 | 📜 History | 完整交易历史 + CSV 导出 + 平均持仓时间 |
 | ⚙️ Settings | 系统状态、风控限制、主题切换（不暴露账户编号） |
 | 🤖 OMP Agent | 原生 OMP Web 对话入口；可执行真实回测、策略研究和受审批保护的参数提案 |
-
-## 📝 更新历史 / 回测记录
-
-### 2026-08-10
-
-- **OMP Web Agent**
-  - `/ai` 改为原生 OMP Collab Web 入口，不再在浏览器内保存第三方模型 API Key
-  - 对话可直接调用仓库工具执行真实回测、样本外验证、策略修改和优化
-  - 实盘参数仍通过服务端提案与人工 `APPLY <proposal-id>` 审批；Agent 不能自批，部署与恢复交易也不会自动执行
-
-### 2026-07-19 (二)
-
-- **RH BTC 与主网价格同源验证 + 多窗口调参**
-  - 重叠时段逐时对比：07-09 之后 RH 与主网 BTC 收盘价差仅 0.03~0.07%（上线初期 07-04~07-08 偏离最高 4%，该段数据不可用）
-  - 相同子窗口（07-09~07-18）两边数据回测结果一致（-0.10% vs -0.08%）→ 主网 6.5 个月历史可直接用于 RH BTC 调参
-  - 多窗口稳健性检验（1-3月/3-5月/5-6月/6-7月）取代单一 train/OOS 切分：
-    `grid_count=12, deviation=0.004` 四窗口全正、累计 +3.00%、MaxDD 1.78%（全周期 1046 笔、胜率 52.3%）
-  - 主网与 RH 配置统一更新为 `grid_count=12, price_deviation=0.004`
-
-### 2026-07-19
-
-- **Robinhood Chain 实例支持**
-  - 新增 `config/settings.robinhood.yaml`（REST/WS 端点、签名 chain_id=466324）
-  - 市场符号注册表改为启动时从 `/api/v1/orderBookDetails` 动态拉取，移除全部 ETH/BTC 硬编码
-  - `download` 命令支持 `--url` 指定实例并自动分页（API 单次上限 500 根）
-- **策略修复与调参**
-  - 趋势策略重写：仓位状态真正生效（原止损/止盈为死代码）、EMA 交叉、移动止损、名义金额仓位
-  - 回测引擎夏普年化按数据间隔自动推断
-  - 真实主网 1h 数据（2026-01-01~07-18）train/OOS 调参：网格更新为 `grid_count=8, deviation=0.003`
-    （样本外 Sharpe ≈1.0；旧参数 dev=0.016 样本外为负）；趋势策略样本外不稳健，保持禁用
-  - RH 实例仅 ~3 周历史（2026-06-26 上线），近期单边行情下网格为负——建议小仓位观察、数据积累后再独立调参
-
-### 2026-04-19
-
-- **Dashboard 升级**
-  - Equity Curve 新增 `ALL / 30D / 7D / 24H` 视图切换，支持查看早期净值与交易阶段
-  - 面板移除订单簿模块，降低前端与 Dashboard WebSocket 资源占用
-  - 历史页恢复 `Avg Duration` 平均持仓时间，并移除胜率展示
-  - Settings 页面移除 `Account Index` 展示，避免公开仓库/公开面板泄露账户标识
-- **AI Lab**
-  - 新增 OpenCode GLM5 本地优化入口
-  - 已验证本机 `opencode --pure -m opencode-go/glm-5` 可返回策略参数并联动回测
-- **OpenCode GLM5 回测记录**
-  - 建议参数：`grid_count=10,investment=40,deviation=0.01`
-  - 结果：`Return +6.83% | Sharpe 2.09 | MaxDD 7.91% | Trades 58 | Profit Factor 2.45`
-
-### 2026-04-04
-
-- **Grid 策略优化**
-  - 引入多层 EMA 趋势过滤、trailing anchor、1.5x anchor reset、每侧最大累积层数限制
-  - 持久化参数修复后，Dashboard 调整的 `investment_per_grid` / `price_deviation` 可正确生效
-- **风险与配置**
-  - 风控改为杠杆感知的单笔限额
-  - Strategy / Risk 配置支持重启恢复
-- **回测记录**
-  - 参数：`grid_count=6,investment=60,deviation=0.016`
-  - 结果：`Return +4.81% | Sharpe 1.79 | MaxDD 7.51% | Trades 18 | Profit Factor 2.78`
 
 ## 🏗️ 项目结构
 

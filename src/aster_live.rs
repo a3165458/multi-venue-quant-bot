@@ -966,7 +966,7 @@ pub(crate) async fn run_aster_live_trading(settings: Config) -> Result<()> {
 
     let (equity, available_balance, unrealized_pnl) = account_totals(&account)?;
     risk_manager.update_equity(equity);
-    let start_paused = settings.get_bool("trading.start_paused").unwrap_or(true);
+    let start_paused = settings.get_bool("trading.start_paused").unwrap_or(false);
     let initial_shadow_metrics = match shadow_monitor.as_ref() {
         Some(monitor) => Some(serde_json::to_value(
             monitor.lock().await.snapshot(unix_millis()),

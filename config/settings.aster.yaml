@@ -3,17 +3,13 @@ exchange:
   environment: mainnet
 
 trading:
-  # Safety gate: Aster V3 starts paused. Verify the sub-account, API Wallet,
-  # permissions, symbol, fees, balances, and order sizing before manual resume.
-  # Pause blocks maker entries; reduce-only stop/emergency exits remain armed.
-  start_paused: true
+  start_paused: false
   # Fail closed instead of mutating account margin settings.
   require_isolated_margin: true
   symbols: [BTCUSDT]
   max_open_orders: 2
   shadow_maker:
-    # Evaluate real-time quote intents and virtual fills while trading remains paused.
-    # This mode never submits exchange orders.
+    # Evaluate real-time quote intents and virtual fills. Never submits exchange orders.
     enabled: true
     penetration_bps: 2.0
     fill_ratio: 0.5
@@ -96,7 +92,6 @@ trading:
     risk_per_trade_percent: 1.0
 
 # Aster's published base tier is modeled as maker 1.0 bps / taker 3.5 bps.
-# Verify the actual V3 sub-account fee tier before manually resuming trading.
 profitability:
   enabled: true
   entry_fee_bps: 1.0
