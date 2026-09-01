@@ -98,6 +98,9 @@ const RISK_CONFIG_FILE: &str = "risk_config.json";
 pub struct PersistentStrategyConfig {
     pub strategy_name: String,
     pub strategy_params: std::collections::HashMap<String, String>,
+    /// Last dashboard pause/resume. `None` on old files falls back to yaml `start_paused`.
+    #[serde(default)]
+    pub trading_paused: Option<bool>,
 }
 
 impl PersistentStrategyConfig {
@@ -116,6 +119,7 @@ impl PersistentStrategyConfig {
         let config = PersistentStrategyConfig {
             strategy_name: ds.strategy_name.clone(),
             strategy_params: ds.strategy_params.clone(),
+            trading_paused: Some(ds.trading_paused),
         };
         match serde_json::to_string_pretty(&config) {
             Ok(json) => {
@@ -2647,6 +2651,7 @@ async fn trading_pause_handler(
 ) -> axum::Json<serde_json::Value> {
     let mut ds = state.write().await;
     ds.trading_paused = true;
+    PersistentStrategyConfig::save(&ds);
     info!("⏸️ Trading PAUSED via dashboard");
     axum::Json(serde_json::json!({
         "status": "ok",
@@ -2687,6 +2692,7 @@ async fn trading_resume_handler(
     }
 
     ds.trading_paused = false;
+    PersistentStrategyConfig::save(&ds);
     info!("▶️ Trading RESUMED via dashboard after runtime policy validation");
     axum::Json(serde_json::json!({
         "status": "ok",

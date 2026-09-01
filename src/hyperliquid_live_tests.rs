@@ -2,10 +2,11 @@
 
 use crate::hyperliquid_live::{
     account_totals, cancel_asset_for_tracked_order, cancel_error_means_gone,
-    l1_request_budget_exhausted, positions_json, quote_replace_decision,
-    submission_failure_decision, subscription_messages, tracked_position,
-    validate_runtime_positions, HyperliquidLedger, LocalOrder, LocalOrderStatus, OrderTracker,
-    QuoteReplaceDecision, SubmissionFailureDecision, TrackedPosition,
+    hyperliquid_anyhow_is_transient, hyperliquid_ws_is_recoverable, hyperliquid_ws_is_session_age,
+    l1_request_budget_exhausted,
+    positions_json, quote_replace_decision, submission_failure_decision, subscription_messages,
+    tracked_position, validate_runtime_positions, HyperliquidLedger, LocalOrder, LocalOrderStatus,
+    OrderTracker, QuoteReplaceDecision, SubmissionFailureDecision, TrackedPosition,
 };
 use multi_venue_quant_bot::hyperliquid::{
     ClearinghouseState, FundingDelta, HyperliquidError, Leverage, PerpPosition, UserFundingEntry,
@@ -294,6 +295,52 @@ fn cancel_asset_uses_configured_market_id_not_thread_local() {
     );
     let err = cancel_asset_for_tracked_order(&anth, "io:SNDK", 200002).unwrap_err();
     assert!(err.to_string().contains("does not match market io:SNDK"));
+}
+
+#[test]
+fn websocket_disconnect_is_recoverable_and_session_age_is_not() {
+    assert!(hyperliquid_ws_is_recoverable(&anyhow::anyhow!(
+        "Hyperliquid WebSocket disconnected"
+    )));
+    assert!(hyperliquid_ws_is_recoverable(&anyhow::anyhow!(
+        "Hyperliquid WebSocket failed"
+    ).context("io")));
+    assert!(hyperliquid_ws_is_recoverable(&anyhow::anyhow!(
+        "Connection reset by peer (os error 104)"
+    )));
+    assert!(!hyperliquid_ws_is_recoverable(&anyhow::anyhow!(
+        "Hyperliquid WebSocket returned an error: auth"
+    )));
+    assert!(hyperliquid_ws_is_session_age(&anyhow::anyhow!(
+        "Hyperliquid WebSocket session reached safe restart age"
+    )));
+    assert!(!hyperliquid_ws_is_session_age(&anyhow::anyhow!(
+        "Hyperliquid WebSocket disconnected"
+    )));
+}
+
+#[test]
+fn timeout_and_unknown_oid_are_transient_and_do_not_pause() {
+    assert!(hyperliquid_anyhow_is_transient(&anyhow::anyhow!(
+        "Hyperliquid order status remained unknown: transport timeout"
+    )));
+    assert!(hyperliquid_anyhow_is_transient(&anyhow::anyhow!(
+        "Hyperliquid could not prove the ambiguous order's state (unknownOid)"
+    )));
+    assert!(hyperliquid_anyhow_is_transient(&anyhow::anyhow!(
+        "API error HTTP 502"
+    )));
+    assert!(!hyperliquid_anyhow_is_transient(&anyhow::anyhow!(
+        "Hyperliquid WebSocket returned an error: auth"
+    )));
+}
+
+#[test]
+fn live_loop_reconnects_recoverable_websocket_drops() {
+    let src = include_str!("hyperliquid_live.rs");
+    assert!(src.contains("hyperliquid_ws_is_recoverable"));
+    assert!(src.contains("reconnecting without pausing"));
+    assert!(src.contains("open_hyperliquid_ws"));
 }
 
 #[test]

@@ -29,8 +29,8 @@
 //! provides an exit path. Default path is two-sided maker after a fill
 //! (`flatten_only = false`): both ALO quotes stay up, the adding side sits
 //! on BBO, the reducing side may sit one tick inside when the book is wide.
-//! `flatten_only` is the optional unwind that cancels the adding side and
-//! eventually IOC — it is not the live Hyperliquid default.
+//! `flatten_only` cancels the adding side and exits reduce-only ALO
+//! (far → mid, then cancel-and-replace ALO). Never IOC.
 //!
 //! Trend filter (optional): when `|mid - ema| / ema` exceeds
 //! `trend_block_bps`, the counter-trend side stops quoting (e.g. no buy
@@ -121,14 +121,16 @@ pub struct MakerQuoteStrategy {
     /// Pull both quotes when BBO notional imbalance exceeds this ratio. 0 = off.
     max_bbo_imbalance: f64,
     /// When true, two-sided quotes only while flat. A fill switches to
-    /// reduce-only flatten (far ALO → mid ALO → IOC) and never adds.
+    /// reduce-only flatten (far ALO → mid ALO, then cancel-and-replace ALO)
+    /// and never adds.
     flatten_only: bool,
     /// If the live spread is wider than this many ticks, improve 1 tick
     /// inside mid instead of joining the far touch. 0 = always join BBO.
     join_inside_ticks: i64,
     /// Seconds after a fill before the flatten quote improves to mid.
     flatten_mid_secs: i64,
-    /// Kept for config compatibility. Flatten never IOCs; stays post-only ALO.
+    /// ALO cancel-and-replace timeout after a flatten quote sits unfilled.
+    /// Kept as flatten_ioc_secs for config compatibility. Never used as IOC/TIF.
     flatten_ioc_secs: i64,
     /// Event-time cooldown after a market circuit trip.
     circuit_breaker_cooldown_secs: i64,
@@ -272,7 +274,7 @@ impl MakerQuoteStrategy {
             flatten_only: false,
             join_inside_ticks: 0,
             flatten_mid_secs: 6,
-            flatten_ioc_secs: 15,
+            flatten_ioc_secs: 90,
             circuit_breaker_cooldown_secs: 0,
             cash_open_guard: false,
             cash_open_guard_before_minutes: 0,
@@ -552,15 +554,11 @@ impl MakerQuoteStrategy {
             .inventory_since
             .map(|since| now.signed_duration_since(since))
             .unwrap_or_else(Duration::zero);
-        let ioc = age >= Duration::seconds(self.flatten_ioc_secs);
+        // Never IOC-flatten. 08-27 HIP-3 taker closes were -21.8 bps vs maker
+        // -4.4 bps; taking the touch to unwind is worse than waiting on ALO.
+        // flatten_ioc_secs is the ALO cancel-and-replace timeout (was IOC take).
         let improve = age >= Duration::seconds(self.flatten_mid_secs);
-        let (price, post_only, stage) = if ioc {
-            (
-                if long { bid.price } else { ask.price },
-                false,
-                "ioc near-touch",
-            )
-        } else if improve {
+        let (price, stage) = if improve {
             let improved = if long {
                 Self::ceil_tick(mid.max(bid.price + tick).min(ask.price), tick)
                     .clamp(bid.price + tick, ask.price)
@@ -568,11 +566,15 @@ impl MakerQuoteStrategy {
                 Self::floor_tick(mid.min(ask.price - tick).max(bid.price), tick)
                     .clamp(bid.price, ask.price - tick)
             };
-            (improved, true, "mid ALO")
+            (improved, "mid ALO")
         } else {
-            (if long { ask.price } else { bid.price }, true, "far ALO")
+            (if long { ask.price } else { bid.price }, "far ALO")
         };
+        let post_only = true;
         if !(price.is_finite() && price > 0.0) {
+            return;
+        }
+        if Self::alo_would_take(price, reduce_side, bid.price, ask.price) {
             return;
         }
         let qty = if position.abs() * mid <= quote_notional.max(self.min_quote_notional) {
@@ -585,7 +587,43 @@ impl MakerQuoteStrategy {
             Side::Sell => state.sell.as_ref(),
         };
         let entering = state.inventory_since == Some(now);
-        let should_emit = if ioc || entering {
+        let quote_age = current
+            .map(|q| now.signed_duration_since(q.last_action))
+            .unwrap_or_else(Duration::zero);
+        let stale = current.is_some()
+            && self.flatten_ioc_secs > 0
+            && quote_age >= Duration::seconds(self.flatten_ioc_secs);
+        if stale {
+            if let Some(quote) = match reduce_side {
+                Side::Buy => state.buy.take(),
+                Side::Sell => state.sell.take(),
+            } {
+                signals.push(TradeSignal {
+                    action: SignalAction::Cancel,
+                    symbol: symbol.to_string(),
+                    market_id: ob.market_id,
+                    side: reduce_side,
+                    price: quote.price,
+                    quantity: quote.quantity,
+                    order_type: OrderType::Limit,
+                    reason: format!(
+                        "Cancel flatten {}: stale ALO refresh after {}s",
+                        side_label(reduce_side),
+                        quote_age.num_seconds()
+                    ),
+                    timestamp: now,
+                    expected_edge_bps: None,
+                    risk_reducing: true,
+                    post_only: true,
+                    client_id: Some(quote.client_id),
+                });
+            }
+        }
+        let current = match reduce_side {
+            Side::Buy => state.buy.as_ref(),
+            Side::Sell => state.sell.as_ref(),
+        };
+        let should_emit = if stale || entering {
             current.is_none_or(|q| {
                 entering || (q.price - price).abs() / price * 10_000.0 > 0.1
             })
@@ -2207,7 +2245,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn flatten_only_quotes_reduce_only_then_ioc() {
+    async fn flatten_only_quotes_reduce_only_then_alo_refresh() {
         let s = MakerQuoteStrategy::new(6.0, 50.0, 0.0, 0, 80.0, 160.0, false, 20, 6.0, 10.0)
             .expect("valid")
             .with_quote_mode(QuoteMode::JoinBest)
@@ -2241,13 +2279,63 @@ mod tests {
 
         snap = join_book("io:SNDK", 1_700_000_016, 1471.6, 1471.9);
         snap.positions.insert("io:SNDK".into(), 0.04);
-        let ioc = s.evaluate(&snap).await.expect("t16").expect("ioc");
-        let ioc_sell = ioc
+        let late = s.evaluate(&snap).await.expect("t16");
+        if let Some(rows) = late {
+            assert!(
+                rows.iter().all(|x| x.post_only || x.action == SignalAction::Cancel),
+                "flatten must not IOC after flatten_ioc_secs: {rows:?}"
+            );
+            assert!(rows.iter().all(|x| !x.reason.to_ascii_lowercase().contains("ioc")));
+        }
+
+        snap = join_book("io:SNDK", 1_700_000_022, 1471.6, 1471.9);
+        snap.positions.insert("io:SNDK".into(), 0.04);
+        let refresh = s.evaluate(&snap).await.expect("t22").expect("stale refresh");
+        assert!(refresh.iter().any(|x| x.action == SignalAction::Cancel));
+        let refresh_sell = refresh
             .iter()
             .find(|x| x.side == Side::Sell && x.action == SignalAction::Place)
-            .expect("ioc sell");
-        assert!(!ioc_sell.post_only && ioc_sell.risk_reducing);
-        assert!((ioc_sell.price - 1471.6).abs() < 1e-9);
+            .expect("refresh sell");
+        assert!(refresh_sell.post_only && refresh_sell.risk_reducing);
+        assert!(refresh_sell.price > 1471.6 && refresh_sell.price <= 1471.9);
+        assert!(!refresh_sell.reason.to_ascii_lowercase().contains("ioc"));
+        assert!(refresh.iter().all(|x| !x.reason.to_ascii_lowercase().contains("ioc")));
+    }
+
+    #[tokio::test]
+    async fn flatten_only_anth_short_stays_alo_never_ioc() {
+        let s = MakerQuoteStrategy::new(6.0, 50.0, 0.0, 0, 80.0, 160.0, false, 20, 6.0, 10.0)
+            .expect("valid")
+            .with_quote_mode(QuoteMode::JoinBest)
+            .expect("mode")
+            .with_flatten_cycle(true, 2, 6, 15)
+            .expect("flatten");
+        let rest = join_book("io:ANTH", 1_700_000_000, 1985.00, 1986.90);
+        let _ = s.evaluate(&rest).await.expect("flat");
+        let mut snap = join_book("io:ANTH", 1_700_000_001, 1985.00, 1986.90);
+        snap.positions.insert("io:ANTH".into(), -0.04);
+        let first = s.evaluate(&snap).await.expect("t0").expect("far");
+        let buy = first
+            .iter()
+            .find(|x| x.side == Side::Buy && x.action == SignalAction::Place)
+            .expect("buy");
+        assert!(buy.risk_reducing && buy.post_only);
+        assert!((buy.price - 1985.00).abs() < 1e-9);
+        assert!(first
+            .iter()
+            .all(|x| x.side != Side::Sell || x.action == SignalAction::Cancel));
+
+        snap = join_book("io:ANTH", 1_700_000_022, 1985.00, 1986.90);
+        snap.positions.insert("io:ANTH".into(), -0.04);
+        let refresh = s.evaluate(&snap).await.expect("stale").expect("refresh");
+        let refresh_buy = refresh
+            .iter()
+            .find(|x| x.side == Side::Buy && x.action == SignalAction::Place)
+            .expect("refresh buy");
+        assert!(refresh_buy.post_only && refresh_buy.risk_reducing);
+        assert!(refresh_buy.price >= 1985.00 && refresh_buy.price < 1986.90);
+        assert!(refresh.iter().all(|x| x.post_only || x.action == SignalAction::Cancel));
+        assert!(refresh.iter().all(|x| !x.reason.to_ascii_lowercase().contains("ioc")));
     }
 
     #[tokio::test]

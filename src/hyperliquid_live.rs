@@ -1,8 +1,9 @@
 //! Hyperliquid live control loop with HIP-3 builder-dex support.
 //!
 //! The exchange protocol adapter (`hyperliquid.rs`) stays separate from live
-//! trading policy. Every ambiguous execution outcome fails closed: pause first,
-//! cancel every configured coin, then leave the loop. Coins are configured by
+//! trading policy. Ambiguous execution outcomes fail closed: pause first,
+//! cancel every configured coin, then leave the loop. Hyperliquid WebSocket
+//! drops are recovered in-process without pausing. Coins are configured by
 //! canonical name; HIP-3 assets (for example the entropy.io markets `io:SNDK`
 //! and `io:ANTH`) use the `dex:NAME` form and are resolved to asset ids at
 //! startup.
@@ -40,6 +41,8 @@ const SAFE_SESSION_AGE: Duration = Duration::from_secs(23 * 60 * 60 + 50 * 60);
 const HISTORY_LOOKBACK_MS: u64 = 7 * 24 * 60 * 60 * 1_000;
 const HISTORY_OVERLAP_MS: u64 = 60_000;
 const WS_PING_INTERVAL: Duration = Duration::from_secs(45);
+const WS_RECONNECT_BACKOFF: Duration = Duration::from_secs(1);
+const WS_RECONNECT_BACKOFF_MAX: Duration = Duration::from_secs(30);
 const BASIS_PROBE_INTERVAL: Duration = Duration::from_secs(30);
 const L1_BUDGET_BACKOFF: Duration = Duration::from_secs(30);
 static L1_BUDGET_BLOCKED_UNTIL_MS: AtomicU64 = AtomicU64::new(0);
@@ -634,6 +637,15 @@ pub(crate) async fn run_hyperliquid_live_trading(settings: Config) -> Result<()>
         .context("Hyperliquid account safety validation failed")?;
 
     let start_paused = settings.get_bool("trading.start_paused").unwrap_or(false);
+    let persisted_pause = dashboard::server::PersistentStrategyConfig::load(&network)
+        .and_then(|saved| saved.trading_paused);
+    let start_paused = persisted_pause.unwrap_or(start_paused);
+    if persisted_pause.is_some() {
+        info!(
+            "Restored persisted Hyperliquid trading_paused={}",
+            start_paused
+        );
+    }
     if start_paused {
         info!(
             "Skipping isolated leverage update because trading.start_paused=true (preserve L1 budget)"
@@ -745,23 +757,15 @@ pub(crate) async fn run_hyperliquid_live_trading(settings: Config) -> Result<()>
         }
     });
 
-    let ws_url = environment.websocket_url();
-    let socket = match connect_async(ws_url).await {
-        Ok((socket, _)) => socket,
+    let ws_url = environment.websocket_url().to_string();
+    let (mut ws_write, mut ws_read) = match open_hyperliquid_ws(&ws_url, &coins, &user).await {
+        Ok(socket) => socket,
         Err(connect_error) => {
             safety_shutdown(&client, &user, &dexs, &market_ids, &dashboard_state).await;
-            warn!("Hyperliquid WebSocket connection failed: {connect_error}");
-            bail!("failed to connect Hyperliquid WebSocket");
+            return Err(connect_error);
         }
     };
-    let (mut ws_write, mut ws_read) = socket.split();
-    for message in subscription_messages(&coins, &user) {
-        if let Err(subscribe_error) = ws_write.send(Message::Text(message)).await {
-            safety_shutdown(&client, &user, &dexs, &market_ids, &dashboard_state).await;
-            warn!("Hyperliquid WebSocket subscribe failed: {subscribe_error}");
-            bail!("failed to subscribe Hyperliquid WebSocket streams");
-        }
-    }
+    let mut reconnect_backoff = WS_RECONNECT_BACKOFF;
 
     let mut tracker = OrderTracker::default();
     let mut rest_orders = Vec::<OpenOrder>::new();
@@ -849,16 +853,39 @@ pub(crate) async fn run_hyperliquid_live_trading(settings: Config) -> Result<()>
                     dashboard.save_pnl();
                     accounting_day = today;
                 }
-                let states = fetch_clearinghouse_states(&client, &user, &dexs).await?;
-                let unified_spot_usdc = fetch_unified_spot_usdc(&client, &user).await?;
+                let states = match fetch_clearinghouse_states(&client, &user, &dexs).await {
+                    Ok(states) => states,
+                    Err(refresh_error) => {
+                        warn!(
+                            "Hyperliquid clearinghouse refresh failed: {refresh_error}; skipping tick"
+                        );
+                        return Ok(());
+                    }
+                };
+                let unified_spot_usdc = match fetch_unified_spot_usdc(&client, &user).await {
+                    Ok(spot) => spot,
+                    Err(refresh_error) => {
+                        warn!(
+                            "Hyperliquid spot USDC refresh failed: {refresh_error}; skipping tick"
+                        );
+                        return Ok(());
+                    }
+                };
                 positions = collect_positions(&states)?;
                 validate_runtime_positions(&positions, &coins, require_isolated_margin)?;
                 position_sync_pending.clear();
-                rest_orders = fetch_open_orders(&client, &user, &dexs)
-                    .await?
-                    .into_iter()
-                    .filter(|order| market_ids.contains_key(&order.coin))
-                    .collect();
+                rest_orders = match fetch_open_orders(&client, &user, &dexs).await {
+                    Ok(orders) => orders
+                        .into_iter()
+                        .filter(|order| market_ids.contains_key(&order.coin))
+                        .collect(),
+                    Err(refresh_error) => {
+                        warn!(
+                            "Hyperliquid openOrders refresh failed: {refresh_error}; skipping tick"
+                        );
+                        return Ok(());
+                    }
+                };
                 tracker.reconcile_open_orders(&rest_orders);
                 update_dashboard_account(
                     &dashboard_state,
@@ -989,9 +1016,68 @@ pub(crate) async fn run_hyperliquid_live_trading(settings: Config) -> Result<()>
             }
         }
         .await;
-        if let Err(loop_error) = event_result {
-            safety_shutdown(&client, &user, &dexs, &market_ids, &dashboard_state).await;
-            return Err(loop_error).context("Hyperliquid live loop stopped safely");
+        match event_result {
+            Ok(()) => {
+                reconnect_backoff = WS_RECONNECT_BACKOFF;
+            }
+            Err(loop_error) if hyperliquid_ws_is_recoverable(&loop_error) => {
+                warn!(
+                    "Hyperliquid WebSocket dropped ({loop_error}); reconnecting without pausing"
+                );
+                tokio::time::sleep(reconnect_backoff).await;
+                reconnect_backoff = (reconnect_backoff * 2).min(WS_RECONNECT_BACKOFF_MAX);
+                match open_hyperliquid_ws(&ws_url, &coins, &user).await {
+                    Ok((write, read)) => {
+                        ws_write = write;
+                        ws_read = read;
+                        ws_parse_errors = 0;
+                        reconnect_backoff = WS_RECONNECT_BACKOFF;
+                        match fetch_open_orders(&client, &user, &dexs).await {
+                            Ok(orders) => {
+                                rest_orders = orders
+                                    .into_iter()
+                                    .filter(|order| market_ids.contains_key(&order.coin))
+                                    .collect();
+                                tracker.reconcile_open_orders(&rest_orders);
+                            }
+                            Err(refresh_error) => {
+                                warn!(
+                                    "Hyperliquid order refresh after WS reconnect failed: {refresh_error}"
+                                );
+                            }
+                        }
+                        info!(
+                            "Hyperliquid WebSocket reconnected; paused={}",
+                            dashboard_state.read().await.trading_paused
+                        );
+                    }
+                    Err(connect_error) => {
+                        warn!(
+                            "Hyperliquid WebSocket reconnect failed: {connect_error}; retrying"
+                        );
+                    }
+                }
+            }
+            Err(loop_error) if hyperliquid_anyhow_is_transient(&loop_error) => {
+                warn!(
+                    "Hyperliquid transient timeout/5xx ({loop_error}); continuing without pausing"
+                );
+            }
+            Err(loop_error) if hyperliquid_ws_is_session_age(&loop_error) => {
+                let dashboard = dashboard_state.read().await;
+                dashboard::server::PersistentStrategyConfig::save(&dashboard);
+                drop(dashboard);
+                if let Err(cancel_error) =
+                    cancel_all_configured(&client, &user, &dexs, &market_ids).await
+                {
+                    error!("Hyperliquid session-age cancel-all failed: {cancel_error}");
+                }
+                return Err(loop_error).context("Hyperliquid live loop stopped for session refresh");
+            }
+            Err(loop_error) => {
+                safety_shutdown(&client, &user, &dexs, &market_ids, &dashboard_state).await;
+                return Err(loop_error).context("Hyperliquid live loop stopped safely");
+            }
         }
     }
 }
@@ -1274,6 +1360,9 @@ async fn restore_strategy(
     let mut dashboard = dashboard_state.write().await;
     dashboard.strategy_name = "maker_quote".to_string();
     dashboard.strategy_params = saved.strategy_params;
+    if let Some(paused) = saved.trading_paused {
+        dashboard.trading_paused = paused;
+    }
     Ok(())
 }
 
@@ -1391,6 +1480,7 @@ async fn consume_dashboard_controls(
             let mut dashboard = dashboard_state.write().await;
             dashboard.trading_paused = true;
             dashboard.strategy_name = "maker_quote".to_string();
+            dashboard::server::PersistentStrategyConfig::save(&dashboard);
             warn!("rejected non-maker Hyperliquid strategy update {name}; trading paused");
         } else {
             let params_string = sorted_params(&params);
@@ -1404,7 +1494,9 @@ async fn consume_dashboard_controls(
                     dashboard::server::PersistentStrategyConfig::save(&dashboard);
                 }
                 Err(strategy_error) => {
-                    dashboard_state.write().await.trading_paused = true;
+                    let mut dashboard = dashboard_state.write().await;
+                    dashboard.trading_paused = true;
+                    dashboard::server::PersistentStrategyConfig::save(&dashboard);
                     warn!(
                         "invalid Hyperliquid maker strategy update: {strategy_error}; trading paused"
                     );
@@ -1512,7 +1604,7 @@ fn maker_dashboard_params(settings: &Config) -> HashMap<String, String> {
         ("feature_interval_secs", 60),
         ("join_inside_ticks", 2),
         ("flatten_mid_secs", 6),
-        ("flatten_ioc_secs", 15),
+        ("flatten_ioc_secs", 90),
     ];
     for (key, default) in integers {
         let value = settings
@@ -1715,7 +1807,11 @@ async fn process_signal(
         match quote_replace_decision(existing, signal.price) {
             QuoteReplaceDecision::Noop => return Ok(()),
             QuoteReplaceDecision::BlockedUnresolved => {
-                bail!("Hyperliquid quote replacement blocked by unresolved prior order");
+                warn!(
+                    "Hyperliquid skipping replace for {} while prior order is unresolved",
+                    signal.symbol
+                );
+                return Ok(());
             }
             QuoteReplaceDecision::CancelThenWait => {}
         }
@@ -1782,7 +1878,11 @@ async fn process_signal(
                 return Ok(());
             }
             QuoteReplaceDecision::BlockedUnresolved => {
-                bail!("Hyperliquid quote replacement reached an impossible state");
+                warn!(
+                    "Hyperliquid skipping replace for {} after quantization while unresolved",
+                    signal.symbol
+                );
+                return Ok(());
             }
         }
     }
@@ -2033,11 +2133,14 @@ async fn cancel_tracked_order(
                     remove_rest_order(rest_orders, existing);
                     Ok(())
                 }
-                Err(status_error) => Err(anyhow::anyhow!(
-                    "{}; {}",
-                    safe_hl_error("Hyperliquid cancel failed", &cancel_error),
-                    safe_hl_error("Hyperliquid status query failed", &status_error)
-                )),
+                Err(status_error) => {
+                    warn!(
+                        "{}; {}; leaving order unresolved without pausing",
+                        safe_hl_error("Hyperliquid cancel failed", &cancel_error),
+                        safe_hl_error("Hyperliquid status query failed", &status_error)
+                    );
+                    Ok(())
+                }
             }
         }
     }
@@ -2057,18 +2160,26 @@ async fn reconcile_unknown_submission(
     rest_orders: &mut Vec<OpenOrder>,
     tracker: &mut OrderTracker,
 ) -> Result<()> {
-    let status = client
+    let status = match client
         .order_status(user, OrderId::Cloid(cloid.to_string()))
         .await
-        .map_err(|status_error| {
-            safe_hl_error(
-                "Hyperliquid orderStatus reconciliation failed",
-                &status_error,
-            )
-        })?;
+    {
+        Ok(status) => status,
+        Err(status_error) => {
+            warn!(
+                "{}; leaving submission unresolved without pausing",
+                safe_hl_error(
+                    "Hyperliquid orderStatus reconciliation failed",
+                    &status_error,
+                )
+            );
+            return Ok(());
+        }
+    };
     if status.status == "order" {
         let Some(entry) = status.order else {
-            bail!("Hyperliquid orderStatus returned no order body");
+            warn!("Hyperliquid orderStatus returned no order body; leaving unresolved");
+            return Ok(());
         };
         if entry.status == "open" {
             if let Some(local) = tracker.by_strategy_key.get_mut(strategy_key) {
@@ -2095,10 +2206,12 @@ async fn reconcile_unknown_submission(
         }
         return Ok(());
     }
-    // unknownOid: the exchange has no record. The submission may still be in
-    // flight, which cannot be distinguished here - fail closed.
-    tracker.remove(strategy_key);
-    bail!("Hyperliquid could not prove the ambiguous order's state (unknownOid)")
+    // unknownOid after a timeout/502: keep the local mirror Unknown and wait
+    // for the next openOrders refresh instead of pausing the session.
+    warn!(
+        "Hyperliquid orderStatus unknownOid for {strategy_key}; leaving unresolved without pausing"
+    );
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2149,7 +2262,11 @@ async fn enforce_risk_gates(
     if emergency && !risk_manager.is_emergency_triggered() {
         risk_manager.set_emergency_triggered();
     }
-    dashboard_state.write().await.trading_paused = true;
+    {
+        let mut dashboard = dashboard_state.write().await;
+        dashboard.trading_paused = true;
+        dashboard::server::PersistentStrategyConfig::save(&dashboard);
+    }
     cancel_all_configured(client, user, dexs, market_ids).await?;
 
     let close_requests: Vec<(String, bool, f64, f64)> = if emergency {
@@ -2551,10 +2668,83 @@ async fn safety_shutdown(
     {
         let mut dashboard = dashboard_state.write().await;
         dashboard.trading_paused = true;
+        dashboard::server::PersistentStrategyConfig::save(&dashboard);
     }
     if let Err(shutdown_error) = cancel_all_configured(client, user, dexs, market_ids).await {
         error!("Hyperliquid safety cancel-all failed: {shutdown_error}");
     }
+}
+
+pub(crate) fn hyperliquid_ws_is_recoverable(error: &anyhow::Error) -> bool {
+    let text = format!("{error:#}").to_ascii_lowercase();
+    text.contains("websocket disconnected")
+        || text.contains("websocket failed")
+        || text.contains("failed to send hyperliquid websocket ping")
+        || text.contains("failed to answer hyperliquid ws ping")
+        || text.contains("connection reset")
+        || text.contains("broken pipe")
+        || text.contains("connection closed")
+}
+
+pub(crate) fn hyperliquid_ws_is_session_age(error: &anyhow::Error) -> bool {
+    error.to_string().contains("safe restart age")
+}
+
+pub(crate) fn hyperliquid_anyhow_is_transient(error: &anyhow::Error) -> bool {
+    let text = format!("{error:#}").to_ascii_lowercase();
+    const MARKERS: &[&str] = &[
+        "transport timeout",
+        "transport connection failed",
+        "transport request failed",
+        "http 500",
+        "http 502",
+        "http 503",
+        "http 504",
+        "http 429",
+        "order status remained unknown",
+        "unknownoid",
+        "could not prove the ambiguous order",
+        "quote replacement blocked by unresolved",
+        "openorders refresh failed",
+        "clearinghouse refresh failed",
+        "orderstatus reconciliation failed",
+        "status query failed",
+        "cancel batch failed",
+        "skipping replace",
+        "leaving unresolved",
+        "leaving order unresolved",
+    ];
+    MARKERS.iter().any(|marker| text.contains(marker))
+}
+
+async fn open_hyperliquid_ws(
+    ws_url: &str,
+    coins: &[String],
+    user: &str,
+) -> Result<(
+    futures::stream::SplitSink<
+        tokio_tungstenite::WebSocketStream<
+            tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+        >,
+        Message,
+    >,
+    futures::stream::SplitStream<
+        tokio_tungstenite::WebSocketStream<
+            tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+        >,
+    >,
+)> {
+    let (socket, _) = connect_async(ws_url)
+        .await
+        .context("failed to connect Hyperliquid WebSocket")?;
+    let (mut ws_write, ws_read) = socket.split();
+    for message in subscription_messages(coins, user) {
+        ws_write
+            .send(Message::Text(message))
+            .await
+            .context("failed to subscribe Hyperliquid WebSocket streams")?;
+    }
+    Ok((ws_write, ws_read))
 }
 
 async fn probe_io_xyz_sndk_basis(

@@ -32,8 +32,8 @@ trading:
       confirm_lookback: 3
     maker_quote:
       enabled: true
-      # Two-sided ALO when flat; a fill cancels the adding side and flattens
-      # far ALO → mid ALO → reduce-only IOC.
+      # Two-sided ALO when flat; in position quote reduce side only.
+      # Flatten: far ALO → mid ALO; on timeout cancel-and-replace ALO (never IOC).
       quote_mode: join_best
       spread_bps: 30.0
       per_quote_notional: 40.0
@@ -58,7 +58,7 @@ trading:
       flatten_only: true
       join_inside_ticks: 0
       flatten_mid_secs: 6
-      flatten_ioc_secs: 15
+      flatten_ioc_secs: 90
       circuit_breaker_cooldown_secs: 60
       feature_interval_secs: 60
       max_skew_bps: 12.0
