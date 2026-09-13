@@ -197,6 +197,22 @@ depth20 流同时估算排队在前的名义金额，并对比 cancel+place 与�
 结果写入 `data/aster-mainnet/hft_shadow_metrics.json`；该实验器没有交易所客户端，不能下单。
 Aster 实盘 `maker_quote` 重报价在已知 `orderId` 时走同一条 `PUT /fapi/v3/order` 路径。
 
+## Hyperliquid HIP-3 cross-dex basis
+
+`config/settings.hyperliquid.yaml` 里的 `trading.strategies.cross_dex_basis` 是可选的
+同生态基差路径（`io:SNDK` vs `xyz:SNDK`），**不是 CEX 套利**，也**不会替换**现有
+`maker_quote`。默认 `enabled: false` 且 `armed: false`，进程不会自动打开实盘对冲。
+
+- 只开 `enabled`：把对冲腿加入订阅/行情，Dashboard 显示净 bps / 方向，纸面或日志，不下单。
+- 再开 `armed`：未暂停时才允许同时 IOC 买入便宜 ask / 卖出昂贵 bid。`start_paused`
+  与 Dashboard 暂停仍然生效。单腿失败会超时 flatten。
+- 费用默认按 Entropy Tier 4 ≈0 成本加 0.2 bps 缓冲（`fee_preset: tier4`）。
+  HL `userFees` 的 1.5/4.5 bps 是原始打印，不是该账户真实成本。保守预设用
+  `fee_preset: growth`（约 1.72 bps 往返）。
+
+启用步骤与字段说明见 [docs/hip3-cross-dex-basis.md](docs/hip3-cross-dex-basis.md)。
+不要提交 `.env` 或把 `armed: true` 当作默认。
+
 ## 📊 Dashboard
 
 访问 `http://localhost:4028`（默认端口）

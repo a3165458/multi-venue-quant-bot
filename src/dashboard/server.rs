@@ -263,9 +263,15 @@ pub struct DashboardState {
     pub user_add_rate_bps: Option<f64>,
     /// Hyperliquid userCrossRate in bps when known.
     pub user_cross_rate_bps: Option<f64>,
-    /// Last io vs xyz SNDK net bps that cleared the tradeable floor (not armed).
+    /// Last io vs xyz SNDK net bps that cleared the configured tradeable floor.
     pub last_cross_dex_net_bps: Option<f64>,
     pub last_cross_dex_side: Option<String>,
+    /// YAML `cross_dex_basis.enabled`. Subscribe/detect only; does not fire.
+    pub last_cross_dex_enabled: bool,
+    /// YAML `cross_dex_basis.armed`. Live IOC legs still require !paused.
+    pub last_cross_dex_armed: bool,
+    /// Open / residual HIP-3 basis inventory, if any.
+    pub last_cross_dex_position: Option<serde_json::Value>,
 }
 
 impl DashboardState {
@@ -601,6 +607,9 @@ async fn handle_ws_connection(mut socket: WebSocket, state: SharedDashboardState
                     "fee_tier_is_t4": ds.user_add_rate_bps.map(|bps| bps <= 0.0),
                     "last_cross_dex_net_bps": ds.last_cross_dex_net_bps,
                     "last_cross_dex_side": ds.last_cross_dex_side.clone(),
+                    "last_cross_dex_enabled": ds.last_cross_dex_enabled,
+                    "last_cross_dex_armed": ds.last_cross_dex_armed,
+                    "last_cross_dex_position": ds.last_cross_dex_position.clone(),
                     "strategy_overlay": PersistentStrategyConfig::exists(&ds.network_name),
                     "quote_mode": ds.strategy_params.get("quote_mode"),
                     "flatten_only": ds.strategy_params.get("flatten_only"),
@@ -701,6 +710,9 @@ async fn status_handler(State(state): State<SharedDashboardState>) -> impl IntoR
         "fee_tier_is_t4": ds.user_add_rate_bps.map(|bps| bps <= 0.0),
         "last_cross_dex_net_bps": ds.last_cross_dex_net_bps,
         "last_cross_dex_side": ds.last_cross_dex_side,
+        "last_cross_dex_enabled": ds.last_cross_dex_enabled,
+        "last_cross_dex_armed": ds.last_cross_dex_armed,
+        "last_cross_dex_position": ds.last_cross_dex_position,
         "strategy_overlay": PersistentStrategyConfig::exists(&ds.network_name),
         "quote_mode": ds.strategy_params.get("quote_mode"),
         "flatten_only": ds.strategy_params.get("flatten_only"),
@@ -2905,17 +2917,24 @@ mod backtest_validation_tests {
         assert!(src.contains("fee_tier_is_t4"));
         assert!(src.contains("last_cross_dex_net_bps"));
         assert!(src.contains("last_cross_dex_side"));
+        assert!(src.contains("last_cross_dex_enabled"));
+        assert!(src.contains("last_cross_dex_armed"));
+        assert!(src.contains("last_cross_dex_position"));
         assert!(src.contains("strategy_overlay"));
         assert!(
             src.matches("strategy_overlay").count() >= 3,
             "exists helper plus REST status plus WS status"
         );
         assert!(
-            src.matches("ds.strategy_params.get(\"quote_mode\")").count() >= 2,
+            src.matches("ds.strategy_params.get(\"quote_mode\")")
+                .count()
+                >= 2,
             "quote_mode on REST and WS status"
         );
         assert!(
-            src.matches("ds.strategy_params.get(\"flatten_only\")").count() >= 2,
+            src.matches("ds.strategy_params.get(\"flatten_only\")")
+                .count()
+                >= 2,
             "flatten_only on REST and WS status"
         );
         assert!(
@@ -2925,6 +2944,14 @@ mod backtest_validation_tests {
         assert!(
             src.matches("last_cross_dex_net_bps").count() >= 3,
             "cross-dex field plus REST status plus WS status"
+        );
+        assert!(
+            src.matches("last_cross_dex_armed").count() >= 3,
+            "armed flag plus REST status plus WS status"
+        );
+        assert!(
+            src.matches("last_cross_dex_position").count() >= 3,
+            "position state plus REST status plus WS status"
         );
     }
 

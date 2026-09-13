@@ -3,10 +3,10 @@
 use crate::hyperliquid_live::{
     account_totals, cancel_asset_for_tracked_order, cancel_error_means_gone,
     hyperliquid_anyhow_is_transient, hyperliquid_ws_is_recoverable, hyperliquid_ws_is_session_age,
-    l1_request_budget_exhausted,
-    positions_json, quote_replace_decision, submission_failure_decision, subscription_messages,
-    tracked_position, validate_runtime_positions, HyperliquidLedger, LocalOrder, LocalOrderStatus,
-    OrderTracker, QuoteReplaceDecision, SubmissionFailureDecision, TrackedPosition,
+    l1_request_budget_exhausted, positions_json, quote_replace_decision,
+    submission_failure_decision, subscription_messages, tracked_position,
+    validate_runtime_positions, HyperliquidLedger, LocalOrder, LocalOrderStatus, OrderTracker,
+    QuoteReplaceDecision, SubmissionFailureDecision, TrackedPosition,
 };
 use multi_venue_quant_bot::hyperliquid::{
     ClearinghouseState, FundingDelta, HyperliquidError, Leverage, PerpPosition, UserFundingEntry,
@@ -302,9 +302,9 @@ fn websocket_disconnect_is_recoverable_and_session_age_is_not() {
     assert!(hyperliquid_ws_is_recoverable(&anyhow::anyhow!(
         "Hyperliquid WebSocket disconnected"
     )));
-    assert!(hyperliquid_ws_is_recoverable(&anyhow::anyhow!(
-        "Hyperliquid WebSocket failed"
-    ).context("io")));
+    assert!(hyperliquid_ws_is_recoverable(
+        &anyhow::anyhow!("Hyperliquid WebSocket failed").context("io")
+    ));
     assert!(hyperliquid_ws_is_recoverable(&anyhow::anyhow!(
         "Connection reset by peer (os error 104)"
     )));
@@ -358,4 +358,23 @@ fn cross_dex_basis_probe_is_spawned_and_single_flight() {
         !src.contains("probe_io_xyz_sndk_basis(&client, &dashboard_state).await"),
         "must not await the probe inside tokio::select"
     );
+    assert!(src.contains("run_cross_dex_basis"));
+    assert!(src.contains("basis_only_coins"));
+    assert!(src.contains("live_fire_allowed"));
+    assert!(src.contains("fire_cross_dex_legs"));
+}
+
+#[test]
+fn hyperliquid_yaml_keeps_cross_dex_basis_disarmed() {
+    let settings = config::Config::builder()
+        .add_source(config::File::with_name("config/settings.hyperliquid.yaml"))
+        .build()
+        .unwrap();
+    let cfg = crate::strategy::cross_dex_basis::CrossDexBasisConfig::from_settings(&settings);
+    assert!(!cfg.enabled);
+    assert!(!cfg.armed);
+    assert!(!cfg.live_fire_allowed(false));
+    assert_eq!(cfg.pair_a, "io:SNDK");
+    assert_eq!(cfg.pair_b, "xyz:SNDK");
+    assert!((cfg.round_trip_taker_bps - 0.2).abs() < 1e-12);
 }

@@ -48,6 +48,9 @@ trading:
       feature_interval_secs: 60
       max_skew_bps: 3.0
       total_quote_budget: 24.0
+    cross_dex_basis:
+      enabled: false
+      armed: false
   position:
     max_single_trade_percent: 25
     max_total_position_percent: 50

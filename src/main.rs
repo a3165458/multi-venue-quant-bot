@@ -569,6 +569,9 @@ async fn run_live_trading(config_path: &str) -> Result<()> {
         user_cross_rate_bps: None,
         last_cross_dex_net_bps: None,
         last_cross_dex_side: None,
+        last_cross_dex_enabled: false,
+        last_cross_dex_armed: false,
+        last_cross_dex_position: None,
     }));
 
     // Restore persistent PnL data from disk
