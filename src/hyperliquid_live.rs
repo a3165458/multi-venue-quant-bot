@@ -326,6 +326,163 @@ pub(crate) fn tracked_position(position: &PerpPosition) -> Result<TrackedPositio
     })
 }
 
+#[derive(Debug, Clone, Copy)]
+struct BasisQuote {
+    bid: f64,
+    ask: f64,
+    bid_sz: f64,
+    ask_sz: f64,
+    ts: Instant,
+}
+
+#[derive(Debug, Clone)]
+struct OpenBasisPosition {
+    side: String,
+    qty: f64,
+    long_coin: String,
+    short_coin: String,
+    residual_coin: Option<String>,
+    residual_qty: f64,
+    residual_is_long: bool,
+}
+
+struct BasisEngine {
+    config: strategy::cross_dex_basis::CrossDexBasisConfig,
+    books: HashMap<String, BasisQuote>,
+    reserved: HashMap<String, f64>,
+    open: Option<OpenBasisPosition>,
+    last_action: Option<Instant>,
+    unwind_deadline: Option<Instant>,
+}
+
+impl BasisEngine {
+    fn new(config: strategy::cross_dex_basis::CrossDexBasisConfig) -> Self {
+        Self {
+            config,
+            books: HashMap::new(),
+            reserved: HashMap::new(),
+            open: None,
+            last_action: None,
+            unwind_deadline: None,
+        }
+    }
+
+    fn on_bbo(&mut self, coin: &str, bid: f64, ask: f64, bid_sz: f64, ask_sz: f64) {
+        if !self.config.is_pair_coin(coin) {
+            return;
+        }
+        self.books.insert(
+            coin.to_string(),
+            BasisQuote {
+                bid,
+                ask,
+                bid_sz,
+                ask_sz,
+                ts: Instant::now(),
+            },
+        );
+    }
+
+    fn reserved_szi(&self, coin: &str) -> f64 {
+        self.reserved.get(coin).copied().unwrap_or(0.0)
+    }
+
+    fn dashboard_position(&self) -> Option<serde_json::Value> {
+        self.open.as_ref().map(|position| {
+            let state = if position.residual_qty.abs() > 1e-8 {
+                "unwinding"
+            } else {
+                "hedged"
+            };
+            serde_json::json!({
+                "state": state,
+                "side": position.side,
+                "long_coin": position.long_coin,
+                "short_coin": position.short_coin,
+                "qty": position.qty,
+                "residual_qty": position.residual_qty,
+                "residual_coin": position.residual_coin,
+            })
+        })
+    }
+
+    fn publish_dashboard(
+        &self,
+        dashboard: &mut dashboard::server::DashboardState,
+        net_bps: Option<f64>,
+        side: Option<&str>,
+    ) {
+        dashboard.last_cross_dex_enabled = self.config.enabled;
+        dashboard.last_cross_dex_armed = self.config.armed;
+        dashboard.last_cross_dex_position = self.dashboard_position();
+        if let Some(net) = net_bps {
+            dashboard.last_cross_dex_net_bps = Some((net * 100.0).round() / 100.0);
+        }
+        if let Some(side) = side {
+            dashboard.last_cross_dex_side = Some(side.to_string());
+        }
+    }
+
+    fn set_residual(&mut self, coin: &str, qty: f64, is_long: bool) {
+        self.reserved.clear();
+        if qty.abs() <= 1e-8 {
+            self.open = None;
+            self.unwind_deadline = None;
+            return;
+        }
+        self.reserved
+            .insert(coin.to_string(), if is_long { qty } else { -qty });
+        if let Some(open) = self.open.as_mut() {
+            open.residual_coin = Some(coin.to_string());
+            open.residual_qty = qty;
+            open.residual_is_long = is_long;
+        } else {
+            self.open = Some(OpenBasisPosition {
+                side: "residual".to_string(),
+                qty,
+                long_coin: if is_long {
+                    coin.to_string()
+                } else {
+                    String::new()
+                },
+                short_coin: if is_long {
+                    String::new()
+                } else {
+                    coin.to_string()
+                },
+                residual_coin: Some(coin.to_string()),
+                residual_qty: qty,
+                residual_is_long: is_long,
+            });
+        }
+        self.unwind_deadline =
+            Some(Instant::now() + Duration::from_secs(self.config.unwind_timeout_secs));
+    }
+
+    fn set_hedged(&mut self, side: &str, qty: f64, long_coin: &str, short_coin: &str) {
+        self.reserved.clear();
+        self.reserved.insert(long_coin.to_string(), qty);
+        self.reserved.insert(short_coin.to_string(), -qty);
+        self.open = Some(OpenBasisPosition {
+            side: side.to_string(),
+            qty,
+            long_coin: long_coin.to_string(),
+            short_coin: short_coin.to_string(),
+            residual_coin: None,
+            residual_qty: 0.0,
+            residual_is_long: false,
+        });
+        self.unwind_deadline = None;
+        self.last_action = Some(Instant::now());
+    }
+
+    fn clear_open(&mut self) {
+        self.reserved.clear();
+        self.open = None;
+        self.unwind_deadline = None;
+    }
+}
+
 pub(crate) fn positions_json(positions: &[TrackedPosition]) -> Vec<serde_json::Value> {
     positions
         .iter()
@@ -556,7 +713,15 @@ pub(crate) async fn run_hyperliquid_live_trading(settings: Config) -> Result<()>
     let user = credentials.account_address().to_string();
     let client = Arc::new(HyperliquidClient::authenticated(credentials, environment));
 
-    let (coins, dexs, market_ids, markets) = load_markets(&client, &settings).await?;
+    let basis_cfg = strategy::cross_dex_basis::CrossDexBasisConfig::from_settings(&settings);
+    let maker_coins = read_trading_symbols(&settings)?;
+    let coins = strategy::cross_dex_basis::expand_live_symbols(&maker_coins, &basis_cfg);
+    let basis_only_coins: HashSet<String> = coins
+        .iter()
+        .filter(|coin| !maker_coins.iter().any(|maker| maker == *coin))
+        .cloned()
+        .collect();
+    let (coins, dexs, market_ids, markets) = load_markets(&client, &coins).await?;
     info!(
         "🧭 Hyperliquid markets resolved: {}",
         coins
@@ -565,6 +730,22 @@ pub(crate) async fn run_hyperliquid_live_trading(settings: Config) -> Result<()>
             .collect::<Vec<_>>()
             .join(", ")
     );
+    info!(
+        "cross_dex_basis enabled={} armed={} pair={} vs {} fee_preset={:?} rt={:.2} min_net={:.2} extra={:?} — live IOC fire requires enabled+armed and !paused",
+        basis_cfg.enabled,
+        basis_cfg.armed,
+        basis_cfg.pair_a,
+        basis_cfg.pair_b,
+        basis_cfg.fee_preset,
+        basis_cfg.round_trip_taker_bps,
+        basis_cfg.min_net_bps,
+        basis_only_coins,
+    );
+    if basis_cfg.armed {
+        warn!(
+            "cross_dex_basis is ARMED — simultaneous IOC hedge legs can fire when trading is not paused"
+        );
+    }
     let execution_strategy: Arc<RwLock<Box<dyn strategy::Strategy>>> =
         Arc::new(RwLock::new(strategy::create_strategy(&settings)?));
     if !maker_strategy_allowed(execution_strategy.read().await.name()) {
@@ -609,9 +790,7 @@ pub(crate) async fn run_hyperliquid_live_trading(settings: Config) -> Result<()>
                 user_add_rate_bps = Some(add_bps);
                 user_cross_rate_bps = Some(cross_bps);
                 if add_bps <= 0.0 {
-                    info!(
-                        "HL userFees add={add_bps:.2} bps cross={cross_bps:.2} bps (T4 maker 0)"
-                    );
+                    info!("HL userFees add={add_bps:.2} bps cross={cross_bps:.2} bps (T4 maker 0)");
                 } else {
                     warn!(
                         "HL userFees add={add_bps:.2} bps cross={cross_bps:.2} bps — not T4 (T4 maker is 0); HIP-3 growth still ~0.29/0.86"
@@ -679,7 +858,7 @@ pub(crate) async fn run_hyperliquid_live_trading(settings: Config) -> Result<()>
     let unified_spot_usdc = fetch_unified_spot_usdc(&client, &user).await?;
     let (equity, available_balance, unrealized_pnl) = account_totals(&states, unified_spot_usdc)?;
     risk_manager.update_equity(equity);
-    let configured_ids: Vec<u32> = coins.iter().map(|coin| market_ids[coin]).collect();
+    let configured_ids: Vec<u32> = maker_coins.iter().map(|coin| market_ids[coin]).collect();
     let dashboard_state = Arc::new(RwLock::new(dashboard::server::DashboardState {
         network_name: network.clone(),
         rest_url: environment.rest_url().to_string(),
@@ -706,6 +885,8 @@ pub(crate) async fn run_hyperliquid_live_trading(settings: Config) -> Result<()>
         quant_agent: dashboard::quant_agent::AgentLedger::load(&network),
         user_add_rate_bps,
         user_cross_rate_bps,
+        last_cross_dex_enabled: basis_cfg.enabled,
+        last_cross_dex_armed: basis_cfg.armed,
         ..dashboard::server::DashboardState::default()
     }));
 
@@ -789,10 +970,12 @@ pub(crate) async fn run_hyperliquid_live_trading(settings: Config) -> Result<()>
         .get_int("trading.max_open_orders")
         .unwrap_or(4)
         .max(1) as usize;
+    let mut basis_engine = BasisEngine::new(basis_cfg);
 
     info!(
-        "✅ Hyperliquid live loop connected for {} configured coins; paused={}",
+        "✅ Hyperliquid live loop connected for {} configured coins ({} maker); paused={}",
         coins.len(),
+        maker_coins.len(),
         was_paused
     );
     loop {
@@ -827,9 +1010,10 @@ pub(crate) async fn run_hyperliquid_live_trading(settings: Config) -> Result<()>
                 {
                     let probe_client = client.clone();
                     let probe_dashboard = dashboard_state.clone();
+                    let probe_cfg = basis_engine.config.clone();
                     tokio::spawn(async move {
                         let _guard = BasisProbeGuard;
-                        probe_io_xyz_sndk_basis(&probe_client, &probe_dashboard).await;
+                        probe_io_xyz_sndk_basis(&probe_client, &probe_dashboard, &probe_cfg).await;
                     });
                 }
                 Ok(())
@@ -904,6 +1088,19 @@ pub(crate) async fn run_hyperliquid_live_trading(settings: Config) -> Result<()>
                     &mut ledger,
                     false,
                 ).await?;
+                retry_basis_unwind(
+                    &client,
+                    &markets,
+                    &market_ids,
+                    &positions,
+                    &mut basis_engine,
+                    &mut tracker,
+                    &user,
+                ).await?;
+                {
+                    let mut dashboard = dashboard_state.write().await;
+                    basis_engine.publish_dashboard(&mut dashboard, None, None);
+                }
                 enforce_risk_gates(
                     &client,
                     &user,
@@ -940,6 +1137,8 @@ pub(crate) async fn run_hyperliquid_live_trading(settings: Config) -> Result<()>
                                         &mut rest_orders,
                                         &mut tracker,
                                         max_open_orders,
+                                        &basis_only_coins,
+                                        &mut basis_engine,
                                     ).await
                                 }
                             }
@@ -1021,9 +1220,7 @@ pub(crate) async fn run_hyperliquid_live_trading(settings: Config) -> Result<()>
                 reconnect_backoff = WS_RECONNECT_BACKOFF;
             }
             Err(loop_error) if hyperliquid_ws_is_recoverable(&loop_error) => {
-                warn!(
-                    "Hyperliquid WebSocket dropped ({loop_error}); reconnecting without pausing"
-                );
+                warn!("Hyperliquid WebSocket dropped ({loop_error}); reconnecting without pausing");
                 tokio::time::sleep(reconnect_backoff).await;
                 reconnect_backoff = (reconnect_backoff * 2).min(WS_RECONNECT_BACKOFF_MAX);
                 match open_hyperliquid_ws(&ws_url, &coins, &user).await {
@@ -1052,9 +1249,7 @@ pub(crate) async fn run_hyperliquid_live_trading(settings: Config) -> Result<()>
                         );
                     }
                     Err(connect_error) => {
-                        warn!(
-                            "Hyperliquid WebSocket reconnect failed: {connect_error}; retrying"
-                        );
+                        warn!("Hyperliquid WebSocket reconnect failed: {connect_error}; retrying");
                     }
                 }
             }
@@ -1072,7 +1267,8 @@ pub(crate) async fn run_hyperliquid_live_trading(settings: Config) -> Result<()>
                 {
                     error!("Hyperliquid session-age cancel-all failed: {cancel_error}");
                 }
-                return Err(loop_error).context("Hyperliquid live loop stopped for session refresh");
+                return Err(loop_error)
+                    .context("Hyperliquid live loop stopped for session refresh");
             }
             Err(loop_error) => {
                 safety_shutdown(&client, &user, &dexs, &market_ids, &dashboard_state).await;
@@ -1105,7 +1301,7 @@ type LoadedMarkets = (
     HashMap<u32, HyperliquidMarket>,
 );
 
-async fn load_markets(client: &HyperliquidClient, settings: &Config) -> Result<LoadedMarkets> {
+fn read_trading_symbols(settings: &Config) -> Result<Vec<String>> {
     let mut coins: Vec<String> = settings
         .get("trading.symbols")
         .context("trading.symbols is required for Hyperliquid live mode")?;
@@ -1117,7 +1313,14 @@ async fn load_markets(client: &HyperliquidClient, settings: &Config) -> Result<L
     if coins.is_empty() {
         bail!("trading.symbols must not be empty");
     }
-    let resolved = client.fetch_markets(&coins).await.map_err(|market_error| {
+    Ok(coins)
+}
+
+async fn load_markets(client: &HyperliquidClient, coins: &[String]) -> Result<LoadedMarkets> {
+    if coins.is_empty() {
+        bail!("trading.symbols must not be empty");
+    }
+    let resolved = client.fetch_markets(coins).await.map_err(|market_error| {
         safe_hl_error("failed to resolve Hyperliquid markets", &market_error)
     })?;
     if resolved.len() != coins.len() {
@@ -1133,7 +1336,7 @@ async fn load_markets(client: &HyperliquidClient, settings: &Config) -> Result<L
         market_ids.insert(market.coin.clone(), market.asset);
         markets.insert(market.asset, market);
     }
-    Ok((coins, dexs, market_ids, markets))
+    Ok((coins.to_vec(), dexs, market_ids, markets))
 }
 
 /// Apply the configured isolated leverage to every coin without an open
@@ -1648,6 +1851,8 @@ async fn handle_bbo(
     rest_orders: &mut Vec<OpenOrder>,
     tracker: &mut OrderTracker,
     max_open_orders: usize,
+    basis_only_coins: &HashSet<String>,
+    basis_engine: &mut BasisEngine,
 ) -> Result<()> {
     let coin = update.coin.clone();
     let market_id = *market_ids
@@ -1664,27 +1869,47 @@ async fn handle_bbo(
     }
     let bid_quantity = parse_f64(&bid_level.sz)?;
     let ask_quantity = parse_f64(&ask_level.sz)?;
-    data_store
-        .write()
-        .await
-        .update_order_book(lighter::types::OrderBook {
-            symbol: coin.clone(),
-            market_id,
-            bids: vec![lighter::types::PriceLevel {
-                price: bid,
-                quantity: bid_quantity,
-            }],
-            asks: vec![lighter::types::PriceLevel {
-                price: ask,
-                quantity: ask_quantity,
-            }],
-            timestamp: Utc::now(),
-        });
+    let basis_only = basis_only_coins.contains(&coin);
+    if !basis_only {
+        data_store
+            .write()
+            .await
+            .update_order_book(lighter::types::OrderBook {
+                symbol: coin.clone(),
+                market_id,
+                bids: vec![lighter::types::PriceLevel {
+                    price: bid,
+                    quantity: bid_quantity,
+                }],
+                asks: vec![lighter::types::PriceLevel {
+                    price: ask,
+                    quantity: ask_quantity,
+                }],
+                timestamp: Utc::now(),
+            });
+    }
     dashboard_state
         .write()
         .await
         .last_prices
         .insert(coin.clone(), (bid + ask) / 2.0);
+    basis_engine.on_bbo(&coin, bid, ask, bid_quantity, ask_quantity);
+    if basis_engine.config.is_pair_coin(&coin) {
+        run_cross_dex_basis(
+            client,
+            user,
+            markets,
+            market_ids,
+            dashboard_state,
+            positions,
+            tracker,
+            basis_engine,
+        )
+        .await?;
+    }
+    if basis_only {
+        return Ok(());
+    }
     // Keep the book/UI fresh, but do not evaluate or sign while the L1
     // request budget is in backoff. Otherwise join-best retries every BBO.
     if l1_budget_is_blocked() {
@@ -1692,9 +1917,11 @@ async fn handle_bbo(
     }
     let mut snapshot = data_store.read().await.get_snapshot();
     for position in positions {
-        snapshot
-            .positions
-            .insert(position.coin.clone(), position.szi);
+        let visible = strategy::cross_dex_basis::maker_visible_szi(
+            position.szi,
+            basis_engine.reserved_szi(&position.coin),
+        );
+        snapshot.positions.insert(position.coin.clone(), visible);
         snapshot
             .position_entry_prices
             .insert(position.coin.clone(), position.entry_px);
@@ -1753,6 +1980,7 @@ async fn handle_bbo(
             tracker,
             risk_manager,
             max_open_orders,
+            &basis_engine.reserved,
         )
         .await?;
     }
@@ -1772,6 +2000,7 @@ async fn process_signal(
     tracker: &mut OrderTracker,
     risk_manager: &mut risk::risk_manager::RiskManager,
     max_open_orders: usize,
+    basis_reserved: &HashMap<String, f64>,
 ) -> Result<()> {
     if l1_budget_is_blocked() {
         return Ok(());
@@ -1828,11 +2057,13 @@ async fn process_signal(
             .find(|position| position.coin == signal.symbol)
             .map(|position| position.szi)
             .unwrap_or(0.0);
-        let closes = (held > 0.0 && !is_buy) || (held < 0.0 && is_buy);
+        let reserved = basis_reserved.get(&signal.symbol).copied().unwrap_or(0.0);
+        let maker_held = strategy::cross_dex_basis::maker_visible_szi(held, reserved);
+        let closes = (maker_held > 0.0 && !is_buy) || (maker_held < 0.0 && is_buy);
         if !closes {
             return Ok(());
         }
-        signal.quantity = signal.quantity.min(held.abs());
+        signal.quantity = signal.quantity.min(maker_held.abs());
     }
     let exposure = calculate_exposure(
         &exposure_input(positions, rest_orders, tracker),
@@ -2750,26 +2981,29 @@ async fn open_hyperliquid_ws(
 async fn probe_io_xyz_sndk_basis(
     client: &HyperliquidClient,
     dashboard_state: &std::sync::Arc<tokio::sync::RwLock<dashboard::server::DashboardState>>,
+    cfg: &strategy::cross_dex_basis::CrossDexBasisConfig,
 ) {
-    let io = match client.l2_book("io:SNDK").await {
+    let pair_a = cfg.pair_a.as_str();
+    let pair_b = cfg.pair_b.as_str();
+    let io = match client.l2_book(pair_a).await {
         Ok(book) => book,
         Err(error) => {
             warn!("io/xyz SNDK basis probe skipped: {error}");
             return;
         }
     };
-    let xyz = match client.l2_book("xyz:SNDK").await {
+    let xyz = match client.l2_book(pair_b).await {
         Ok(book) => book,
         Err(error) => {
             warn!("io/xyz SNDK basis probe skipped: {error}");
             return;
         }
     };
-    let Some((bid_a, ask_a)) = best_bid_ask(&io.levels) else {
+    let Some((bid_a, ask_a, _, _)) = best_bid_ask_sz(&io.levels) else {
         warn!("io/xyz SNDK basis probe skipped: io book empty");
         return;
     };
-    let Some((bid_b, ask_b)) = best_bid_ask(&xyz.levels) else {
+    let Some((bid_b, ask_b, _, _)) = best_bid_ask_sz(&xyz.levels) else {
         warn!("io/xyz SNDK basis probe skipped: xyz book empty");
         return;
     };
@@ -2778,25 +3012,490 @@ async fn probe_io_xyz_sndk_basis(
         warn!("io/xyz SNDK basis probe skipped: invalid BBO");
         return;
     };
-    match strategy::cross_dex_basis::tradeable_edge_bps(
+    match strategy::cross_dex_basis::tradeable_edge_bps_with_floor(
         basis,
-        strategy::cross_dex_basis::hip3_cross_dex_taker_cost_bps(),
+        cfg.round_trip_taker_bps,
+        cfg.min_net_bps,
     ) {
         None => tracing::debug!(
-            "io:SNDK vs xyz:SNDK crossed basis not tradeable after two taker fees (buy_io_sell_xyz={:.2} buy_xyz_sell_io={:.2} bps)",
-            basis.buy_a_sell_b_bps, basis.buy_b_sell_a_bps
+            "{} vs {} crossed basis not tradeable after {:.2} bps rt (buy_a_sell_b={:.2} buy_b_sell_a={:.2} bps)",
+            pair_a, pair_b, cfg.round_trip_taker_bps, basis.buy_a_sell_b_bps, basis.buy_b_sell_a_bps
         ),
         Some((side, net)) => {
+            let status = if !cfg.enabled {
+                "not armed, strategy disabled (xyz is not a configured coin)"
+            } else if !cfg.armed {
+                "paper / not armed"
+            } else {
+                "armed — live path may fire when unpaused"
+            };
             warn!(
-                "io:SNDK vs xyz:SNDK TRADEABLE {side} net {net:.2} bps io={bid_a}/{ask_a} xyz={bid_b}/{ask_b} — not armed, xyz is not a configured coin"
+                "{pair_a} vs {pair_b} TRADEABLE {side} net {net:.2} bps {pair_a}={bid_a}/{ask_a} {pair_b}={bid_b}/{ask_b} — {status}"
             );
             let mut dashboard = dashboard_state.write().await;
             dashboard.last_cross_dex_net_bps = Some((net * 100.0).round() / 100.0);
             dashboard.last_cross_dex_side = Some(side.to_string());
+            dashboard.last_cross_dex_enabled = cfg.enabled;
+            dashboard.last_cross_dex_armed = cfg.armed;
         }
     }
 }
 
+#[allow(clippy::too_many_arguments)]
+async fn run_cross_dex_basis(
+    client: &HyperliquidClient,
+    user: &str,
+    markets: &HashMap<u32, HyperliquidMarket>,
+    market_ids: &HashMap<String, u32>,
+    dashboard_state: &Arc<RwLock<dashboard::server::DashboardState>>,
+    positions: &[TrackedPosition],
+    tracker: &mut OrderTracker,
+    basis_engine: &mut BasisEngine,
+) -> Result<()> {
+    retry_basis_unwind(
+        client,
+        markets,
+        market_ids,
+        positions,
+        basis_engine,
+        tracker,
+        user,
+    )
+    .await?;
+
+    let cfg = basis_engine.config.clone();
+    let Some(book_a) = basis_engine.books.get(&cfg.pair_a).copied() else {
+        return Ok(());
+    };
+    let Some(book_b) = basis_engine.books.get(&cfg.pair_b).copied() else {
+        return Ok(());
+    };
+    let stale = Duration::from_millis(cfg.book_stale_ms);
+    if book_a.ts.elapsed() > stale || book_b.ts.elapsed() > stale {
+        return Ok(());
+    }
+    let Some(basis) = strategy::cross_dex_basis::crossed_basis_bps(
+        book_a.bid, book_a.ask, book_b.bid, book_b.ask,
+    ) else {
+        return Ok(());
+    };
+    let tradeable = strategy::cross_dex_basis::tradeable_edge_bps_with_floor(
+        basis,
+        cfg.round_trip_taker_bps,
+        cfg.min_net_bps,
+    );
+    let paused = dashboard_state.read().await.trading_paused;
+    if let Some((side, net)) = tradeable {
+        {
+            let mut dashboard = dashboard_state.write().await;
+            basis_engine.publish_dashboard(&mut dashboard, Some(net), Some(side));
+        }
+        if !cfg.live_fire_allowed(paused) {
+            if cfg.enabled && !paused {
+                info!(
+                    "cross_dex_basis paper {side} net {net:.2} bps {} vs {} — enabled but not armed",
+                    cfg.pair_a, cfg.pair_b
+                );
+            }
+            return Ok(());
+        }
+        if l1_budget_is_blocked() {
+            return Ok(());
+        }
+        if basis_engine
+            .open
+            .as_ref()
+            .is_some_and(|open| open.residual_qty.abs() > 1e-8)
+        {
+            return Ok(());
+        }
+        if basis_engine
+            .last_action
+            .is_some_and(|at| at.elapsed() < Duration::from_secs(cfg.cooldown_secs))
+        {
+            return Ok(());
+        }
+        fire_cross_dex_legs(
+            client,
+            markets,
+            market_ids,
+            positions,
+            tracker,
+            basis_engine,
+            user,
+            side,
+            net,
+            book_a,
+            book_b,
+        )
+        .await?;
+        let mut dashboard = dashboard_state.write().await;
+        basis_engine.publish_dashboard(&mut dashboard, Some(net), Some(side));
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn fire_cross_dex_legs(
+    client: &HyperliquidClient,
+    markets: &HashMap<u32, HyperliquidMarket>,
+    market_ids: &HashMap<String, u32>,
+    positions: &[TrackedPosition],
+    tracker: &mut OrderTracker,
+    basis_engine: &mut BasisEngine,
+    user: &str,
+    side: &str,
+    net: f64,
+    book_a: BasisQuote,
+    book_b: BasisQuote,
+) -> Result<()> {
+    let cfg = basis_engine.config.clone();
+    let (buy_coin, sell_coin, buy_px, sell_px, buy_sz, sell_sz, signed_a, signed_b) =
+        if side == "buy_a_sell_b" {
+            (
+                cfg.pair_a.as_str(),
+                cfg.pair_b.as_str(),
+                book_a.ask,
+                book_b.bid,
+                book_a.ask_sz,
+                book_b.bid_sz,
+                1.0,
+                -1.0,
+            )
+        } else {
+            (
+                cfg.pair_b.as_str(),
+                cfg.pair_a.as_str(),
+                book_b.ask,
+                book_a.bid,
+                book_b.ask_sz,
+                book_a.bid_sz,
+                -1.0,
+                1.0,
+            )
+        };
+    let Some(qty) = strategy::cross_dex_basis::hedge_qty(
+        buy_sz,
+        sell_sz,
+        buy_px,
+        cfg.max_notional_usd,
+        MIN_ORDER_NOTIONAL_USD,
+    ) else {
+        return Ok(());
+    };
+    let pos_a = position_szi(positions, &cfg.pair_a);
+    let pos_b = position_szi(positions, &cfg.pair_b);
+    if !strategy::cross_dex_basis::inventory_allows_open(
+        pos_a,
+        pos_b,
+        signed_a * qty,
+        signed_b * qty,
+        (book_a.bid + book_a.ask) / 2.0,
+        (book_b.bid + book_b.ask) / 2.0,
+        cfg.max_abs_delta,
+        cfg.max_gross_notional,
+    ) {
+        warn!(
+            "cross_dex_basis skip {side} net {net:.2} — inventory/delta cap pair_a={pos_a} pair_b={pos_b}"
+        );
+        return Ok(());
+    }
+    let buy_market = market_ids
+        .get(buy_coin)
+        .and_then(|id| markets.get(id))
+        .with_context(|| format!("cross_dex_basis missing market {buy_coin}"))?;
+    let sell_market = market_ids
+        .get(sell_coin)
+        .and_then(|id| markets.get(id))
+        .with_context(|| format!("cross_dex_basis missing market {sell_coin}"))?;
+    let buy_req = match basis_ioc_request(buy_market, true, buy_px, qty, false) {
+        Ok(request) => request,
+        Err(_) => return Ok(()),
+    };
+    let sell_req = match basis_ioc_request(sell_market, false, sell_px, qty, false) {
+        Ok(request) => request,
+        Err(_) => return Ok(()),
+    };
+    info!(
+        "cross_dex_basis firing {side} net {net:.2} bps buy {buy_coin} {qty} @ {buy_px} / sell {sell_coin} @ {sell_px}"
+    );
+    basis_engine.last_action = Some(Instant::now());
+    match client.place_orders(&[buy_req, sell_req]).await {
+        Ok(outcomes) if outcomes.len() == 2 => {
+            let buy_filled = outcome_filled_qty(&outcomes[0], qty);
+            let sell_filled = outcome_filled_qty(&outcomes[1], qty);
+            apply_basis_leg_outcomes(
+                client,
+                buy_market,
+                sell_market,
+                buy_coin,
+                sell_coin,
+                buy_px,
+                sell_px,
+                buy_filled,
+                sell_filled,
+                qty,
+                side,
+                tracker,
+                basis_engine,
+                user,
+            )
+            .await
+        }
+        Ok(outcomes) => {
+            warn!(
+                "cross_dex_basis unexpected status count {}; flattening intended legs",
+                outcomes.len()
+            );
+            flatten_basis_leg(client, buy_market, buy_coin, false, qty, buy_px).await?;
+            flatten_basis_leg(client, sell_market, sell_coin, true, qty, sell_px).await
+        }
+        Err(submit_error) => {
+            warn!(
+                "cross_dex_basis batch submit failed: {}",
+                safe_hl_error("cross_dex_basis place_orders", &submit_error)
+            );
+            if matches!(
+                submission_failure_decision(&submit_error),
+                SubmissionFailureDecision::Skip
+            ) {
+                trip_l1_budget_backoff();
+            }
+            flatten_basis_leg(client, buy_market, buy_coin, false, qty, buy_px).await?;
+            flatten_basis_leg(client, sell_market, sell_coin, true, qty, sell_px).await
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn apply_basis_leg_outcomes(
+    client: &HyperliquidClient,
+    buy_market: &HyperliquidMarket,
+    sell_market: &HyperliquidMarket,
+    buy_coin: &str,
+    sell_coin: &str,
+    buy_px: f64,
+    sell_px: f64,
+    buy_filled: f64,
+    sell_filled: f64,
+    intended: f64,
+    side: &str,
+    _tracker: &mut OrderTracker,
+    basis_engine: &mut BasisEngine,
+    _user: &str,
+) -> Result<()> {
+    match strategy::cross_dex_basis::unwind_after_legs(
+        buy_coin,
+        sell_coin,
+        buy_filled,
+        sell_filled,
+        1e-8,
+    ) {
+        strategy::cross_dex_basis::UnwindPlan::None => {
+            if buy_filled > 1e-8 && sell_filled > 1e-8 {
+                let qty = buy_filled.min(sell_filled);
+                basis_engine.set_hedged(side, qty, buy_coin, sell_coin);
+                info!("cross_dex_basis hedged {side} qty {qty} {buy_coin}/{sell_coin}");
+            }
+            Ok(())
+        }
+        strategy::cross_dex_basis::UnwindPlan::Flatten { coin, sell, qty } => {
+            let market = if coin == buy_coin {
+                buy_market
+            } else {
+                sell_market
+            };
+            let px = if coin == buy_coin { buy_px } else { sell_px };
+            warn!(
+                "cross_dex_basis one-leg residual {coin} qty {qty} sell={sell} (buy_fill={buy_filled} sell_fill={sell_filled} intended={intended}); flattening"
+            );
+            basis_engine.set_residual(&coin, qty, !sell);
+            flatten_basis_leg(client, market, &coin, !sell, qty, px).await?;
+            Ok(())
+        }
+    }
+}
+
+async fn retry_basis_unwind(
+    client: &HyperliquidClient,
+    markets: &HashMap<u32, HyperliquidMarket>,
+    market_ids: &HashMap<String, u32>,
+    positions: &[TrackedPosition],
+    basis_engine: &mut BasisEngine,
+    _tracker: &mut OrderTracker,
+    _user: &str,
+) -> Result<()> {
+    let Some(open) = basis_engine.open.clone() else {
+        return Ok(());
+    };
+    if open.residual_qty.abs() <= 1e-8 {
+        let long = position_szi(positions, &open.long_coin);
+        let short = position_szi(positions, &open.short_coin);
+        if long.abs() <= 1e-8 && short.abs() <= 1e-8 {
+            basis_engine.clear_open();
+        }
+        return Ok(());
+    }
+    let due = basis_engine
+        .unwind_deadline
+        .map(|deadline| Instant::now() >= deadline)
+        .unwrap_or(true);
+    if !due {
+        return Ok(());
+    }
+    let coin = open
+        .residual_coin
+        .clone()
+        .unwrap_or_else(|| open.long_coin.clone());
+    let Some(market) = market_ids.get(&coin).and_then(|id| markets.get(id)) else {
+        return Ok(());
+    };
+    let px = basis_engine
+        .books
+        .get(&coin)
+        .map(|quote| {
+            if open.residual_is_long {
+                quote.bid
+            } else {
+                quote.ask
+            }
+        })
+        .or_else(|| {
+            positions
+                .iter()
+                .find(|position| position.coin == coin && position.mark_px > 0.0)
+                .map(|position| position.mark_px)
+        })
+        .unwrap_or(0.0);
+    if px <= 0.0 {
+        return Ok(());
+    }
+    flatten_basis_leg(
+        client,
+        market,
+        &coin,
+        open.residual_is_long,
+        open.residual_qty,
+        px,
+    )
+    .await?;
+    // Positions are refreshed on the REST tick; do not assume this snapshot
+    // already reflects the flatten. Re-arm the timeout and clear when flat.
+    let held = position_szi(positions, &coin).abs();
+    if held <= 1e-8 {
+        basis_engine.clear_open();
+    } else {
+        basis_engine.unwind_deadline =
+            Some(Instant::now() + Duration::from_secs(basis_engine.config.unwind_timeout_secs));
+    }
+    Ok(())
+}
+
+fn basis_ioc_request(
+    market: &HyperliquidMarket,
+    is_buy: bool,
+    price: f64,
+    quantity: f64,
+    reduce_only: bool,
+) -> Result<NewOrderRequest> {
+    let aggressive = if is_buy { price * 1.001 } else { price * 0.999 };
+    let price_text = market
+        .quantize_price(aggressive, is_buy)
+        .map_err(|error| safe_hl_error("cross_dex_basis price quantization failed", &error))?;
+    let size_text = market
+        .quantize_size(quantity)
+        .map_err(|error| safe_hl_error("cross_dex_basis size quantization failed", &error))?;
+    let cloid = cloid_from_key(&format!(
+        "xdb_{}_{}_{}_{}",
+        market.coin,
+        if is_buy { "buy" } else { "sell" },
+        if reduce_only { "ro" } else { "open" },
+        unix_millis()
+    ));
+    Ok(NewOrderRequest {
+        asset: market.asset,
+        is_buy,
+        price: price_text,
+        size: size_text,
+        reduce_only,
+        tif: Tif::Ioc,
+        cloid: Some(cloid),
+    })
+}
+
+fn outcome_filled_qty(outcome: &OrderOutcome, intended: f64) -> f64 {
+    match outcome {
+        OrderOutcome::Filled { total_sz, .. } => parse_f64(total_sz).unwrap_or(0.0),
+        // IOC should not rest; treat as intended so the unwind path can flatten.
+        OrderOutcome::Resting { .. } => intended,
+        OrderOutcome::Error(_) => 0.0,
+    }
+}
+
+fn position_szi(positions: &[TrackedPosition], coin: &str) -> f64 {
+    positions
+        .iter()
+        .find(|position| position.coin == coin)
+        .map(|position| position.szi)
+        .unwrap_or(0.0)
+}
+
+async fn flatten_basis_leg(
+    client: &HyperliquidClient,
+    market: &HyperliquidMarket,
+    coin: &str,
+    is_long: bool,
+    quantity: f64,
+    ref_px: f64,
+) -> Result<()> {
+    if quantity <= 1e-8 || !(ref_px.is_finite() && ref_px > 0.0) {
+        return Ok(());
+    }
+    let request = match basis_ioc_request(market, !is_long, ref_px, quantity, true) {
+        Ok(request) => request,
+        Err(error) => {
+            warn!("cross_dex_basis flatten skipped for {coin}: {error}");
+            return Ok(());
+        }
+    };
+    match client.place_order(&request).await {
+        Ok(OrderOutcome::Filled { .. }) | Ok(OrderOutcome::Resting { .. }) => Ok(()),
+        Ok(OrderOutcome::Error(message)) => {
+            let lower = message.to_ascii_lowercase();
+            if lower.contains("minimum") || lower.contains("reduce only") {
+                warn!("cross_dex_basis flatten for {coin} rejected: {message}");
+                return Ok(());
+            }
+            warn!("cross_dex_basis flatten for {coin} rejected: {message}");
+            Ok(())
+        }
+        Err(error) => {
+            warn!(
+                "cross_dex_basis flatten for {coin} failed: {}",
+                safe_hl_error("cross_dex_basis flatten", &error)
+            );
+            Ok(())
+        }
+    }
+}
+
+fn best_bid_ask_sz(
+    levels: &[Vec<multi_venue_quant_bot::hyperliquid::L2Level>],
+) -> Option<(f64, f64, f64, f64)> {
+    let bid = levels.first()?.first()?;
+    let ask = levels.get(1)?.first()?;
+    let bid_px = bid.px.parse::<f64>().ok()?;
+    let ask_px = ask.px.parse::<f64>().ok()?;
+    let bid_sz = bid.sz.parse::<f64>().ok()?;
+    let ask_sz = ask.sz.parse::<f64>().ok()?;
+    if bid_px > 0.0 && ask_px > bid_px && bid_sz > 0.0 && ask_sz > 0.0 {
+        Some((bid_px, ask_px, bid_sz, ask_sz))
+    } else {
+        None
+    }
+}
+
+#[allow(dead_code)]
 fn best_bid_ask(levels: &[Vec<multi_venue_quant_bot::hyperliquid::L2Level>]) -> Option<(f64, f64)> {
     let bid = levels.first()?.first()?.px.parse::<f64>().ok()?;
     let ask = levels.get(1)?.first()?.px.parse::<f64>().ok()?;

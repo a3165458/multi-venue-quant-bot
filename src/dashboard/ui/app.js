@@ -1359,12 +1359,27 @@
                 : ('T0 · maker ' + addBps.toFixed(2) + ' / taker ' + crossBps.toFixed(2) + ' bps');
         }
         if ($('network-cross-dex')) {
+            var armed = d.last_cross_dex_armed === true;
+            var enabled = d.last_cross_dex_enabled === true;
+            var flag = !enabled
+                ? (currentLang === 'cn' ? '关闭' : 'off')
+                : (armed
+                    ? (currentLang === 'cn' ? '已武装' : 'armed')
+                    : (currentLang === 'cn' ? '纸面/未武装' : 'paper / not armed'));
+            var pos = d.last_cross_dex_position;
+            var posText = '';
+            if (pos && pos.state && pos.state !== 'flat') {
+                posText = ' · ' + pos.state +
+                    (pos.long_coin ? (' ' + pos.long_coin + '/' + (pos.short_coin || '')) : '') +
+                    (pos.qty != null ? (' qty ' + Number(pos.qty).toFixed(4)) : '');
+            }
             if (d.last_cross_dex_net_bps != null) {
                 $('network-cross-dex').textContent =
                     String(d.last_cross_dex_side || '') + ' · ' +
-                    Number(d.last_cross_dex_net_bps).toFixed(2) + ' bps (not armed)';
+                    Number(d.last_cross_dex_net_bps).toFixed(2) + ' bps (' + flag + ')' + posText;
             } else {
-                $('network-cross-dex').textContent = currentLang === 'cn' ? '无（未武装）' : 'none (not armed)';
+                $('network-cross-dex').textContent =
+                    (currentLang === 'cn' ? '无' : 'none') + ' (' + flag + ')' + posText;
             }
         }
         if ($('network-strategy-source')) {

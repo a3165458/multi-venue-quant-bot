@@ -63,6 +63,26 @@ trading:
       feature_interval_secs: 60
       max_skew_bps: 12.0
       total_quote_budget: 160.0
+    # Optional HIP-3 same-ecosystem basis (io:SNDK vs xyz:SNDK). Disabled and
+    # disarmed by default — never auto-enables live IOC legs. Maker quote is
+    # unchanged; xyz is subscribed only when enabled, and is not maker-quoted.
+    # HL userFees (1.5/4.5) are raw venue prints, not this operator's true
+    # Entropy T4 rebate cost. Use fee_preset: growth for the conservative
+    # ~1.72 bps HIP-3 growth-mode round-trip.
+    cross_dex_basis:
+      enabled: false
+      armed: false
+      pair_a: "io:SNDK"
+      pair_b: "xyz:SNDK"
+      fee_preset: tier4
+      round_trip_taker_bps: 0.2
+      min_net_bps: 1.0
+      max_notional: 40.0
+      max_abs_delta: 0.02
+      max_gross_notional: 80.0
+      cooldown_secs: 5
+      unwind_timeout_secs: 8
+      book_stale_ms: 3000
   position:
     max_single_trade_percent: 25
     max_total_position_percent: 50
